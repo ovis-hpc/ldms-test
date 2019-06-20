@@ -7,7 +7,7 @@ import time
 import os
 
 class Network(object):
-    def __init__(self, name, driver='bridge', scope='local'):
+    def __init__(self, name, driver='bridge', scope='local', attachable=True):
         self.client = docker.from_env()
         self.network_name = name
         try:
@@ -15,7 +15,8 @@ class Network(object):
         except:
             self.network = None
         if self.network is None:
-            self.network = self.client.networks.create(name=name, driver=driver, scope=scope)
+            self.network = self.client.networks.create(name=name, driver=driver,
+                                        scope=scope, attachable=attachable)
 
     @property
     def name(self):
