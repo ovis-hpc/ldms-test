@@ -72,7 +72,7 @@ infrastructure. `cygnus-{01..08}` all have `docker-ce` version 18.09 installed.
 boot.
 
 ```bash
-$ systemctl enable dockerd.service
+$ systemctl enable docker.service
 ```
 
 The users that need to run the virtual cluster testing facility must also be a
@@ -85,14 +85,14 @@ dockerd network port
 
 By default,
 dockerd is configured to listen only on to the unix-domain socket with dockerd
-CLI options in `/usr/lib/systemd/system/dockerd.service` file. We need to
+CLI options in `/usr/lib/systemd/system/docker.service` file. We need to
 configure dockerd to also listen on port 2375 (its default network port) because
 a docker client (our Python test script) needs a connection to the dockerd to
 manipulate containers running under it (containers in our virtual cluster).
 Even though dockerd support `/etc/docker/daemon.json` dockerd configuration, the
-CLI option takes precedence. As such, we have to override the `dockerd.service`
-to get rid of the CLI option by creating an override file for dockerd.service as
-follows:
+CLI option takes precedence. As such, we have to override the `docker.service`
+to get rid of the CLI option by creating an override file for `docker.service`
+as follows:
 
 ```bash
 # file: /etc/systemd/system/docker.service.d/override.conf
@@ -121,9 +121,9 @@ Now, stop the service, reload so that the override takes effect, and start the
 dockerd (on all noes).
 
 ```bash
-$ systemctl stop dockerd.service
+$ systemctl stop docker.service
 $ systemctl daemon-reload
-$ systemctl start dockerd.service
+$ systemctl start docker.service
 ```
 
 NOTE: CentOS has a nice package called `pssh` that helps executing the given
@@ -170,7 +170,7 @@ cygnus-07.ogc.int
 cygnus-06.ogc.int
 ```
 
-Issuing `pssh.all -i systemctl stop dockerd.service` would stop dockerd on all
+Issuing `pssh.all -i systemctl stop docker.service` would stop dockerd on all
 nodes in the cluster.
 
 
@@ -213,10 +213,12 @@ Preparing Docker Image
 ----------------------
 
 Dockerfile is provided for building the image described in this section. The
-following is the command to build the image using the provided Dockerfile.
+following is the command to build the image using the provided Dockerfile in
+`docker/` directory.
 
 ```bash
-$ docker build -t ovis-centos-build -f docker/Dockerfile
+$ cd docker/
+$ docker build -t ovis-centos-build .
 ```
 
 The docker image for running ldmsd virtual cluster is based on `centos:7`
