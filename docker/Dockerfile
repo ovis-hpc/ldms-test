@@ -13,7 +13,7 @@ RUN /bin/bash -c '\
 set -e ; \
 set -x ; \
 yum -y install epel-release ; \
-yum -y install munge which openssh-server gdb ; \
+yum -y install munge which openssh-server gdb gdb-gdbserver; \
 yes "" | ssh-keygen ; \
 cat /root/.ssh/id*.pub > /root/.ssh/authorized_keys ; \
 yum -y group install "Development Tools" ; \
