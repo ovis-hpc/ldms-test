@@ -6,23 +6,70 @@ import sys
 import json
 import time
 import docker
+import argparse
 
 from LDMS_Test import LDMSDCluster, LDMSDContainer, TADATest
 
-_pystart = os.getenv('PYTHONSTARTUP')
-if _pystart:
-    execfile(_pystart)
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
 
 def jprint(obj):
     """Pretty print JSON object"""
     print json.dumps(obj, indent=2)
 
-dc = docker.from_env()
-USER = os.getlogin()
+def get_ovis_commit_id(prefix):
+    """Get commit_id of the ovis installation"""
+    try:
+        path = "{}/bin/ldms-pedigree".format(prefix)
+        f = open(path)
+        for l in f.readlines():
+            if l.startswith("echo commit-id: "):
+                e, c, commit_id = l.split()
+                return commit_id
+    except:
+        pass
+    return None
 
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description =
+                         "Run test scenario of 2 samplers -> agg-1 -> agg-2 " \
+                         "with slurm job ID verification." )
+ap.add_argument("--clustername", type = str,
+                help = "The name of the cluster. The default is "
+                "USER-test3-COMMIT_ID.")
+ap.add_argument("--prefix", type = str,
+                default = "/opt/ovis",
+                help = "The OVIS installation prefix.")
+ap.add_argument("--src", type = str,
+                help = "The path to OVIS source tree (for gdb). " \
+                       "If not specified, src tree won't be mounted.")
+ap.add_argument("--db", type = str,
+                default = "{}/db".format(os.path.realpath(sys.path[0])),
+                help = "The path to host db directory." )
+ap.add_argument("--slurm-notifier", type = str,
+                default = "/opt/ovis/lib64/ovis-ldms/libslurm_notifier.so",
+                help = "The path (in container) to slurm_notifier library." )
+
+args = ap.parse_args()
+
+#### config variables #### ------------------------------
+USER = os.getlogin()
+PREFIX = args.prefix
+COMMIT_ID = get_ovis_commit_id(PREFIX)
+SRC = args.src
+CLUSTERNAME = args.clustername if args.clustername else \
+              "{}-test3-{:.7}".format(USER, COMMIT_ID)
+DB = args.db
+SLURM_NOTIFIER = args.slurm_notifier
+
+
+#### spec #### -------------------------------------------------------
 spec = {
-    "name" : "{}-cluster".format(USER),
-    "description" : "{} test cluster".format(USER),
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test3 cluster".format(USER),
     "type" : "NA",
     "define" : [
         {
@@ -123,19 +170,25 @@ spec = {
     ],
 
     #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE" ],
     "image": "ovis-centos-build",
-    "ovis_prefix": "/home/narate/opt/ovis",
+    "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [
-        "{}/db:/db:rw".format(os.path.realpath(sys.path[0])),
-    ]
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }
+
+#### test definition ####
 
 test = TADATest("LDMSD", "LDMSD", "agg + slurm_sampler + slurm_notifier")
 test.add_assertion(1, "ldms_ls agg-2")
 test.add_assertion(2, "slurm job_id verification on sampler-1")
 test.add_assertion(3, "slurm job_id verification on sampler-2")
 
+
+#### Start! ####
 test.start()
 
 print "-- Get or create the cluster --"
@@ -147,7 +200,7 @@ cluster.make_known_hosts()
 print "-- start/check munged --"
 cluster.start_munged()
 # prep plugstack.conf for slurm_notifier
-plugstack = "required /opt/ovis/lib/ovis-ldms/libslurm_notifier.so auth=none port=10000"
+plugstack = "required {} auth=none port=10000".format(SLURM_NOTIFIER)
 for cont in cluster.containers:
     cont.write_file("/etc/slurm/plugstack.conf", plugstack)
 cluster.start_slurm()

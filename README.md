@@ -2,6 +2,7 @@ TOC
 ===
 
 * [Overview](#Overview)
+* [SYNOPSIS](#synopsis)
 * [Docker Host Cluster Setup](#docker-host-cluster-setup)
 * [Docker Setup](#docker-setup)
   * [dockerd network port](#dockerd-network-port)
@@ -10,6 +11,7 @@ TOC
   * [Distribute Docker Image](#distribute-docker-image)
 * [Python Module Usage Guide](#python-module-usage-guide)
   * [Create (or Get) Virtual Cluster](#create-or-get-virtual-cluster)
+    * [LDMSDClusterSpec](#ldmsdclusterspec)
   * [Start Services](#start-services)
   * [Cluster and Container Utilities](#cluster-and-container-utilities)
   * [LDMS Utilities](#ldms-utilities)
@@ -22,26 +24,17 @@ Overview
 ========
 
 `LDMS_Test` is a Python module containing tools to help building a virtual
-cluster for testing ldmsd. It relies on Docker Swarm (a bunch of dockerd running
-in swarm mode) and creates a virtual cluster as Docker Service which has the
-number of replicas equals to the number of nodes in the virtual cluster. The
-Docker Service contains Tasks, the number of which equals to that of replicas,
-and each Task has a Docker Container (on a swarm member dockerd) associated with
-it. These Containers are the nodes in the virtual cluster. Please note that the
-containers of a service speread out across dockerds in the swarm. To isolate
-the virtual cluster network, the Docker Overlay Network is uniquely created for
-the Docker Service when the `create()` routine is executed. Since the Docker
-Service utilizes, but does not own, the Docker Network, we assign the same name
-to both entities for obvious association. Note that `$ docker service remove
-<SERVICE_NAME>` only removes the service, not the network it uses, but the
-`remove()` routine in Python conveniently removes the network it uses.
+cluster for testing ldmsd. A virtual cluster is a set of docker containers on a
+docker swarm overlay network (a virtual network allowing docker containers to
+talk to each other via dockerd swarm members). A virtual cluster has exactly one
+network. The hostname of each container is `"node-{i}"`, i = 1 .. N.
 
-`DockerClusterService` implements basic routines for handling the virtual
-cluster (e.g. create, remove), and the `DockerClusterContainer` implements basic
-routines for interacting with each of the containers (e.g. getting aliases of
-the virtual node). The `LDMSDCluster` extends `DockerClusterService` and
-`LDMSDContainer` extends `DockerClusterContainer` to provide ldmsd-specific
-routines (e.g. start ldmsd, perform `ldms_ls`). Please see [Python Module Usage
+`DockerCluster` implements basic routines for handling the virtual cluster (e.g.
+create, remove), and the `DockerClusterContainer` implements basic routines for
+interacting with each of the containers (e.g. getting aliases of the virtual
+node). The `LDMSDCluster` extends `DockerCluster` and `LDMSDContainer` extends
+`DockerClusterContainer` to provide ldmsd-specific routines (e.g. start ldmsd,
+perform `ldms_ls`). Please see [Python Module Usage
 Guide](#python-module-usage-guide) for a guideline on how to use the virtual
 cluster in Python. For full details of the APIs, please see in-line Python
 documentation in the module.
@@ -49,6 +42,62 @@ documentation in the module.
 In this document, we will use our bare-metal cluster "cygnus" (hostnames:
 cygnus-01..08) as an example on how to deploy and run the test infrastructure.
 Cygnus cluster runs on CentOS 7.6.1810.
+
+SYNOPSIS
+========
+
+The following is a synopsis of how to use the utilities in the module.
+
+```python
+from LDMS_Test import LDMSDCluster
+
+spec = { ... } # see LDMSDClusterSpec section
+
+# Three choices to obtain a virtual cluster.
+# 1) create it
+cluster = LDMSDCluster.create(spec = spec) # fail if cluster existed
+# 2) get the existing one
+cluster = LDMSDCluster.get(name = 'mycluster')
+# 3) get and create if not existed
+cluster = LDMSDCluster.get(name = 'mycluster', create = True, spec = spec)
+
+
+# start daemons you want to use on the cluster
+#   if the daemon has already started, it does nothing
+
+# SSH - good for debugging
+cluster.start_sshd()
+
+# munged - needed for munge authentication
+cluster.start_munged()
+
+# slurm services - slurmd starts on "sampler" nodes, and slurmctld on last node
+cluster.start_slurm()
+
+# start ldmsd
+cluster.start_ldmsd()
+
+# get all containers
+conts = cluster.containers
+
+# getting a container by name or alias
+cont = cluster.get_container('node-1')
+
+# write a file in a container
+cont.write_file('/path/to/file', 'string content')
+
+# read content of a file in a container
+_str = cont.read_file('/path/to/file')
+
+# execute a program in a container and return the results
+rc, output = cont.exec_run("some_program some_param")
+    # by default, `exec_run()` is blocking. Please consult
+    # `help(docker.models.containers.Container.exec_run)` python doc
+    # for advanced usage.
+
+# destroy the cluster
+cluster.remove()
+```
 
 
 Docker Host Cluster Setup
@@ -67,8 +116,8 @@ Docker Setup
 ============
 
 This section will guide you through docker setup needed for the test
-infrastructure. `cygnus-{01..08}` all have `docker-ce` version 18.09 installed.
-`dockerd` system service is enabled so that `dockerd` service is started on
+infrastructure. `cygnus-{01..08}` all have `docker-ce` version 18.09 installed,
+and `docker.service` system service is enabled so that `dockerd` is started on
 boot.
 
 ```bash
@@ -77,7 +126,7 @@ $ systemctl enable docker.service
 
 The users that need to run the virtual cluster testing facility must also be a
 member of `docker` user group, otherwise they cannot create/delete Docker
-Network or Docker Service.
+Networks or Docker Containers.
 
 
 dockerd network port
@@ -177,11 +226,11 @@ nodes in the cluster.
 Setting Up Docker Swarm
 -----------------------
 
-We need docker daemons to run in swarm mode so that the tasks (containers) load
-in the service can be spread throughout the bare-metal cluster. To setup a
-swarm, first pick a node (cygnys-08 in this case), and issue `docker swarm
-init`. This will initialize the dockerd in the node as swarm manager and
-generate a token for other nodes to join the swarm.
+We need docker daemons to run in swarm mode so that the containers living in
+different hosts (managed by different dockerds) can talk to each other over the
+overlay network. To setup a swarm, first pick a node (cygnys-08 in this case),
+and issue `docker swarm init`. This will initialize the dockerd in the node as
+swarm manager and generate a token for other nodes to join the swarm.
 
 ```bash
 # On cygnus-08
@@ -204,8 +253,7 @@ $ docker swarm join-token manager
 $ docker node promote cygnus-01 cygnus-05
 
 # Docker document mentioned that the number of managers should be an odd number
-# and is less than 7. A manager by default is also a worker (i.e. it also run
-# tasks for the service).
+# and is less than 7. A manager by default is also a worker.
 ```
 
 
@@ -264,7 +312,7 @@ LDMSDCluster and Test are the classes used for creating virtual cluster and to
 report the test results respectively.
 
 The general workflow is 1) create (or get existing) virtual cluster, 2) start
-required services, 3) perform test, 4) report test. For debugging, please see
+required daemons, 3) perform test, 4) report test. For debugging, please see
 Debugging section.
 
 
@@ -300,6 +348,9 @@ daemons + 1. Each daemon defined in `spec` will run on its own container. The
 extra container (last container, e.g. `node-5` for 4-daemon spec) is for
 `slurmctld`, job submitting, and `ldms_ls`. One may think of it as a service
 node (vs compute nodes) for a cluster.
+
+
+### LDMSDClusterSpec
 
 The `spec` is a dictionary containing LDMSD Cluster Spec defined as follows:
 
@@ -506,13 +557,13 @@ and 2 aggregators (2 levels of aggregation).
 ```
 
 
-Start Services
---------------
+Start Daemons
+-------------
 
 The containers in the virtual cluster has only main process (`/bin/bash`)
-running initially. We need to manually start the services. All `start_*()`
-methods of supported services do nothing if the service has already started.
-The following is the list of supported services and the corresponding
+running initially. We need to manually start the daemons. All `start_*()`
+methods of supported daemons do nothing if the daemon has already started.
+The following is the list of supported daemons and the corresponding
 `LDMSDCluster` method to starts it:
 
 - `cluster.start_sshd()` to start `sshd` in each container. This is convenient
@@ -626,16 +677,49 @@ Cleanup
 Do proper cleanup (e.g. `cluster.remove()`), but you might want to hold it while
 you're debugging. Sometimes, an Exception might prevent the code to properly
 cleanup, e.g. docker network was created, but failed to cleanup after service
-creation failure. The following is the docker commands to remove a service and a
-network.
+creation failure.
+
+To remove using python shell:
+```bash
+$ python
+>>> from LDMS_Test import DockerCluster
+>>> cluster = DockerCluster.get('mycluster')
+>>> cluster.remove()
+```
+
+The following is the commands to remove containers and the network using CLI if
+the Python doesn't work.
 
 ```bash
-$ docker service rm mycluster
-$ docker network rm mycluster # network is created using service name
-
-# We might want to periodically check whether the network has already
-# removed, since docker could take 5-10 seconds to remove it.
+# find your cluster network first
 $ docker network ls
+NETWORK ID          NAME                     DRIVER              SCOPE
+d6d69740ddf1        bridge                   bridge              local
+b49037b44bdd        docker_gwbridge          bridge              local
+9359ff933aec        host                     host                local
+ihixyccuq8g4        ingress                  overlay             swarm
+gc313pefx6g3        mycluster                overlay             swarm
+216ddeb1cd8c        none                     null                local
+
+# in this example, the network name is mycluster (it also is the
+# cluster name)
+
+# See containers of mycluster in all hosts
+$ pssh -H "$(echo cygnus-{01..08})" -i "docker ps --filter=network=mycluster"
+[1] 15:37:01 [SUCCESS] cygnus-01
+CONTAINER ID        IMAGE               COMMAND             CREATED              STATUS              PORTS               NAMES
+31fff3c5de9f        centos:7            "/bin/bash"         About a minute ago   Up About a minute                       mycluster-35
+c2c1af104786        centos:7            "/bin/bash"         About a minute ago   Up About a minute                       mycluster-34
+7a122d9574f3        centos:7            "/bin/bash"         About a minute ago   Up About a minute                       mycluster-33
+df4b1fca3340        centos:7            "/bin/bash"         About a minute ago   Up About a minute                       mycluster-32
+
+...
+
+# Remove containers
+$ pssh -H "$(echo cygnus-{01..08})" -i 'X=$(docker ps --filter=network=mycluster -q) ; docker rm -f $X'
+
+# Now, remove the network
+$ docker network rm mycluster
 ```
 
 
@@ -644,33 +728,39 @@ Container Interactive Shell
 
 Sometimes, we want to have an interactive shell to the cluster to look around.
 
-To do so, first we need to find out where the last container is:
+To do so, first we need to find out where our nodes are:
 ```bash
-$ docker service ps --no-trunc mycluster
-ID                          NAME                IMAGE               NODE                DESIRED STATE       CURRENT STATE            ERROR               PORTS
-tj8ao52d9vpm7of1s262dlb1m   mycluster.1         ovis-centos-build   cygnus-02.ogc.int   Running             Running 13 minutes ago
-wns19z8w28icoyctgrzzl5507   mycluster.2         ovis-centos-build   cygnus-08.ogc.int   Running             Running 12 minutes ago
-di5mr9m29mhkexwvk5h59zgm4   mycluster.3         ovis-centos-build   cygnus-01.ogc.int   Running             Running 12 minutes ago
-rubpkah0ovi5qkz1voakgmqce   mycluster.4         ovis-centos-build   cygnus-05.ogc.int   Running             Running 9 minutes ago
-e10nz8d82zzmoyek44becav91   mycluster.5         ovis-centos-build   cygnus-07.ogc.int   Running             Running 12 minutes ago
+narate@cygnus-08 ~/test/ldms
+$ pssh -H "$(echo cygnus-{01..08})" -i 'docker ps --filter=network=mycluster'
+[1] 16:04:25 [SUCCESS] cygnus-01
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+7ef03cc2f29e        ovis-centos-build   "/bin/bash"         21 seconds ago      Up 18 seconds                           mycluster-1
+[2] 16:04:25 [SUCCESS] cygnus-03
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+10ea81f6f877        ovis-centos-build   "/bin/bash"         16 seconds ago      Up 13 seconds                           mycluster-3
+[3] 16:04:25 [SUCCESS] cygnus-04
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+453e837b5b52        ovis-centos-build   "/bin/bash"         14 seconds ago      Up 11 seconds                           mycluster-4
+[4] 16:04:25 [SUCCESS] cygnus-02
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+bfee6eb67b75        ovis-centos-build   "/bin/bash"         19 seconds ago      Up 16 seconds                           mycluster-2
+[5] 16:04:25 [SUCCESS] cygnus-08
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+[6] 16:04:25 [SUCCESS] cygnus-05
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+2ae4d0ed09c2        ovis-centos-build   "/bin/bash"         11 seconds ago      Up 7 seconds                            mycluster-5
+[7] 16:04:25 [SUCCESS] cygnus-06
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+[8] 16:04:25 [SUCCESS] cygnus-07
+CONTAINER ID        IMAGE               COMMAND             CREATED             STATUS              PORTS               NAMES
+
 ```
 
-Note thet the `--no-trunc` option is to not truncate the ID in the output.
-Now we see that the last task slot `mycluster.5` is running on `cygnus-07`,
-we need to work with the dockerd on that host to get to the container. Try
-listing all containers on `cygnus-07` by:
-
-```bash
-$ docker -H cygnus-07 ps -a
-CONTAINER ID        IMAGE                      COMMAND             CREATED             STATUS              PORTS               NAMES
-5bfd7c6781f6        ovis-centos-build:latest   "bash"              16 minutes ago      Up 16 minutes                           mycluster.5.e10nz8d82zzmoyek44becav91
-```
-
-Notice that the name of the container is the `TaskName.FullTaskID`. We can then
-use the container name to execute an interactive bash session in it:
+`mycluster-5` happened to be on `cygnus-05`. We have an interactive shell to
+it by:
 
 ```
-$ docker -H cygnus-07 exec -it mycluster.5.e10nz8d82zzmoyek44becav91 bash
+$ docker -H cygnus-05 exec -it mycluster-5 bash
 [root@node-5 /]#
 ```
 
@@ -679,21 +769,111 @@ From here, we can do all sorts of things, e.g.
 ```
 [root@node-5 /]# ssh node-1
 [root@node-1 ~]# pgrep ldmsd
-155
+160
 ```
 
-EXCEPT THAT YOU CANNOT GDB!!!! HOLY COW! In order to gdb, we need `SYS_PTRACE`
-capability, which can be specified with `--cap-add SYS_PTRACE` to the `docker
-run` command (or `docker create` command). Unfortunately, there is no way we can
-do this using `docker service`. The `dockerd` just doesn't support adding
-capabilities to containers managed under services (I verified with the docker
-source code). According to docker issue thread
-https://github.com/moby/moby/issues/25885#issuecomment-501017588 the feature
-is to be released as part of 19.06 or 19.09.
+If the cluster is created with `cap_add = ['SYS_PTRACE']`, we can also attach a
+gdb to it as follows:
 
-I think for the short term, if we want to gdb inside docker, we should
-orchestrate the containers ourselves. We still need Docker Swarm for the network
-communication though.
+```
+[root@node-1 ~]# gdb -p 160
+GNU gdb (GDB) Red Hat Enterprise Linux 7.6.1-114.el7
+Copyright (C) 2013 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.  Type "show copying"
+and "show warranty" for details.
+This GDB was configured as "x86_64-redhat-linux-gnu".
+For bug reporting instructions, please see:
+<http://www.gnu.org/software/gdb/bugs/>.
+Attaching to process 160
+Reading symbols from /opt/ovis/sbin/ldmsd...done.
+Reading symbols from /home/narate/opt/ovis/lib/libovis_event.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libovis_event.so.0
+Reading symbols from /lib64/libm.so.6...(no debugging symbols found)...done.
+Loaded symbols for /lib64/libm.so.6
+Reading symbols from /home/narate/opt/ovis/lib/libovis_ctrl.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libovis_ctrl.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libldms.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libldms.so.0
+Reading symbols from /home/narate/opt/ovis/lib/librequest.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/librequest.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libldmsd_stream.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libldmsd_stream.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libjson_util.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libjson_util.so.0
+Reading symbols from /lib64/libc.so.6...(no debugging symbols found)...done.
+Loaded symbols for /lib64/libc.so.6
+Reading symbols from /lib64/libcrypto.so.10...Reading symbols from
+/lib64/libcrypto.so.10...(no debugging symbols found)...done.
+(no debugging symbols found)...done.
+Loaded symbols for /lib64/libcrypto.so.10
+Reading symbols from /home/narate/opt/ovis/lib/libmmalloc.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libmmalloc.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libcoll.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libcoll.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libovis_third.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libovis_third.so.0
+Reading symbols from /home/narate/opt/ovis/lib/libovis_util.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libovis_util.so.0
+Reading symbols from /lib64/librt.so.1...(no debugging symbols found)...done.
+Loaded symbols for /lib64/librt.so.1
+Reading symbols from /home/narate/opt/ovis/lib/libzap.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libzap.so.0
+Reading symbols from /lib64/libdl.so.2...(no debugging symbols found)...done.
+Loaded symbols for /lib64/libdl.so.2
+Reading symbols from /lib64/libpthread.so.0...(no debugging symbols
+found)...done.
+[New LWP 166]
+[New LWP 165]
+[New LWP 164]
+[New LWP 163]
+[New LWP 162]
+[New LWP 161]
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/lib64/libthread_db.so.1".
+Loaded symbols for /lib64/libpthread.so.0
+Reading symbols from /lib64/ld-linux-x86-64.so.2...(no debugging symbols
+found)...done.
+Loaded symbols for /lib64/ld-linux-x86-64.so.2
+Reading symbols from /lib64/libz.so.1...Reading symbols from
+/lib64/libz.so.1...(no debugging symbols found)...done.
+(no debugging symbols found)...done.
+Loaded symbols for /lib64/libz.so.1
+Reading symbols from /opt/ovis/lib/ovis-lib/libzap_sock.so...done.
+Loaded symbols for /opt/ovis/lib/ovis-lib/libzap_sock.so
+Reading symbols from /home/narate/opt/ovis/lib/libldms_auth_none.so...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libldms_auth_none.so
+Reading symbols from /opt/ovis/lib/ovis-ldms/libslurm_sampler.so...done.
+Loaded symbols for /opt/ovis/lib/ovis-ldms/libslurm_sampler.so
+Reading symbols from /opt/ovis/lib/ovis-ldms/libmeminfo.so...done.
+Loaded symbols for /opt/ovis/lib/ovis-ldms/libmeminfo.so
+Reading symbols from /home/narate/opt/ovis/lib/libsampler_base.so.0...done.
+Loaded symbols for /home/narate/opt/ovis/lib/libsampler_base.so.0
+Reading symbols from /opt/ovis/lib/ovis-ldms/libvmstat.so...done.
+Loaded symbols for /opt/ovis/lib/ovis-ldms/libvmstat.so
+Reading symbols from /opt/ovis/lib/ovis-ldms/libprocstat.so...done.
+Loaded symbols for /opt/ovis/lib/ovis-ldms/libprocstat.so
+0x00007ff494407fad in nanosleep () from /lib64/libc.so.6
+Missing separate debuginfos, use: debuginfo-install
+glibc-2.17-260.el7_6.6.x86_64 openssl-libs-1.0.2k-16.el7_6.1.x86_64
+zlib-1.2.7-18.el7.x86_64
+(gdb) b sample
+Breakpoint 1 at 0x7ff48ee594fd: sample. (4 locations)
+(gdb) c
+Continuing.
+[Switching to Thread 0x7ff490c7c700 (LWP 165)]
+
+Breakpoint 1, sample (self=0x7ff48f25f0e0 <vmstat_plugin>) at
+../../../../ldms/src/sampler/vmstat.c:205
+205             if (!set) {
+(gdb)
+
+```
+
+NOTE: The source code is displayed in the gdb session because the path to the
+ovis development tree is mounted as the same path in the container. For example,
+adding `"/home/bob/ovis:/home/bob/ovis:ro"` to `mounts` in the spec.
 
 
 Example Results

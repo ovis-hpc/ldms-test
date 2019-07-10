@@ -13,6 +13,40 @@ from functools import wraps
 from StringIO import StringIO
 from distutils.version import LooseVersion
 
+use_docker_service = False
+# NOTE 1: If `use_docker_service` is True, LDMSDCluster will be based on
+# DockerClusterService class which use Docker Service to create the virtual
+# cluster. Otherwise, LDMSDCluster is based on DockerCluster which creates the
+# virtual cluster by iteratively create the Docker Network and Docker Containers
+# by itself.
+#
+# NOTE pros/cons
+# - DockerClusterService
+#   - pros:
+#     - Easy to cleanup on CLI, by `docker rm SERVICE_NAME`
+#     - Easy to list running clusters, by `docker service ls`
+#     - The Service logic in the swarm of dockerds manages the containers.
+#       We just give the spec.
+#   - cons:
+#     - Since the service manages containers, we have little control over them.
+#       For example, when one container dies, a new container will be created
+#       to fill its spot.
+#     - Cannot add or drop capabilities at create, resulting in not able to
+#       ues gdb (it needs `SYS_PTRACE` capability).
+#
+# - DockerCluster
+#   - pros:
+#     - We create containers directly. Thus, we have control on their parameters
+#       at create.
+#     - We can use GDB!!!
+#   - cons:
+#     - `docker network ls` to list the cluster network. If the network existed,
+#       the cluster is there (but could be bad).
+#     - Quite cumbersome to cleanup in CLI. (but in python, you can still use
+#       `cluster.remove()`).
+
+
+# `D` Debug object to store values for debugging
 class Debug(object): pass
 D = Debug()
 
@@ -51,6 +85,15 @@ def env_dict(env):
     if type(env) != list:
         raise TypeError("`env` is not a list nor a dict")
     return dict( e.split("=", 1) for e in env )
+
+def get_docker_clients():
+    """Get all docker clients to dockerds in the swarm"""
+    dc = docker.from_env()
+    nodes = dc.nodes.list()
+    addrs = [ n.attrs["Description"]["Hostname"] for n in nodes ]
+    addrs.sort()
+    return [ docker.DockerClient(base_url = "tcp://{}:2375".format(a)) \
+                    for a in addrs ]
 
 
 #####################################################
@@ -291,32 +334,94 @@ class Service(object):
         return [ self.client.networks.get(n["Target"]) \
                     for n in self.attrs["Spec"]["TaskTemplate"]["Networks"] ]
 
+    @property
+    def labels(self):
+        return self.attrs["Spec"]["Labels"]
 
-################################################################################
 
 class Network(object):
-    def __init__(self, name, driver='bridge', scope='local', attachable=True):
-        self.client = docker.from_env()
-        self.network_name = name
+    """Docker Network Wrapper"""
+
+    def __init__(self, obj):
+        if type(obj) != docker.models.networks.Network:
+            raise TypeError("obj is not a docker Network object")
+        self.obj = obj
+        self.clients = get_docker_clients()
+
+    @classmethod
+    def create(cls, name, driver='overlay', scope='swarm', attachable=True,
+                    labels = None):
+        """A utility to create and wrap the docker network"""
+        client = docker.from_env()
         try:
-            self.network = self.client.networks.get(name)
-        except:
-            self.network = None
-        if self.network is None:
-            self.network = self.client.networks.create(name=name, driver=driver,
-                                        scope=scope, attachable=attachable)
+            obj = client.networks.create(name=name, driver=driver,
+                                     scope=scope, attachable=attachable,
+                                     labels = labels)
+        except docker.errors.APIError, e:
+            if e.status_code != 409: # other error, just raise it
+                raise
+            msg = e.explanation + ". This could be an artifact from previous " \
+                  "run. To remove the network, all docker objects using net " \
+                  "network must be remvoed first (e.g. service, container). " \
+                  "Then, remove the network with `docker network rm {}`." \
+                  .format(name)
+            raise RuntimeError(msg)
+        return Network(obj)
+
+    @classmethod
+    def get(cls, name, create = False, **kwargs):
+        """Find (or optionally create) and wrap docker network"""
+        client = docker.from_env()
+        try:
+            obj = client.networks.get(name)
+        except docker.errors.NotFound:
+            if not create:
+                raise
+            obj = Network.create(name, **kwargs)
+        return Network(obj)
 
     @property
     def name(self):
-        return self.network_name
+        return self.obj.name
 
     @property
     def short_id(self):
-        return self.short_id
+        return self.obj.short_id
 
     def rm(self):
-        self.network.remove()
-        self.network = None
+        self.obj.remove()
+
+    def remove(self):
+        self.obj.remove()
+
+    @property
+    def containers(self):
+        """Containers in the network"""
+        conts = []
+        for c in self.clients:
+            try:
+                obj = c.networks.get(self.name)
+            except docker.errors.NotFound:
+                continue # skip clients not participating in our network
+            D.obj = obj
+            _conts = obj.attrs["Containers"]
+            _conts = _conts if _conts else {}
+            for cont_id in _conts:
+                try:
+                    cont = c.containers.get(cont_id)
+                    conts.append(Container(cont))
+                except docker.errors.NotFound:
+                    continue # ignore the host-side endpoint appearing as
+                             # container.
+        return conts
+
+    @property
+    def labels(self):
+        """Get labels"""
+        return self.obj.attrs["Labels"]
+
+
+################################################################################
 
 class LDMSD(object):
     def __init__(self, hostname, network,
@@ -731,17 +836,312 @@ class LDMSD_SVC(object):
         return erun.output
 
 class DockerClusterContainer(Container):
-    """A Container wrapper for containers in DockerClusterService"""
-    def __init__(self, obj, svc):
-        if not issubclass(type(svc), DockerClusterService):
-            raise TypeError("`svc` is not a subclass of DockerClusterService")
-        self.svc = svc
+    """A Container wrapper for containers in DockerCluster"""
+    def __init__(self, obj, cluster):
+        self.cluster = cluster
         super(DockerClusterContainer, self).__init__(obj)
 
     @property
     def aliases(self):
         """The list of aliases of the container hostname"""
-        return self.svc.node_aliases.get(self.hostname, [])
+        return self.cluster.node_aliases.get(self.hostname, [])
+
+class DockerCluster(object):
+    """Docker Cluster
+
+    A utility to create a virtual cluster with Docker Swarm Network and Docker
+    Containers. Instead of relying on Docker Service to orchestrate docker
+    containers, which at the time this is written cannot add needed capabilities
+    to the containers, this class manages the created containers itself.  The
+    virtual cluster has exactly one overlay network. The hostnames of the nodes
+    inside the virtual cluster is "node-{slot}", where the `{slot}` is the task
+    slot number of the container.  `/etc/hosts` of each container is also
+    modified so that programs inside each container can use the hostname to
+    commnunicate to each other. Hostname aliases can also be set at `create()`.
+
+    DockerCuster.create() creates the virtual cluster (as well as docker
+    Service). DockerCluster.get() obtains the existing virtual cluster,
+    and can optionally create a new virtual cluster if `create = True`. See
+    `create()` and `get()` class methods for more details.
+    """
+    def __init__(self, obj):
+        """Do not direcly call this, use .create() or .get() instead"""
+        # obj must be a docker network with DockerCluster label
+        if type(obj) != docker.models.networks.Network:
+            raise TypeError("`obj` must be a docker Network")
+        lbl = obj.attrs.get("Labels")
+        if "DockerCluster" not in lbl:
+            msg = "The network is not created by DockerCluster. " \
+                  "Please remove or disconnect docker containers " \
+                  "using the network first, then remove the network " \
+                  "by `docker network rm {}`. " \
+                  .format(obj.name)
+            raise TypeError(msg)
+        self.obj = obj
+        self.net = Network(obj)
+        self.cont_dict = None
+
+    @classmethod
+    def create(cls, name, image = "centos:7", nodes = 8,
+                    mounts = [], env = [], labels = {},
+                    node_aliases = {},
+                    cap_add = [],
+                    cap_drop = []):
+        """Create virtual cluster with docker network and service
+
+        If the docker network existed, this will failed. The hostname of each
+        container in the virtual cluster is formatted as "node-{slot}", where
+        '{slot}' is the docker task slot number for the container. Applications
+        can set node aliases with `node_aliases` parameter.
+
+        Example
+        -------
+        >>> cluster = DockerCluster.create(
+                            name = "vc", nodes = 16,
+                            mounts = [ "/home/bob/ovis:/opt/ovis:ro" ],
+                            env = { "CLUSTERNAME" : "vc" },
+                            node_aliases = { "node-1" : [ "head" ] },
+                            cap_add = [ "SYS_PTRACE" ]
+                        )
+
+        Parameters
+        ----------
+        name : str
+            The name of the cluster (also the name of the network).
+        image : str
+            The name of the image to use.
+        nodes : int
+            The number of nodes in the virtual cluster.
+        mounts : list(str)
+            A list of `str` of mount points with format "SRC:DEST:MODE",
+            in which "SRC" being the source path (on the docker host),
+            "DEST" being the mount destination path (in the container),
+            and "MODE" being "ro" or "rw" (read-only or read-write).
+        env : list(str) or dict(str:str)
+            A list of "NAME=VALUE", or a dictionary of { NAME: VALUE } of
+            environment variables.
+        labels : dict(str:str)
+            A dictionary of { LABEL : VALUE } for user-defined labels for the
+            docker service.
+        node_aliases : dict(str:list(str))
+            A dictionary of { NAME : list( str ) } containing a list of aliases
+            of the nodes.
+        cap_add : list(str)
+            A list of capabilities (e.g. 'SYS_PTRACE') to add to containers
+            created by the virtual cluster.
+        cap_drop : list(str)
+            A list of capabilities to drop.
+
+        Returns
+        -------
+        DockerCluster
+            The virtual cluster handle.
+        """
+        lbl = dict(labels)
+        cfg = dict(name = name,
+                   image = image,
+                   num_nodes = nodes,
+                   env = env,
+                   mounts = mounts,
+                   cap_add = cap_add,
+                   cap_drop = cap_drop,
+               )
+        lbl.update({
+                "node_aliases": json.dumps(node_aliases),
+                "DockerCluster" : json.dumps(cfg),
+              })
+        clients = get_docker_clients()
+
+        # allocation table by client: [current_load, alloc, client]
+        tbl = [ [ cl.info()["ContainersRunning"], 0, cl ] for cl in clients ]
+        # and start calculating allocation for each client
+        # sort clients by load
+        tbl.sort( key = lambda x: x[0] )
+        max_load = tbl[-1][0] # last entry
+        _n = nodes # number of containers needed
+        cn = len(tbl)
+        # make the load equal by filling the diff from max_load first
+        for ent in tbl:
+            _a = max_load - ent[0]
+            if not _a:
+                break # reaching max_load, no need to continue
+            _a = _a if _a < _n else _n
+            ent[1] = _a
+            _n -= _a
+            if not _n:
+                break # all containers allocated, no need to continue
+        # evenly distribute remaining load after equalization
+        _a = _n // cn
+        for ent in tbl:
+            ent[1] += _a
+        # the remainders
+        _n %= cn
+        for i in range(0, _n):
+            tbl[i][1] += 1
+
+        # making parameters for containers
+        _slot = 1
+        cont_build = [] # store (client, cont_param)
+        lbl_cont_build = [] # store (client_name, cont_param) for reference
+        volumes = { src: {"bind": dst, "mode": mo } \
+                    for src, dst, mo in map(lambda x:x.split(':'), mounts)
+                }
+        for load, n, cl in tbl:
+            # allocate `n` container using `client`
+            cl_info = cl.info()
+            cl_name = cl_info["Name"]
+            for i in range(0, n):
+                hostname = "node-{}".format(_slot)
+                cont_name = "{}-{}".format(name, _slot)
+                cont_param = dict(
+                        image = image,
+                        name = cont_name,
+                        command = "/bin/bash",
+                        tty = True,
+                        detach = True,
+                        environment = env,
+                        volumes = volumes,
+                        cap_add = cap_add,
+                        cap_drop = cap_drop,
+                        network = name,
+                        hostname = hostname,
+                    )
+                lbl_cont_build.append( (cl_name, cont_param) )
+                cont_build.append( (cl, cont_param) )
+                _slot += 1
+        # memorize cont_build as a part of label
+        dc = docker.from_env()
+        lbl["cont_build"] = json.dumps(lbl_cont_build)
+        net = Network.create(name = name, driver = "overlay",
+                             attachable = True, scope = "swarm",
+                             labels = lbl)
+        # then, create the actual containers
+        for cl, params in cont_build:
+            cl.containers.run(**params)
+        cluster = DockerCluster(net.obj)
+        cluster.update_etc_hosts(node_aliases = node_aliases)
+        return cluster
+
+    @classmethod
+    def get(cls, name, create = False, **kwargs):
+        """Finds (or optionally creates) and returns the DockerCluster
+
+        This function finds the DockerCluster by `name`. If the service
+        is found, everything else is ignored. If the service not found and
+        `create` is `True`, DockerCluster.create() is called with
+        given `kwargs`. Otherwise, `docker.errors.NotFound` is raised.
+
+        Parameters
+        ----------
+        name : str
+            The name of the virtual cluster.
+        create : bool
+            If `True`, the function creates the service if it is not found.
+            Otherwise, no new service is created (default: False).
+        **kwargs
+            Parameters for DockerCluster.create()
+        """
+        try:
+            dc = docker.from_env()
+            net = dc.networks.get(name)
+            return cls(net)
+        except docker.errors.NotFound:
+            if not create:
+                raise
+            return cls.create(name = name, **kwargs)
+
+    def is_running(self):
+        """Check if the service (all ) is running"""
+        for cont in self.containers:
+            if not cont.is_running():
+                return False
+        return True
+
+    def wait_running(self, timeout=10):
+        """Wait for all containers to run"""
+        t0 = time.time()
+        while not self.is_running():
+            t1 = time.time()
+            if t1-t0 > timeout:
+                return False
+            time.sleep(1)
+        return True
+
+    @cached_property
+    def containers(self):
+        """A list of containers wrapped by DockerClusterContainer"""
+        return self.get_containers()
+
+    def get_containers(self, timeout = 10):
+        """Return a list of docker Containers of the virtual cluster"""
+        cont_list = [ DockerClusterContainer(c.obj, self) \
+                            for c in self.net.containers ]
+        cont_list.sort(key = lambda x: LooseVersion(x.name))
+        return cont_list
+
+    def get_container(self, name):
+        """Get container by name"""
+        if not self.cont_dict:
+            cont_list = self.containers
+            cont_dict = dict()
+            for cont in cont_list:
+                k = cont.attrs['Config']['Hostname']
+                cont_dict[k] = cont
+            for k, v in self.node_aliases.iteritems():
+                cont = cont_dict[k]
+                if type(v) == str:
+                    v = [ v ]
+                for n in v:
+                    cont_dict[n] = cont
+            self.cont_dict = cont_dict
+        return self.cont_dict.get(name)
+
+    @cached_property
+    def node_aliases(self):
+        """dict(hostname:list) - node aliases by hostname"""
+        txt = self.net.obj.attrs["Labels"]["node_aliases"]
+        return json.loads(txt)
+
+    def remove(self):
+        """Remove the docker service and its network"""
+        for cont in self.containers:
+            try:
+                cont.remove(force = True)
+            except:
+                pass
+        self.net.remove()
+
+    @property
+    def labels(self):
+        """Labels"""
+        return self.net.obj.attrs["Labels"]
+
+    def build_etc_hosts(self, node_aliases = {}):
+        """Returns the generated `/etc/hosts` content"""
+        if not node_aliases:
+            node_aliases = self.node_aliases
+        sio = StringIO()
+        sio.write("127.0.0.1 localhost\n")
+        for cont in self.containers:
+            name = cont.hostname
+            ip_addr = cont.ip_addr
+            sio.write("{0.ip_addr} {0.hostname}".format(cont))
+            networks = cont.attrs["NetworkSettings"]["Networks"]
+            alist = node_aliases.get(name, [])
+            if type(alist) == str:
+                alist = [ alist ]
+            for a in alist:
+                sio.write(" {}".format(a))
+            sio.write("\n")
+        return sio.getvalue()
+
+    def update_etc_hosts(self, node_aliases = {}):
+        """Update entries in /etc/hosts"""
+        etc_hosts = self.build_etc_hosts(node_aliases = node_aliases)
+        conts = self.get_containers()
+        for cont in conts:
+            cont.write_file("/etc/hosts", etc_hosts)
+
 
 class DockerClusterService(Service):
     """Docker Cluster Service
@@ -758,15 +1158,21 @@ class DockerClusterService(Service):
     and can optionally create a new virtual cluster if `create = True`. See
     `create()` and `get()` class methods for more details.
     """
-    def __init__(self, *args, **kwargs):
+    def __init__(self, obj):
         """Do not direcly call this, use .create() or .get() instead"""
-        super(DockerClusterService, self).__init__(*args, **kwargs)
+        super(DockerClusterService, self).__init__(obj)
+        lbl = obj.attrs["Spec"]["Labels"]
+        if "DockerClusterService" not in lbl:
+            raise TypeError("Service {} is not created by " \
+                            "DockerClusterService".format(obj.name))
         self.cont_dict = None
 
     @classmethod
     def create(cls, name, image = "centos:7", nodes = 8,
                     network = None, mounts = [], env = [], labels = {},
-                    node_aliases = {}):
+                    node_aliases = {},
+                    cap_add = [],
+                    cap_drop = []):
         """Create virtual cluster with docker network and service
 
         If the docker network or docker service existed, this will failed. The
@@ -809,6 +1215,10 @@ class DockerClusterService(Service):
         node_aliases : dict(str:list(str))
             A dictionary of { NAME : list( str ) } containing a list of aliases
             of the nodes.
+        cap_add : list(str)
+            IGNORED - Slurm Service does not (yet) take cap_add
+        cap_drop : list(str)
+            IGNORED - Slurm Service does not (yet) take cap_drop
 
         Returns
         -------
@@ -818,7 +1228,7 @@ class DockerClusterService(Service):
         d = docker.from_env()
         if not network:
             network = name
-        net = d.networks.create(name = network, driver = "overlay",
+        net = Network.create(name = network, driver = "overlay",
                                 attachable = True, scope = "swarm")
         try:
             mode = docker.models.services.ServiceMode("replicated", nodes)
@@ -837,7 +1247,6 @@ class DockerClusterService(Service):
             svc.update_etc_hosts(node_aliases = node_aliases)
             return svc
         except:
-            #net.remove()
             raise
 
     @classmethod
@@ -1033,8 +1442,8 @@ LDMSDCluster_spec_example = {
 class LDMSDContainer(DockerClusterContainer):
     """Container wrapper for a container being a part of LDMSDCluster
 
-    LDMSDContainer extends DockerClusterContainer (and LDMSDCluster extends
-    DockerClusterService) -- adding ldmsd-specific routines and properties.
+    LDMSDContainer extends DockerClusterContainer -- adding ldmsd-specific
+    routines and properties.
 
     Application does not normally direcly create LDMSDContainer. LDMSDContainer
     should be obtained by calling `get_container()` or accessing `containers` of
@@ -1222,12 +1631,13 @@ class LDMSDContainer(DockerClusterContainer):
             raise RuntimeError("sshd failed, rc: {}, output: {}" \
                                .format(rc, out))
 
+BaseCluster = DockerCluster if not use_docker_service else DockerClusterService
 
-class LDMSDCluster(DockerClusterService):
+class LDMSDCluster(BaseCluster):
     """LDMSD Cluster - a virtual cluster for LDMSD
 
-    LDMSDCluster extends DockerClusterService. Similarly to
-    DockerClusterService, `create()` class method creates the virtual cluster,
+    LDMSDCluster extends DockerCluster. Similarly to
+    DockerCluster, `create()` class method creates the virtual cluster,
     and `get()` class method obtains the existing virtual cluster (and
     optionally creates it if `create=True` is given), but LDMSDCluster receives
     `spec` instead of long list of keyword arguments (see `get()` and
@@ -1321,8 +1731,8 @@ class LDMSDCluster(DockerClusterService):
             }
         """
         kwargs = cls.spec_to_kwargs(spec)
-        svc = super(LDMSDCluster, cls).create(**kwargs)
-        lc = LDMSDCluster(svc.obj)
+        wrap = super(LDMSDCluster, cls).create(**kwargs)
+        lc = LDMSDCluster(wrap.obj)
         lc.make_ovis_env()
         return lc
 
@@ -1331,8 +1741,8 @@ class LDMSDCluster(DockerClusterService):
         """Obtain an existing ldmsd virtual cluster (or create if `create=True`)"""
         d = docker.from_env()
         try:
-            svc = d.services.get(name)
-            return LDMSDCluster(svc)
+            wrap = super(LDMSDCluster, cls).get(name)
+            return LDMSDCluster(wrap.obj)
         except docker.errors.NotFound:
             if not create:
                 raise
@@ -1340,11 +1750,13 @@ class LDMSDCluster(DockerClusterService):
 
     @classmethod
     def spec_to_kwargs(cls, spec):
-        """Convert `spec` to kwargs for DockerClusterService.create()"""
+        """Convert `spec` to kwargs for DockerCluster.create()"""
         name = spec["name"]
         daemons = spec["daemons"]
         prefix = spec.get("ovis_prefix", "/opt/ovis")
         mounts = ["{}:/opt/ovis:ro".format(prefix)] + spec.get("mounts", [])
+        cap_add = spec.get("cap_add", [])
+        cap_drop = spec.get("cap_drop", [])
         # assign daemons to containers using node_aliases
         node_aliases = {}
         idx = 1
@@ -1377,12 +1789,14 @@ class LDMSDCluster(DockerClusterService):
                     env = env,
                     labels = { "LDMSDCluster.spec": json.dumps(spec) },
                     node_aliases = node_aliases,
+                    cap_add = cap_add,
+                    cap_drop = cap_drop,
                  )
         return kwargs
 
     @cached_property
     def spec(self):
-        return json.loads(self.attrs["Spec"]["Labels"]["LDMSDCluster.spec"])
+        return json.loads(self.labels["LDMSDCluster.spec"])
 
     @property
     def containers(self):
@@ -1621,7 +2035,24 @@ class LDMSDCluster(DockerClusterService):
 
 
 class TADATest(object):
-    """TADA Test Utility"""
+    """TADA Test Utility
+
+    Example:
+        test = TADATest(test_suite = "mysuite", test_type = "type",
+                        test_name = "simple_test",
+                        test_host = "localhost",
+                        tada_port = 9862)
+        test.start()
+        test.add_assertion(1, "Test One")
+        test.add_assertion(2, "Test Two")
+        test.add_assertion(3, "Test Three")
+        ... # do some work
+        test.assert_test(1, rc == 0, "verifying rc == 0")
+        ... # do some other work
+        test.assert_test(3, num == 5, "verifying num == 5")
+        # Test Two is skipped, and will be reported in tadad as "skipped"
+        test.finish()
+    """
 
     SKIPPED = "skipped"
     PASSED = "passed"
@@ -1644,6 +2075,7 @@ class TADATest(object):
                             (self.tada_host, self.tada_port))
 
     def start(self):
+        """Notify `tadad` that the test has started"""
         msg = {
                 "msg-type": "test-start",
                 "test-suite": self.test_suite,
@@ -1654,6 +2086,7 @@ class TADATest(object):
         self._send(msg)
 
     def add_assertion(self, number, desc):
+        """Add test assertion point"""
         self.assertions[number] = {
                         "msg-type": "assert-status",
                         "test-suite": self.test_suite,
@@ -1669,12 +2102,14 @@ class TADATest(object):
         self._send(self.assertions[assert_no])
 
     def assert_test(self, assert_no, cond, cond_str):
+        """Evaluate the assert condition and notify `tadad`"""
         msg = self.assertions[assert_no]
         msg["assert-cond"] = cond_str
         msg["test-status"] = TADATest.PASSED if cond else TADATest.FAILED
         self._send(msg)
 
     def finish(self):
+        """Notify the `tadad` that the test is finished"""
         for num, msg in self.assertions.iteritems():
             if msg["test-status"] == TADATest.SKIPPED:
                 self._send(msg)
@@ -1686,3 +2121,6 @@ class TADATest(object):
                 "timestamp": time.time(),
               }
         self._send(msg)
+
+if __name__ == "__main__":
+    execfile(os.getenv('PYTHONSTARTUP', '/dev/null'))
