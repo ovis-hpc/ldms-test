@@ -18,10 +18,11 @@ def jprint(obj):
     print json.dumps(obj, indent=2)
 
 dc = docker.from_env()
+USER = os.getlogin()
 
 spec = {
-    "name" : "mycluster",
-    "description" : "Narate test cluster",
+    "name" : "{}-cluster".format(USER),
+    "description" : "{} test cluster".format(USER),
     "type" : "NA",
     "define" : [
         {
