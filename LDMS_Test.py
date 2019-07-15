@@ -190,11 +190,17 @@ class Container(object):
 
     def write_file(self, path, content):
         """Write `content` to `path` in the container"""
-        cmd = "/bin/bash -c 'cat -  >{}'".format(path)
-        erun = self.exec_run(cmd, stdin=True, socket=True)
-        sock = erun.output
+        cmd = "/bin/bash -c 'cat - >{} && echo -n true'".format(path)
+        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        sock.setblocking(True)
         sock.send(content)
+        sock.shutdown(socket.SHUT_WR)
+        D.ret = ret = sock.recv(8192)
+        # skip 8-byte header
+        ret = ret[8:]
         sock.close()
+        if ret != "true":
+            raise RuntimeError(ret)
 
     def read_file(self, path):
         """Read file specified by `path` from the container"""
