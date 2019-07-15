@@ -7,9 +7,10 @@ import json
 import time
 import docker
 import argparse
+import TADA
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, LDMSDContainer, TADATest
+from LDMS_Test import LDMSDCluster, LDMSDContainer
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -59,6 +60,9 @@ ap.add_argument("--db", type = str,
 ap.add_argument("--slurm-notifier", type = str,
                 default = "__find_from_prefix__",
                 help = "The path (in container) to slurm_notifier library." )
+ap.add_argument("--tada-addr",
+                help="The test automation server host and port as host:port.",
+                default="localhost:9862")
 
 args = ap.parse_args()
 
@@ -199,7 +203,10 @@ spec = {
 
 #### test definition ####
 
-test = TADATest("LDMSD", "LDMSD", "agg + slurm_sampler + slurm_notifier")
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "LDMSD 2-level agg with slurm",
+                 tada_addr = args.tada_addr)
 test.add_assertion(1, "ldms_ls agg-2")
 test.add_assertion(2, "slurm job_id verification on sampler-1")
 test.add_assertion(3, "slurm job_id verification on sampler-2")
