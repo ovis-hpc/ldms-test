@@ -8,6 +8,7 @@ import time
 import docker
 import argparse
 
+from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, TADATest
 
 if __name__ != "__main__":
@@ -32,6 +33,12 @@ def get_ovis_commit_id(prefix):
         pass
     return None
 
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
 
 #### argument parsing #### -------------------------------------------
 ap = argparse.ArgumentParser(description =
@@ -41,7 +48,7 @@ ap.add_argument("--clustername", type = str,
                 help = "The name of the cluster. The default is "
                 "USER-test3-COMMIT_ID.")
 ap.add_argument("--prefix", type = str,
-                default = "/opt/ovis",
+                default = default_prefix,
                 help = "The OVIS installation prefix.")
 ap.add_argument("--src", type = str,
                 help = "The path to OVIS source tree (for gdb). " \
@@ -50,7 +57,7 @@ ap.add_argument("--db", type = str,
                 default = "{}/db".format(os.path.realpath(sys.path[0])),
                 help = "The path to host db directory." )
 ap.add_argument("--slurm-notifier", type = str,
-                default = "/opt/ovis/lib64/ovis-ldms/libslurm_notifier.so",
+                default = "__find_from_prefix__",
                 help = "The path (in container) to slurm_notifier library." )
 
 args = ap.parse_args()
@@ -64,6 +71,16 @@ CLUSTERNAME = args.clustername if args.clustername else \
               "{}-test3-{:.7}".format(USER, COMMIT_ID)
 DB = args.db
 SLURM_NOTIFIER = args.slurm_notifier
+if SLURM_NOTIFIER == "__find_from_prefix__":
+    paths = map(lambda x: "{}/{}/ovis-ldms/libslurm_notifier.so"\
+                          .format(PREFIX, x),
+                ["lib", "lib64"])
+    for p in paths:
+        if os.path.exists(p):
+            SLURM_NOTIFIER = p.replace(PREFIX, '/opt/ovis', 1)
+            break
+    else:
+        raise RuntimeError("libslurm_notifier.so not found")
 
 
 #### spec #### -------------------------------------------------------
@@ -251,4 +268,4 @@ verify(3, jobid in _set, "job_id verified")
 
 test.finish()
 
-# cluster.remove() # this destroys entire cluster
+cluster.remove() # this destroys entire cluster
