@@ -112,6 +112,229 @@ def get_ovis_commit_id(prefix):
         pass
     return None
 
+DEEP_COPY_TBL = {
+        dict: lambda x: { k:deep_copy(v) for k,v in x.iteritems() },
+        list: lambda x: [ deep_copy(v) for v in x ],
+        int: lambda x: x,
+        long: lambda x: x,
+        float: lambda x: x,
+        str: lambda x: x,
+        unicode: lambda x: x,
+        bool: lambda x: x,
+    }
+
+def deep_copy(obj):
+    t = type(obj)
+    f = DEEP_COPY_TBL.get(t)
+    if not f:
+        raise TypeError("Unsupported type: {.__name__}".format(t))
+    return f(obj)
+
+
+class Spec(dict):
+    """Spec object -- handling spec object extension and substitution
+
+    Synopsis:
+    >>> spec_def = {...} # see example below
+    >>> spec = Spec(spec_def)
+
+    A Spec is a dictionary with a reserved top-level "templates" attribute for
+    defining object (dict) templates. The objects in the spec can extend
+    a template using a reserved attribute "!extends".  The local attributes
+    override those from the template. The "%VAR%" in the string inside the Spec
+    is substituted with the value of the attribute of the nearest parent object
+    (self is the nearest).
+
+    The substitution is done after the recursive extension is done.
+
+    For example,
+
+    {
+        "USER": "root",
+        "templates": {
+            "prog-base": {
+                "path": "/bin/%prog%",
+                "desc": "This is %prog%",
+                "user": "%USER%",
+            },
+            "prog-sbin": {
+                "!extends": "prog-base",
+                "path": "/sbin/%prog%",
+            },
+        },
+        "programs": [
+            {
+                "prog": "ssh",
+                "!extends": "prog-base",
+            },
+            {
+                "prog": "sshd",
+                "!extends": "prog-sbin",
+            },
+        ],
+        "jail": {
+            "USER": "jail",
+            "programs": [
+                {
+                    "prog": "ls",
+                    "!extends": "prog-base",
+                },
+            ],
+        },
+    }
+
+    will be extended and substituted as:
+
+    {
+        "USER": "root",
+        "templates": {
+            "prog-base": {
+                "path": "/bin/%prog%",
+                "desc": "This is %prog%",
+                "user": "%USER%",
+            },
+            "prog-sbin": {
+                "!extends": "prog-base",
+                "path": "/sbin/%prog%",
+            },
+        },
+        "programs": [
+            {
+                "prog": "ssh",
+                "path": "/bin/ssh",
+                "desc": "This is ssh",
+                "user": "root",
+            },
+            {
+                "prog": "sshd",
+                "path": "/sbin/sshd",
+                "desc": "This is sshd",
+                "user": "root",
+            },
+        ],
+        "jail": {
+            "USER": "jail",
+            "programs": [
+                {
+                    "prog": "ls",
+                    "path": "/bin/ls",
+                    "desc": "This is ls",
+                    "user": "jail",
+                },
+            ],
+        },
+    }
+
+    """
+    MAX_DEPTH = 64
+    VAR_RE = re.compile(r'%([^%]+)%')
+    PRIMITIVES = set([long, int, float, bool, str, unicode])
+
+    def __init__(self, spec):
+        _dict = deep_copy(spec)
+        self.templates = _dict.get("templates", {})
+        super(Spec, self).__init__(_dict)
+        self.SUBST_TBL = {
+            dict: self._subst_dict,
+            list: self._subst_list,
+            str: self._subst_str,
+            unicode: self._subst_str,
+            int: self._subst_scalar,
+            float: self._subst_scalar,
+            long: self._subst_scalar,
+            bool: self._subst_scalar,
+        }
+        self.EXPAND_TBL = {
+            dict: self._expand_dict,
+            list: self._expand_list,
+            int: self._expand_scalar,
+            float: self._expand_scalar,
+            long: self._expand_scalar,
+            str: self._expand_scalar,
+            unicode: self._expand_scalar,
+            bool: self._expand_scalar,
+        }
+        self._start_expand()
+        self._start_subst()
+
+    def _start_expand(self):
+        """(private) starting point of template expansion"""
+        for k,v in self.iteritems():
+            if k == "templates":
+                continue # skip the templates
+            self[k] = self._expand(v, 0)
+
+    def _start_subst(self):
+        """(private) starting point of %VAR% substitute"""
+        self.VAR = { k:v for k,v in self.iteritems() \
+                         if type(v) in self.PRIMITIVES }
+        for k,v in self.iteritems():
+            if k == "templates":
+                continue
+            self[k] = self._subst(v)
+
+    def _expand(self, obj, lvl):
+        """(private) Expand the "!extends" and "%VAR%" """
+        if lvl > self.MAX_DEPTH:
+            raise RuntimeError("Expansion exceeding maximum depth ({})" \
+                               .format(self.MAX_DEPTH))
+        tp = type(obj)
+        fn = self.EXPAND_TBL.get(tp)
+        if not fn:
+            raise TypeError("Unsupported type {.__name__}".format(tp))
+        return fn(obj, lvl)
+
+    def _expand_scalar(self, obj, lvl):
+        return obj
+
+    def _expand_list(self, lst, lvl):
+        return [ self._expand(x, lvl+1) for x in lst ]
+
+    def _expand_dict(self, dct, lvl):
+        lst = [dct] # list of extension
+        ext = dct.get("!extends")
+        while ext:
+            _temp = self.templates[ext]
+            lst.append(_temp)
+            ext = _temp.get("!extends")
+        # new temporary dict
+        tmp = dict()
+        while lst:
+            # update dict by extension order, base first
+            d = lst.pop()
+            tmp.update(d)
+        tmp.pop("!extends", None) # remove the "!extends" keyword
+        return { k: self._expand(v, lvl+1) for k,v in tmp.iteritems() }
+
+    def _subst(self, obj):
+        """(private) substitute %VAR% """
+        tp = type(obj)
+        fn = self.SUBST_TBL.get(tp)
+        if not fn:
+            raise TypeError("Unsupported type {.__name__}".format(tp))
+        return fn(obj)
+
+    def _subst_scalar(self, val):
+        return val
+
+    def _subst_list(self, lst):
+        return [ self._subst(x) for x in lst ]
+
+    def _subst_dict(self, dct):
+        _save = self.VAR
+        # new VAR dict
+        var = dict(self.VAR)
+        var.update( { k:v for k,v in dct.iteritems() \
+                          if type(v) in self.PRIMITIVES } )
+        self.VAR = var
+        _ret = { k: self._subst(v) for k,v in dct.iteritems() }
+        # recover
+        self.VAR = _save
+        return _ret
+
+    def _subst_str(self, val):
+        return self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), val)
+
 
 #####################################################
 #                                                   #
@@ -960,11 +1183,13 @@ class DockerCluster(object):
         DockerCluster
             The virtual cluster handle.
         """
+        if type(nodes) == int:
+            nodes = [ "node-{}".format(i) for i in range(0, nodes) ]
         lbl = dict(labels)
         cfg = dict(name = name,
                    image = image,
-                   num_nodes = nodes,
                    env = env,
+                   nodes = nodes,
                    mounts = mounts,
                    cap_add = cap_add,
                    cap_drop = cap_drop,
@@ -981,7 +1206,7 @@ class DockerCluster(object):
         # sort clients by load
         tbl.sort( key = lambda x: x[0] )
         max_load = tbl[-1][0] # last entry
-        _n = nodes # number of containers needed
+        _n = len(nodes) # number of containers needed
         cn = len(tbl)
         # make the load equal by filling the diff from max_load first
         for ent in tbl:
@@ -1009,13 +1234,16 @@ class DockerCluster(object):
         volumes = { src: {"bind": dst, "mode": mo } \
                     for src, dst, mo in map(lambda x:x.split(':'), mounts)
                 }
+        idx = 0
         for load, n, cl in tbl:
             # allocate `n` container using `client`
             cl_info = cl.info()
             cl_name = cl_info["Name"]
             for i in range(0, n):
-                hostname = "node-{}".format(_slot)
-                cont_name = "{}-{}".format(name, _slot)
+                node = nodes[idx]
+                idx += 1
+                hostname = node
+                cont_name = "{}-{}".format(name, node)
                 cont_param = dict(
                         image = image,
                         name = cont_name,
@@ -1031,7 +1259,6 @@ class DockerCluster(object):
                     )
                 lbl_cont_build.append( (cl_name, cont_param) )
                 cont_build.append( (cl, cont_param) )
-                _slot += 1
         # memorize cont_build as a part of label
         dc = docker.from_env()
         lbl["cont_build"] = json.dumps(lbl_cont_build)
@@ -1345,123 +1572,6 @@ class DockerClusterService(Service):
             n.remove()
 
 
-### -- LDMSDCluster Spec Example -- ###
-LDMSDCluster_spec_example = {
-    "name" : "Dir_Info_Test",
-    "description" : "Test the sampler-info provided in the directory data",
-    "type" : "FVT",
-    "define" : [
-        {
-            "name" : "sampler-daemon",
-            "type" : "sampler",
-            "listen_port" : 10000,
-            "listen_xprt" : "sock",
-            "listen_auth" : "munge",
-            "env" : [
-                "INTERVAL=1000000",
-                "OFFSET=0"
-            ],
-            "samplers" : [
-                {
-                    "plugin" : "meminfo",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
-                },
-                {
-                    "plugin" : "vmstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
-                },
-                {
-                    "plugin" : "procstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
-                }
-            ]
-        }
-    ],
-    "daemons" : [
-        {
-            "host" : "sampler-1",
-            "asset" : "sampler-daemon",
-            "env" : [
-                "COMPONENT_ID=10001",
-                "HOSTNAME=%host%"
-            ]
-        },
-        {
-            "host" : "sampler-2",
-            "asset" : "sampler-daemon",
-            "env" : [
-                "COMPONENT_ID=10002",
-                "HOSTNAME=%host%"
-            ]
-        },
-        {
-            "host" : "agg-1",
-            "listen_port" : 20000,
-            "listen_xprt" : "sock",
-            "listen_auth" : "munge",
-            "env" : [
-                "HOSTNAME=%host%"
-            ],
-            "config" : [
-                "prdcr_add name=sampler-1 host=sampler-1 port=10000 auth=munge interval=20000000",
-                "prdcr_add name=sampler-2 host=sampler-1 port=10000 auth=munge interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
-            ]
-        },
-        {
-            "host" : "agg-2",
-            "listen_port" : 20001,
-            "listen_xprt" : "sock",
-            "listen_auth" : "munge",
-            "env" : [
-                "HOSTNAME=%host%"
-            ],
-            "config" : [
-                "prdcr_add name=agg-1 host=agg-1 port=20000 auth=munge interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
-            ]
-        }
-    ],
-
-    # NOTE: The following is Narate's extension
-
-    # (Optional) This is so that we can try on various OS.
-    # Default: "ovis-centos-build"
-    "image": "ovis-centos-build",
-
-    # (Optional) ovis_prefix is used for mounting `/opt/ovis` and setup ovis ENV
-    # Default: "/opt/ovis"
-    "ovis_prefix": "/home/narate/opt/ovis",
-
-    # (Optional) extra arbitrary mounts, e.g. store data
-    # Default: []
-    "mounts": [
-        "/home/narate/store:/store:rw",
-    ],
-
-    # (Optional) environment applied cluster-wide
-    # Default: []
-    "env": [ ]
-}
-
 class LDMSDContainer(DockerClusterContainer):
     """Container wrapper for a container being a part of LDMSDCluster
 
@@ -1477,10 +1587,22 @@ class LDMSDContainer(DockerClusterContainer):
             raise TypeError("`svc` must be a subclass of LDMSDCluster")
         self.svc = svc
         super(LDMSDContainer, self).__init__(obj, svc)
+        self.DAEMON_TBL = {
+            "ldmsd": self.start_ldmsd,
+            "sshd": self.start_sshd,
+            "munged": self.start_munged,
+            "slurmd": self.start_slurmd,
+            "slurmctld": self.start_slurmctld,
+        }
 
     def pgrep(self, *args):
         """Return (rc, output) of `pgrep *args`"""
         return self.exec_run("pgrep " + " ".join(args))
+
+    def pgrepc(self, prog):
+        """Reurn the number from `pgrep -c {prog}`"""
+        rc, out = self.pgrep("-c", prog)
+        return int(out)
 
     def check_ldmsd(self):
         """Check if ldmsd is running"""
@@ -1489,69 +1611,47 @@ class LDMSDContainer(DockerClusterContainer):
 
     def start_ldmsd(self, spec_override = {}):
         """Start ldmsd in the container"""
-        spec = self.ldmsd_spec.copy()
-        spec.update(spec_override)
-        cfg = self.get_ldmsd_config(spec)
         if self.check_ldmsd():
-            raise RuntimeError("ldmsd is already running")
+            return # already running
+        spec = deep_copy(self.ldmsd_spec)
+        spec.update(spec_override)
+        if not spec:
+            return # no ldmsd spec for this node and no spec given
+        cfg = self.get_ldmsd_config(spec)
         self.write_file(spec["config_file"], cfg)
         cmd = self.get_ldmsd_cmd(spec)
-        env = { k: re.sub("%(\w+)%", lambda m: spec[m.group(1)], v) \
-                    for k, v in env_dict(spec["env"]).iteritems() }
-
-        self.exec_run(cmd, environment = env)
+        self.exec_run(cmd, environment = env_dict(spec["env"]))
 
     def kill_ldmsd(self):
         """Kill ldmsd in the container"""
         self.exec_run("pkill ldmsd")
 
     @cached_property
+    def spec(self):
+        """Get container spec"""
+        for node in self.svc.spec["nodes"]:
+            if self.hostname == node["hostname"]:
+                return node
+        return None
+
+    @cached_property
     def ldmsd_spec(self):
         """Get the spec for this ldmsd (from the associated service)"""
-        svc_spec = self.svc.spec
-        if not self.aliases:
-            return dict() # return empty dict, if not having ldmsd role
-        k = self.aliases[0] # alias is my role
-        daemon = next( (d for d in svc_spec["daemons"] if d["host"] == k), None )
-        if not daemon:
+        ldmsd = next( (d for d in self.spec.get("daemons", []) \
+                          if d["type"] == "ldmsd"), None )
+        if not ldmsd:
             return {} # empty dict
-        dspec = daemon.copy()
+        dspec = deep_copy(ldmsd)
 
         # apply cluster-level env
         w = env_dict(dspec.get("env", []))
-        v = env_dict(svc_spec.get("env", []))
+        v = env_dict(self.svc.spec.get("env", []))
         v.update(w) # dspec precede svc_spec
         dspec["env"] = v
-
-        k = dspec.pop("asset", None)
-        if k:
-            # apply asset
-            asset = next( (a for a in svc_spec["define"] if a["name"] == k), {} )
-            omitted = ["name"]
-            for k,v in asset.iteritems():
-                if k in omitted:
-                    continue
-                w = dspec.get(k)
-                if k == "env":
-                    u = env_dict(v)
-                    u.update(w)
-                    dspec[k] = u
-                    continue
-                if w == None:
-                    dspec[k] = v
-                elif type(w) == list:
-                    dspec[k] = v + w
-                elif type(w) == dict:
-                    u = v.copy()
-                    u.update(w) # attr in dspec precedes attr in asset
-                    dspec[k] = u
-                # else, do nothing, attr in dspec precedes attr in asset
-
         dspec.setdefault("log_file", "/var/log/ldmsd.log")
         dspec.setdefault("log_level", "INFO")
         dspec.setdefault("listen_auth", "none")
         dspec.setdefault("config_file", "/etc/ldmsd.conf")
-
         return dspec
 
     @cached_property
@@ -1561,25 +1661,45 @@ class LDMSDContainer(DockerClusterContainer):
 
     def get_ldmsd_config(self, spec):
         """Generate ldmsd config `str` from given spec"""
-        cfg = spec.get("config")
-        if cfg:
-            return '\n'.join(cfg)
-        # samplers
+        # process `samplers`
         sio = StringIO()
         for samp in spec.get("samplers", []):
             plugin = samp["plugin"]
+            interval = samp.get("interval", 2000000)
+            if interval != "":
+                interval = "interval={}".format(interval)
+            offset = samp.get("offset", "")
+            if offset != "":
+                offset = "offset={}".format(offset)
             samp_cfg = ("""
                 load name={plugin}
-                config name={plugin} component_id=${{COMPONENT_ID}} {config} \
+                config name={plugin} {config} \
             """ + ( "" if not samp.get("start") else \
             """
-                start name={plugin} interval=${{INTERVAL}} offset=${{OFFSET}}
+                start name={plugin} {interval} {offset}
             """)
-            ).format(plugin = plugin, config = " ".join(samp["config"]))
+            ).format(
+                plugin = plugin, config = " ".join(samp["config"]),
+                interval = interval, offset = offset
+            )
 
             # replaces all %VAR%
             samp_cfg = re.sub(r'%(\w+)%', lambda m: samp[m.group(1)], samp_cfg)
             sio.write(samp_cfg)
+        # process `prdcrs`
+        for prdcr in spec.get("prdcrs", []):
+            prdcr = deep_copy(prdcr)
+            prdcr_add = "prdcr_add name={}".format(prdcr.pop("name"))
+            for k, v in prdcr.iteritems():
+                prdcr_add += " {}={}".format(k, v)
+            sio.write(prdcr_add)
+            sio.write("\n")
+        # process `config`
+        cfg = spec.get("config")
+        if cfg:
+            for x in cfg:
+                sio.write(x)
+                sio.write("\n")
         return sio.getvalue()
 
     @cached_property
@@ -1589,7 +1709,6 @@ class LDMSDContainer(DockerClusterContainer):
 
     def get_ldmsd_cmd(self, spec):
         """Get ldmsd command line according to spec"""
-        spec = dict(spec)
         cmd = "ldmsd -x {listen_xprt}:{listen_port} -a {listen_auth}" \
               "      -c {config_file} -l {log_file} -v {log_level}" \
               .format(**spec)
@@ -1622,27 +1741,64 @@ class LDMSDContainer(DockerClusterContainer):
     def start_slurm(self):
         """Start slurmd in all sampler nodes, and slurmctld on svc node"""
         # determine our role
-        prog = None
-        if self.ldmsd_spec.get("type") == "sampler":
-            # sampler node, run slurmd
-            prog = "slurmd"
-        if self.hostname == self.svc.containers[-1].hostname:
-            # service node, run slurmctld
-            prog = "slurmctld"
-        if not prog: # no slurm role for this node, do nothing
-            return
-        rc, out = self.pgrep("-c " + prog)
-        if rc == 0: # already running
-            return
+        daemons = self.spec.get("daemons", [])
+        slurm_daemons = [ d for d in daemons \
+                            if d.get("type") in set(["slurmctld", "slurmd"]) ]
+        will_start = [d for d in slurm_daemons if self.pgrepc(d["type"]) == 0]
+        if not will_start:
+            return # no daemon to start
         self.prep_slurm_conf()
+        for d in will_start:
+            prog = d["type"]
+            plugstack = d.get("plugstack")
+            if plugstack:
+                sio = StringIO()
+                for p in plugstack:
+                    sio.write("required" if p.get("required") else "optional")
+                    sio.write(" " + p["path"])
+                    for arg in p.get("args", []):
+                        sio.write(" " + arg)
+                    sio.write("\n")
+                self.write_file("/etc/slurm/plugstack.conf", sio.getvalue())
+            rc, out = self.exec_run(prog)
+            if rc:
+                raise RuntimeError("{} failed, rc: {}, output: {}" \
+                                   .format(prog, rc, out))
+
+    def kill_slurm(self):
+        """Kill slurmd and slurmctld"""
+        self.exec_run("pkill slurmd slurmctld")
+
+    def _start_slurmx(self, prog):
+        """(private) Start slurmd or slurmctld"""
+        self.start_munged() # slurm depends on munged
+        if self.pgrepc(prog) > 0:
+            return # already running
+        self.prep_slurm_conf()
+        d = next( ( x for x in self.spec.get("daemons", []) \
+                      if x.get("type") == prog) )
+        plugstack = d.get("plugstack")
+        if plugstack:
+            sio = StringIO()
+            for p in plugstack:
+                sio.write("required" if p.get("required") else "optional")
+                sio.write(" " + p["path"])
+                for arg in p.get("args", []):
+                    sio.write(" " + arg)
+                sio.write("\n")
+            self.write_file("/etc/slurm/plugstack.conf", sio.getvalue())
         rc, out = self.exec_run(prog)
         if rc:
             raise RuntimeError("{} failed, rc: {}, output: {}" \
                                .format(prog, rc, out))
 
-    def kill_slurm(self):
-        """Kill slurmd and slurmctld"""
-        self.exec_run("pkill slurmd slurmctld")
+    def start_slurmd(self):
+        """Start slurmd"""
+        self._start_slurmx("slurmd")
+
+    def start_slurmctld(self):
+        """Start slurmctld"""
+        self._start_slurmx("slurmctld")
 
     def start_sshd(self):
         """Start sshd"""
@@ -1653,6 +1809,16 @@ class LDMSDContainer(DockerClusterContainer):
         if rc:
             raise RuntimeError("sshd failed, rc: {}, output: {}" \
                                .format(rc, out))
+
+    def start_daemons(self):
+        """Start all daemons according to spec"""
+        for daemon in self.spec.get("daemons", []):
+            tp = daemon["type"]
+            fn = self.DAEMON_TBL.get(tp)
+            if not fn:
+                raise RuntimeError("Unsupported daemon type:{}".format(tp))
+            fn()
+
 
 BaseCluster = DockerCluster if not use_docker_service else DockerClusterService
 
@@ -1671,68 +1837,139 @@ class LDMSDCluster(BaseCluster):
     def create(cls, spec):
         """Create a virtual cluster for ldmsd with given `spec`
 
-        `spec` is a dictionary conforming to the following key definitions:
+        `spec` is a dictionary describing the docker virtual cluster, nodes in
+        the virtual cluster, and daemons running on them. The following list
+        describes attributes in the `spec`:
+          - "name" is the name of the virtual cluster.
+          - "description" is a short description of the virtual cluster.
+          - "templates" is a dictionary of templates to apply with
+                        "!extends" special keyword attribute.
+          - "cap_add" is a list of capabilities to add to the containers.
+          - "cap_drop" is a list of capabilities to drop from the containers.
+          - "image" is the name of the docker image to use.
+          - "ovis_prefix" is the path to ovis installation in the host machine.
+          - "env" is a dictionary of cluster-wide environment variables.
+          - "mounts" is a list of mount points with "SRC:DST:MODE" format in
+            which SRC being the source path in the HOST, DST being the
+            destination path in the CONTAINER, and MODE being `rw` or `ro`.
+          - "nodes" is a list of nodes, each item of which describes a node in
+            the cluster.
+        Templates and "%ATTR%" substitution can be used to reduce repititive
+        descriptions in the spec. The "!extends" object attribute is reserved
+        for instructing the spec mechanism to apply a template referred to by
+        the value of "!extends" attribute. Consider the following example:
+        ```
+        {
+            "templates": {
+                "node-temp": {
+                    "daemons": [
+                        { "name": "sshd", "type": "sshd" },
+                        {
+                            "name": "sampler",
+                            "type": "ldmsd",
+                            "samplers": [
+                                {
+                                    "plugin": "meminfo",
+                                    "config": [
+                                        "instance=%hostname%/%plugin%",
+                                    ],
+                                },
+                            ],
+                        },
+                    ],
+                },
+            },
+            "nodes": [
+                { "hostname": "node-1", "!extends": "node-temp" },
+                { "hostname": "node-2", "!extends": "node-temp" },
+                ...
+            ],
+        }
+        ```
+        The nodes extend "node-temp" template resulting in them having "daemons"
+        defined in the template. The "%hostname%" and "%plugin%" in
+        "instance=%hostname%/%plugin%" is later substituted with the nearest
+        attributes by containment hierarchy. For "node-1", the string becomes
+        "instance=node-1/meminfo" because the nearest "hostname" is the hostname
+        attribute defined by the node object, and the nearest "plugin" attribute
+        is the attribute defined in sampler plugin object. A template can also
+        extends another template. The local attriute declaration overrides that
+        declared by the template.
+
+        The following paragraphs explain the node and daemon objects in the
+        spec.
+
+        The node in `spec["nodes"]` is a dictionary describing a node in the
+        cluster containing the following attributes:
+          - "hostname" defines the hostname of the container and is used to
+            construct container name with '{spec["name"]}-{hostname}' format.
+          - "env" is a dicionary of environment variables for the node which is
+            merged with cluster-wide env (node-level precedes cluster-level).
+          - "daemons" is a list of objects describing daemons running on the
+            node.
+
+        The daemon in `spec["nodes"][X]["daemons"]` is a dictionary describing
+        supported daemons with the following common attributes:
+          - "name" is the name of the daemon.
+          - "type" is the type of the supported daemons, which are "sshd",
+            "munged", "slurmctld", "slurmd", and "ldmsd".
+
+        "sshd", "munged" and "slurmd" daemons do not have extra attributes other
+        than the common daemon attributes described above.
+
+        "slurmd" daemon has the following extra attributes:
+          - "plugstack" is a list of dictionary describing Slurm plugin. Each
+            entry in the "plugstack" list contains the following attributes:
+              - "required" can be True or False describing whether the plugin
+                is required or optional. slurmd won't start if the required
+                plugin failed to load.
+              - "path" is the path to the plugin.
+              - "args" is a list of arguments (strings) to the plugin.
+
+        "ldmsd" daemon contains the following extra attributes:
+          - "listen_port" is an integer describing the daemon listening port.
+          - "listen_xprt" is the LDMS transport to use ("sock", "ugni" or
+            "rdma").
+          - "listen_auth" is the LDMS authentication method to use.
+          - "samplers" (optional) is a list of sampler plugins (see below).
+          - "prdcrs" (optional) is a list of producers (see below).
+          - "config" (optional) is a list of strings for ldmsd configuration
+            commands.
+        The "samplers" list is processed first (if specified), then "prdcrs" (if
+        specified), and "config" (if specified) is processed last.
+
+        The sampler object in ldmsd daemon "samplers" list is described as
+        follows:
+          - "plugin" is the plugin name.
+          - "interval" is the sample interval (in micro seconds).
+          - "offset" is the sample offset (in micro seconds).
+          - "start" can be True or False -- marking whether the plugin needs
+            a start command (some plugins update data by events and do not
+            require start command).
+          - "config" is a list of strings "NAME=VALUE" for plugin
+            configuration arguments.
+
+        The producer object in the ldmsd daemon "prdcrs" list is described as
+        follows:
+          - "host" is the hostname of the ldmsd to connect to.
+          - "port" is an integer describing the port of the target ldmsd.
+          - "xprt" is the transport type of the target ldmsd.
+          - "type" is currently be "active" only.
+          - "interval" is the connection retry interval (in micro-seconds).
+
+        The following is the `spec` skeleton:
             {
                 "name" : "NAME_OF_THE_VIRTUAL_CLUSTER",
-                "description" : "DESCRIPTION OF THE TEST",
-                "type" : "TYPE OF THE TEST",
-                "define" : [ # a list of daemon templates
-                    {
-                        "name" : "TEMPLATE_NAME",
-                        "type" : "TEMPLATE_TYPE", # only "sampler" for now
-                        "listen_port" : LDMSD_LISTENING_PORT, # int
-                        "listen_xprt" : "TRANSPORT_TYPE", # sock, rdma, or ugni
-                        "listen_auth" : "AUTH_TYPE", # none, ovis, or munge
-                        "env" : [ # a list of environment variables
-                            "INTERVAL=1000000",
-                            "OFFSET=0",
-                        ],
-                        "samplers" : [ # list of sampler plugins to load/config
-                            {
-                                "plugin" : "PLUGIN_NAME",
-                                "config" : [ # a list of plugin config args
-                                    "instance=${HOSTNAME}/%plugin%",
-                                                       # '%plugin%' is replaced
-                                                       # with PLUGIN_NAME
-                                    "producer=${HOSTNAME}",
-                                ]
-                            },
-                        ]
-                    }
-                ],
-                "daemons" : [ # a list of LDMS Daemons (1 per container)
-                    {
-                        # defining daemon using a template, all attributes of
-                        # the template are applied to the daemon, except for
-                        # `env` being a concatenation of template["env"] +
-                        # daemon["env"] (hence daemon env overrides that of the
-                        # template for the env variables appearing in both
-                        # places).
-                        "host" : "HOST_NAME",
-                        "asset" : "TEMPLATE_NAME",
-                                  # referring to the template in `define`
-                        "env" : [ # additional env
-                            "COMPONENT_ID=10001",
-                            "HOSTNAME=%host%", # %host% is replaced with
-                                               # HOST_NAME value from above.
-                        ]
+                "description" : "DESCRIPTION OF THE CLUSTER",
+                "templates" : { # a list of templates
+                    "TEMPLATE_NAME": {
+                        "ATTR": VALUE,
+                        ...
                     },
-                    # or
-                    {
-                        # defining a daemon plainly (not using template).
-                        "host" : "HOST_NAME",
-                        "listen_port" : LDMSD_LISTENING_PORT, # int
-                        "listen_xprt" : "TRANSPORT_TYPE", # sock, rdma, or ugni
-                        "listen_auth" : "AUTH_TYPE", # none, ovis, or munge
-                        "env" : [ # list of env
-                            "HOSTNAME=%host%"
-                        ],
-                        "config" : [ # list of ldmsd configuration commands
-                            "load name=meminfo",
-                            ...
-                        ]
-                    },
-                ],
+                    ...
+                },
+                "cap_add": [ "DOCKER_CAPABILITIES", ... ],
+                "cap_drop": [ "DOCKER_CAPABILITIES", ... ],
                 "image": "DOCKER_IMAGE_NAME",
                          # Optional image name to run each container.
                          # default: "ovis-centos-build"
@@ -1750,43 +1987,136 @@ class LDMSDCluster(BaseCluster):
                     "SRC_ON_HOST:DEST_IN_CONTAINER:MODE",
                                                  # MODE can be `ro` or `rw`
                     ...
-                ]
+                ],
+                "nodes" : [ # a list of node spec
+                    {
+                        "hostname": "NODE_HOSTNAME",
+                        "env": { ... }, # Environment for this node.
+                                        # This is merged into cluster-wide
+                                        # environment before applying to
+                                        # exec_run. The variables in the
+                                        # node overrides those in the
+                                        # cluser-wide.
+                        "daemons": [ # list of daemon spec
+                            # Currently, only the following daemon types
+                            # are supported: sshd, munged, slurmd, slurmctld,
+                            # and ldmsd. Currently, we do not support two
+                            # daemons of the same type. Each type has different
+                            # options described as follows.
+                            {
+                                "name": "DAEMON_NAME0",
+                                "type": "sshd",
+                                # no extra options
+                            },
+                            {
+                                "name": "DAEMON_NAME1",
+                                "type": "munged",
+                                # no extra options
+                            },
+                            {
+                                "name": "DAEMON_NAME2",
+                                "type": "slurmctld",
+                                # no extra options
+                            },
+                            {
+                                "name": "DAEMON_NAME3",
+                                "type": "slurmd",
+                                "plugstack" : [ # list of slurm plugins
+                                    {
+                                        "required" : True or False,
+                                        "path" : "PATH_TO_PLUGIN",
+                                        "args" : [
+                                            "ARGUMENTS",
+                                            ...
+                                        ],
+                                    },
+                                    ...
+                                ],
+                            },
+                            {
+                                "name": "DAEMON_NAME4",
+                                "type": "ldmsd",
+                                "listen_port" : PORT,
+                                "listen_xprt" : "XPRT",
+                                "listen_auth" : "AUTH",
+                                "samplers": [
+                                    {
+                                        "plugin": "PLUGIN_NAME",
+                                        "interval": INTERVAL_USEC,
+                                        "offset": OFFSET,
+                                        "start": True or False,
+                                        "config": [ # list of "NAME=VALUE"
+                                                    # plugin configuration
+                                            "NAME=VALUE",
+                                            ...
+                                        ],
+                                    },
+                                    ...
+                                ],
+                                "prdcrs": [ # each prdcr turns into prdcr_add
+                                            # command.
+                                    {
+                                        "host" : "HOST_ADDRESS",
+                                        "port" : PORT,
+                                        "xprt" : "XPRT",
+                                        "type" : "active",
+                                        "interval" : INTERVAL_USEC,
+                                    },
+                                    ...
+                                ],
+                                "config": [
+                                    # additional config commands
+                                    "CONFIG_COMMANDS",
+                                    ...
+                                ]
+                            },
+                            ...
+                        ],
+                    },
+                    ...
+                ],
             }
         """
-        kwargs = cls.spec_to_kwargs(spec)
+        kwargs = cls.spec_to_kwargs(Spec(spec))
         wrap = super(LDMSDCluster, cls).create(**kwargs)
         lc = LDMSDCluster(wrap.obj)
         lc.make_ovis_env()
         return lc
 
     @classmethod
-    def get(cls, name, create = False, **kwargs):
+    def get(cls, name, create = False, spec = None):
         """Obtain an existing ldmsd virtual cluster (or create if `create=True`)"""
         d = docker.from_env()
         try:
             wrap = super(LDMSDCluster, cls).get(name)
-            return LDMSDCluster(wrap.obj)
+            cluster = LDMSDCluster(wrap.obj)
+            if spec and Spec(spec) != cluster.spec:
+                raise RuntimeError("spec mismatch")
+            return cluster
         except docker.errors.NotFound:
             if not create:
                 raise
-            return LDMSDCluster.create(**kwargs)
+            return LDMSDCluster.create(spec)
 
     @classmethod
     def spec_to_kwargs(cls, spec):
         """Convert `spec` to kwargs for DockerCluster.create()"""
         name = spec["name"]
-        daemons = spec["daemons"]
-        prefix = spec.get("ovis_prefix", "/opt/ovis")
-        mounts = ["{}:/opt/ovis:ro".format(prefix)] + spec.get("mounts", [])
+        nodes = spec["nodes"]
+        mounts = []
+        prefix = spec.get("ovis_prefix")
+        if prefix:
+            mounts += ["{}:/opt/ovis:ro".format(prefix)]
+        mounts += spec.get("mounts", [])
         cap_add = spec.get("cap_add", [])
         cap_drop = spec.get("cap_drop", [])
         # assign daemons to containers using node_aliases
         node_aliases = {}
-        idx = 1
-        for daemon in daemons:
-            c_host = "node-{}".format(idx)
-            node_aliases[c_host] = [ daemon["host"] ]
-            idx += 1
+        hostnames = [ node["hostname"] for node in nodes ]
+        for node in nodes:
+            a = node.get("aliases")
+            if a:
+                node_aliases[node["hostname"]] = a
         # starts with OVIS env
         env = {
                 "PATH" : ":".join([
@@ -1808,7 +2138,7 @@ class LDMSDCluster(BaseCluster):
                     name = name,
                     image = spec.get("image", "ovis-centos-build"),
                     mounts = mounts,
-                    nodes = len(daemons) + 1,
+                    nodes = hostnames,
                     env = env,
                     labels = { "LDMSDCluster.spec": json.dumps(spec) },
                     node_aliases = node_aliases,
@@ -1834,27 +2164,30 @@ class LDMSDCluster(BaseCluster):
 
     def start_ldmsd(self):
         """Start ldmsd in each node in the cluster"""
-        for d in self.spec["daemons"]:
-            cont = self.get_container(d["host"])
-            if not cont.check_ldmsd():
-                cont.start_ldmsd()
+        for cont in self.containers:
+            cont.start_ldmsd()
 
     def check_ldmsd(self):
         """Returns a dict(hostname:bool) indicating if each ldmsd is running"""
-        return [ self.get_container(d["host"]).check_ldmsd() \
-                                            for d in self.spec["daemons"] ]
+        return { cont.hostname : cont.check_ldmsd() \
+                                        for cont in self.containers }
 
     @property
     def slurm_conf(self):
         """Content for `/etc/slurm/slurm.conf`"""
-        daemons = self.spec["daemons"]
-        svc_cont = self.containers[-1]
-        svc_node = svc_cont.hostname
-        samplers = ",".join( cont.hostname \
-                                for cont in self.containers \
-                                if cont.ldmsd_spec.get("type") == "sampler" )
+        nodes = self.spec["nodes"]
+        slurmd_nodes = []
+        slurmctld_node = None
+        for node in nodes:
+            daemons = node.get("daemons", [])
+            daemons = set( d["type"] for d in daemons )
+            if "slurmd" in daemons:
+                slurmd_nodes.append(node["hostname"])
+            if "slurmctld" in daemons:
+                slurmctld_node = node["hostname"]
+        slurmd_nodes = ",".join(slurmd_nodes)
         slurmconf = """
-            SlurmctldHost={svc_node}
+            SlurmctldHost={slurmctld_node}
             MpiDefault=none
             ProctrackType=proctrack/linuxproc
             ReturnToService=1
@@ -1888,9 +2221,10 @@ class LDMSDCluster(BaseCluster):
             SlurmctldLogFile=/var/log/slurmctld.log
             SlurmdDebug=info
             SlurmdLogFile=/var/log/slurmd.log
-            NodeName={samplers} CPUs=1 State=UNKNOWN
-            PartitionName=debug Nodes={samplers} Default=YES MaxTime=INFINITE State=UP
-        """.format( svc_node = svc_node, samplers = samplers )
+            NodeName={slurmd_nodes} CPUs=1 State=UNKNOWN
+            PartitionName=debug Nodes={slurmd_nodes} Default=YES MaxTime=INFINITE State=UP
+        """.format( slurmctld_node = slurmctld_node,
+                    slurmd_nodes = slurmd_nodes )
         return slurmconf
 
     def start_munged(self):
@@ -1908,6 +2242,7 @@ class LDMSDCluster(BaseCluster):
         """Start sshd in all containers"""
         for cont in self.containers:
             cont.start_sshd()
+        self.make_known_hosts()
 
     def ssh_keyscan(self):
         """Report ssh-keyscan result of all nodes in the cluster"""
@@ -2055,6 +2390,16 @@ class LDMSDCluster(BaseCluster):
                 _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib64/ovis-ldms
             """
             cont.write_file("/etc/profile.d/ovis.sh", profile)
+
+    def pgrepc(self, prog):
+        """Perform `cont.pgrepc(prog)` for cont in self.containers"""
+        return { cont.hostname : cont.pgrepc(prog) \
+                                    for cont in self.containers }
+
+    def start_daemons(self):
+        """Start daemons according to spec"""
+        for cont in self.containers:
+            cont.start_daemons()
 
 
 class TADATest(object):

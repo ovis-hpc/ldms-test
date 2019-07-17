@@ -1,7 +1,7 @@
 TOC
 ===
 
-* [Overview](#Overview)
+* [Overview](#overview)
 * [SYNOPSIS](#synopsis)
 * [Docker Host Cluster Setup](#docker-host-cluster-setup)
 * [Docker Setup](#docker-setup)
@@ -12,12 +12,20 @@ TOC
 * [Python Module Usage Guide](#python-module-usage-guide)
   * [Create (or Get) Virtual Cluster](#create-or-get-virtual-cluster)
     * [LDMSDClusterSpec](#ldmsdclusterspec)
-  * [Start Services](#start-services)
+      * [Node Spec](#node-spec)
+      * [Daemon Spec](#daemon-spec)
+        * [slurmd spec](#slurmd-spec)
+        * [ldmsd spec](#ldmsd-spec)
+      * [Template extension and attribute substitution](#template-extension-and-attribute-substitution)
+    * [Spec skeleton](#spec-skeleton)
+  * [Start Daemons](#start-daemons)
   * [Cluster and Container Utilities](#cluster-and-container-utilities)
   * [LDMS Utilities](#ldms-utilities)
   * [Slurm Job Utilities](#slurm-job-utilities)
   * [TADA Utilities](#tada-utilities)
 * [Debugging](#debugging)
+  * [Cleanup](#cleanup)
+  * [Container Interactive Shell](#container-interactive-shell)
 * [Example Results](#example-results)
 
 Overview
@@ -27,7 +35,8 @@ Overview
 cluster for testing ldmsd. A virtual cluster is a set of docker containers on a
 docker swarm overlay network (a virtual network allowing docker containers to
 talk to each other via dockerd swarm members). A virtual cluster has exactly one
-network. The hostname of each container is `"node-{i}"`, i = 1 .. N.
+network. The hostname of each container must be defined in the `node`
+specification and must be unique (within the virtual cluster).
 
 `DockerCluster` implements basic routines for handling the virtual cluster (e.g.
 create, remove), and the `DockerClusterContainer` implements basic routines for
@@ -61,26 +70,14 @@ cluster = LDMSDCluster.get(name = 'mycluster')
 # 3) get and create if not existed
 cluster = LDMSDCluster.get(name = 'mycluster', create = True, spec = spec)
 
-
-# start daemons you want to use on the cluster
-#   if the daemon has already started, it does nothing
-
-# SSH - good for debugging
-cluster.start_sshd()
-
-# munged - needed for munge authentication
-cluster.start_munged()
-
-# slurm services - slurmd starts on "sampler" nodes, and slurmctld on last node
-cluster.start_slurm()
-
-# start ldmsd
-cluster.start_ldmsd()
+# start all daemons according to spec. This ignores the daemons that are
+# already running.
+cluster.start_daemons()
 
 # get all containers
 conts = cluster.containers
 
-# getting a container by name or alias
+# getting a container by hostname or alias
 cont = cluster.get_container('node-1')
 
 # write a file in a container
@@ -109,7 +106,7 @@ described in this document. It can be deployed on just 2 virtual box machines
 scalabilty will be limited.
 
 The `/home/<user>` should be NFS-mounted so that users' files will be accessible
-across nodes in the bare-metal cluster.
+to all dockerds across nodes in the bare-metal cluster.
 
 
 Docker Setup
@@ -333,238 +330,486 @@ Alternatively, create the virtual cluster with:
 cluster = LDMSDCluster.create(spec = spec)
 ```
 
-The difference is that `create()` will fail if the virtual cluster existed while
-`get()` won't.
+The difference is that `create()` will fail if the virtual cluster has already
+existed while `get()` won't. Please also be mindful that the spec cannot be
+changed after the cluster is created. If `get()` is called with `spec`, it will
+be checked against the spec used at create (saved as a label of the docker
+network) and throw `RuntimeError('spec mismatch')` if the given spec does not
+match the one creating the cluster.
 
-Docker containers could not change their hostname after created witout the
-"privilege" granted. As such, the hostnames of containers in the virtual cluster
-are named as "node-{NUMBER}" where NUMBER ranges from 1 to N. The test
-application can still define hostnames to the containers in the `spec`, and
-those hostnames will appear as hostname aliases in the `/etc/hosts` file in the
-containers.
-
-In addition, for `LDMSDCluster`, the number of containers is the number of
-daemons + 1. Each daemon defined in `spec` will run on its own container. The
-extra container (last container, e.g. `node-5` for 4-daemon spec) is for
-`slurmctld`, job submitting, and `ldms_ls`. One may think of it as a service
-node (vs compute nodes) for a cluster.
+Docker containers could not change their hostname after created. However, node
+aliases can be specified in `spec["node_aliases"]` as a dictionary mapping a
+hostname to a list of aliases.
 
 
 ### LDMSDClusterSpec
 
-The `spec` is a dictionary containing LDMSD Cluster Spec defined as follows:
+The `spec` is a dictionary containing LDMSD Cluster Spec describing the docker
+virtual cluster, nodes in the virtual cluster, and daemons running on them.  The
+following is a list of attributes for Spec object:
+
+- `name` is the name of the virtual cluster.
+- `description` is a short description of the virtual cluster.
+- `templates` is a dictionary of templates to apply with `!extends` special
+  keyword attribute.
+- `cap_add` is a list of capabilities to add to the containers.
+- `cap_drop` is a list of capabilities to drop from the containers.
+- `image` is the name of the docker image to use.
+- `ovis_prefix` is the path to ovis installation in the host machine. If not
+  specified, `/opt/ovis` in the container will not be mounted.
+- `env` is a dictionary of cluster-wide environment variables.
+- `mounts` is a list of mount points with `SRC:DST:MODE` format in which SRC
+  being the source path in the HOST, DST being the destination path in the
+  CONTAINER, and MODE being `rw` or `ro`.
+- `node_aliases` is a dictionary mapping hostname to a list of hostname aliases.
+  This attribute is optional.
+- `nodes` is a list of nodes, each item of which describes a node in
+   the cluster.
+
+Besides these known attributes, the application can define any attribute to any
+object (e.g. "tag": "something"). Even though ignored by the cluster processing
+routine, these auxiliary attributes are useful for attribute substitution.
+[Template extension and attribute substitution][1] discusses how templates and
+attribute substitution work to reduce large text repetition in the spec. Please
+see [Node Spec](#node-spec) for the specification of a node object, and [Daemon
+Spec](#daemon-spec) for that of the daemon (in a node).
+
+
+[1]: #template-extension-and-attribute-substitution
+
+
+#### Node Spec
+The node in `spec["nodes"]` is a dictionary describing a node in the cluster
+containing the following attributes:
+- `hostname` defines the hostname of the container, and is used to construct
+  container name with `{clustername}-{hostname}` format.
+- `env` is a dicionary of environment variables for the node which is merged
+  with cluster-wide env (node-level precedes cluster-level).
+- `daemons` is a list of objects describing daemons running on the node.
+
+
+#### Daemon Spec
+
+The daemon in `spec["nodes"][X]["daemons"]` is a dictionary describing supported
+daemons with the following common attributes:
+- `name` is the name of the daemon.
+- `type` is the type of the supported daemons, which are `sshd`, `munged`,
+  `slurmctld`, `slurmd`, and `ldmsd`.
+
+`sshd`, `munged` and `slurmd` daemons do not have extra attributes other than
+the common daemon attributes described above.
+
+
+##### slurmd spec
+
+In addition to `name` and `type` attributes, `slurmd` daemon has the following
+extra attributes:
+- `plugstack` is a list of dictionary describing Slurm plugin. Each entry in the
+  `plugstack` list contains the following attributes:
+  - `required` can be True or False describing whether the plugin is required or
+    optional. slurmd won't start if the required plugin failed to load.
+  - `path` is the path to the plugin.
+  - `args` is a list of arguments (strings) to the plugin.
+
+
+##### ldmsd spec
+
+In addition to `name` and `type` attributes, `ldmsd` daemon contains the
+following extra attributes:
+- `listen_port` is an integer describing the daemon listening port.
+- `listen_xprt` is the LDMS transport to use (`sock`, `ugni` or `rdma`).
+- `listen_auth` is the LDMS authentication method to use.
+- `samplers` (optional) is a list of sampler plugins (see below).
+- `prdcrs` (optional) is a list of producers (see below).
+- `config` (optional) is a list of strings for ldmsd configuration commands.
+
+The `samplers` list is processed first (if specified), then `prdcrs` (if
+specified), and `config` (if specified) is processed last.
+
+The sampler object in ldmsd daemon `samplers` list is described as follows:
+- `plugin` is the plugin name.
+- `interval` is the sample interval (in micro seconds).
+- `offset` is the sample offset (in micro seconds).
+- `start` can be True or False -- marking whether the plugin needs a start
+  command (some plugins update data by events and do not require start command).
+- `config` is a list of strings `NAME=VALUE` for plugin configuration arguments.
+
+The producer object in the ldmsd daemon `prdcrs` list is described as
+follows:
+- `host` is the hostname of the ldmsd to connect to.
+- `port` is an integer describing the port of the target ldmsd.
+- `xprt` is the transport type of the target ldmsd.
+- `type` is currently be `active` only.
+- `interval` is the connection retry interval (in micro-seconds).
+
+
+#### Template extension and attribute substitution
+
+Templates and `%ATTR%` substitution can be used to reduce repititive
+descriptions in the spec. The `!extends` object attribute is reserved for
+instructing the spec mechanism to apply the referred template (a member of
+`templates` in the top-level spec). The attributes locally defined in the object
+will override those from the template. An object may `!extends` only one
+template. A template can also `!extends` another template (analogous to
+subclassing). The templates are applied to objects in the spec before the
+`%ATTR%` substitution is processed.
+
+The `%ATTR%` appearing in the value string (e.g. `/%hostname%/%plugin%`) is
+replaced by the value of the attribute ATTR of the nearest container object
+(starts from self, container of self, container of container of self, ..).
+
+Consider the following example:
+
+```python
+{
+    "templates": {
+        "node-temp": {
+            "daemons": [
+                { "name": "sshd", "type": "sshd" },
+                { "name": "sampler", "!extends": "ldmsd-sampler" },
+            ],
+        },
+        "ldmsd-base": {
+            "type": "ldmsd",
+            "listening_port": 10000,
+        },
+        "ldmsd-sampler": {
+            "!extends": "ldmsd-base",
+            "samplers": [
+                {
+                    "plugin": "meminfo",
+                    "config": [
+                        "instance=%hostname%/%plugin%",
+                    ],
+                },
+            ],
+        },
+    },
+    "nodes": [
+        { "hostname": "node-1", "!extends": "node-temp" },
+        { "hostname": "node-2", "!extends": "node-temp" },
+        ...
+    ],
+}
+```
+
+The nodes extend `node-temp` template resulting in them having `daemons` defined
+in the template (`sshd` and `sampler`). The `sampler` extends `ldmsd-sampler`,
+which also extends `ldmsd-base`. As a result, the `sampler` daemon object get
+extended to have `type` being `ldmsd`, `listening_port` being 10000, and a list
+of `samplers`.
+
+The `%hostname%` and `%plugin%` in `instance=%hostname%/%plugin%` is later
+substituted with the nearest attributes by containment hierarchy. For `node-1`,
+the string becomes `instance=node-1/meminfo` because the nearest `hostname` is
+the hostname attribute defined by the node object, and the nearest `plugin`
+attribute is the attribute defined in the sampler plugin object itself.
+
+
+### Spec skeleton
+
+The following is the skeleton of the spec:
 
 ```python
 {
     "name" : "NAME_OF_THE_VIRTUAL_CLUSTER",
-    "description" : "DESCRIPTION OF THE TEST",
-    "type" : "TYPE OF THE TEST",
-    "define" : [ # a list of daemon templates
+    "description" : "DESCRIPTION OF THE CLUSTER",
+    "templates" : { # a list of templates
+        "TEMPLATE_NAME": {
+            "ATTR": VALUE,
+            ...
+        },
+        ...
+    },
+    "cap_add": [ "DOCKER_CAPABILITIES", ... ],
+    "cap_drop": [ "DOCKER_CAPABILITIES", ... ],
+    "image": "DOCKER_IMAGE_NAME",
+             # Optional image name to run each container.
+             # default: "ovis-centos-build"
+    "ovis_prefix": "PATH-TO-OVIS-IN-HOST-MACHINE",
+                   # Path to OVIS in the host machine. This will be
+                   # mounted to `/opt/ovis` in the container.
+                   # default: "/opt/ovis"
+    "env" : { "FOO": "BAR" }, # additional environment variables
+                              # applied cluster-wide. The
+                              # environment variables in this list
+                              # (or dict) has the least precedence.
+    "mounts": [ # additional mount points for each container, each
+                # entry is a `str` and must have the following
+                # format
+        "SRC_ON_HOST:DEST_IN_CONTAINER:MODE",
+                                     # MODE can be `ro` or `rw`
+        ...
+    ],
+    "nodes" : [ # a list of node spec
         {
-            "name" : "TEMPLATE_NAME",
-            "type" : "TEMPLATE_TYPE", # only "sampler" for now
-            "listen_port" : LDMSD_LISTENING_PORT, # int
-            "listen_xprt" : "LDMS_TRANSPORT_TYPE", # sock, rdma, or ugni
-            "listen_auth" : "LDMS_AUTH_TYPE", # none, ovis, or munge
-            "env" : [ # a list of environment variables and their values
-                "INTERVAL=1000000",
-                "OFFSET=0",
-            ],
-            "samplers" : [ # a list of sampler plugins to load/config
+            "hostname": "NODE_HOSTNAME",
+            "env": { ... }, # Environment for this node.
+                            # This is merged into cluster-wide
+                            # environment before applying to
+                            # exec_run. The variables in the
+                            # node overrides those in the
+                            # cluser-wide.
+            "daemons": [ # list of daemon spec
+                # Currently, only the following daemon types
+                # are supported: sshd, munged, slurmd, slurmctld,
+                # and ldmsd. Currently, we do not support two
+                # daemons of the same type. Each type has different
+                # options described as follows.
                 {
-                    "plugin" : "PLUGIN_NAME",
-                    "config" : [ # a list of plugin configuration parameters
-                        # '%plugin%' is replaced with PLUGIN_NAME
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}",
+                    "name": "DAEMON_NAME0",
+                    "type": "sshd",
+                    # no extra options
+                },
+                {
+                    "name": "DAEMON_NAME1",
+                    "type": "munged",
+                    # no extra options
+                },
+                {
+                    "name": "DAEMON_NAME2",
+                    "type": "slurmctld",
+                    # no extra options
+                },
+                {
+                    "name": "DAEMON_NAME3",
+                    "type": "slurmd",
+                    "plugstack" : [ # list of slurm plugins
+                        {
+                            "required" : True or False,
+                            "path" : "PATH_TO_PLUGIN",
+                            "args" : [
+                                "ARGUMENTS",
+                                ...
+                            ],
+                        },
+                        ...
+                    ],
+                },
+                {
+                    "name": "DAEMON_NAME4",
+                    "type": "ldmsd",
+                    "listen_port" : PORT,
+                    "listen_xprt" : "XPRT",
+                    "listen_auth" : "AUTH",
+                    "samplers": [
+                        {
+                            "plugin": "PLUGIN_NAME",
+                            "interval": INTERVAL_USEC,
+                            "offset": OFFSET,
+                            "start": True or False,
+                            "config": [ # list of "NAME=VALUE"
+                                        # plugin configuration
+                                "NAME=VALUE",
+                                ...
+                            ],
+                        },
+                        ...
+                    ],
+                    "prdcrs": [ # each prdcr turns into prdcr_add
+                                # command.
+                        {
+                            "host" : "HOST_ADDRESS",
+                            "port" : PORT,
+                            "xprt" : "XPRT",
+                            "type" : "active",
+                            "interval" : INTERVAL_USEC,
+                        },
+                        ...
+                    ],
+                    "config": [
+                        # additional config commands
+                        "CONFIG_COMMANDS",
+                        ...
                     ]
                 },
-            ]
-        }
-    ],
-    "daemons" : [ # a list of LDMS Daemons (1 per container)
-        {
-            # defining daemon using a template, all attributes of the template
-            # are applied to the daemon, except for `env` being a concatenation
-            # of template["env"] + daemon["env"] (hence daemon env overrides
-            # that of the template for the env variables appearing in both
-            # places).
-            "host" : "HOST_NAME",
-            "asset" : "TEMPLATE_NAME", # referring to the template in `define`
-            "env" : [ # additional env
-                "COMPONENT_ID=10001",
-                "HOSTNAME=%host%", # %host% is replaced with HOST_NAME value
-                                   # from above.
-            ]
-        },
-        # or
-        {
-            # defining a daemon plainly (not using template).
-            "host" : "HOST_NAME",
-            "listen_port" : LDMSD_LISTENING_PORT, # int
-            "listen_xprt" : "LDMS_TRANSPORT_TYPE", # sock, rdma, or ugni
-            "listen_auth" : "LDMS_AUTH_TYPE", # none, ovis, or munge
-            "env" : [ # list of env
-                "HOSTNAME=%host%"
-            ],
-            "config" : [ # list of ldmsd configuration commands
-                "load name=meminfo",
                 ...
-            ]
+            ],
         },
-    ],
-    "image": "DOCKER_IMAGE_NAME", # Optional image name to run each container.
-                                  # default: "ovis-centos-build"
-    "ovis_prefix": "PATH-TO-OVIS-IN-HOST-MACHINE", # path to OVIS in the host
-                                                   # machine. This will be
-                                                   # mounted to `/opt/ovis`
-                                                   # in the container.
-                                                   # default: "/opt/ovis"
-    "env" : { "FOO": "BAR" }, # additional environment variables applied
-                              # cluster-wide. The environment variables in
-                              # this list (or dict) has the least precedence.
-    "mounts": [ # additional mount points for each container, each entry is a
-                # `str` and must have the following format
-        "SRC_ON_HOST:DEST_IN_CONTAINER:MODE", # MODE can be `ro` or `rw`
         ...
-    ]
+    ],
 }
 ```
 
-All environment definitions (`spec["env"]`,`spec["define"][i]["env"]`, and
-`spec["daemons"][j]["env"]`) have two form: list `["NAME=VALUE"]` or dictionary
-`{"NAME": "VALUE"}`. When the same variable is defined in all three places,
-`spec["env"]` (least precedence) < `spec["define"][i]["env"]` <
-`spec["daemons"][j]["env"]` (most precedence).
 
-The following is an example defining a virtual cluster of 4 nodes: 2 samplers
-and 2 aggregators (2 levels of aggregation).
+
+The following is an example defining a virtual cluster of 5 nodes: 2 compute
+nodes with sampler daemon and slurmd, 2 aggregator nodes with ldmsd running in
+aggregator mode, and 1 head node running slurmctld.
 
 ```python
 {
-    "name" : "ldms_slurm",
-    "description" : "LDMSD 2 level aggregation test with slurm",
-    "type" : "NA",
-    "define" : [
-        {
-            "name" : "sampler-daemon",
-            "type" : "sampler",
+    "name" : "mycluster",
+    "description" : "My test cluster with ldmsd and slurm",
+    "cap_add": [ "SYS_PTRACE" ], # for GDB in the containers
+    "image": "ovis-centos-build",
+    "ovis_prefix": "/home/bob/opt/ovis",
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "/home/bob/db:/db:rw", # for writing data out from container
+        "/home/bob/projects/ovis:/home/bob/projects/ovis:ro", # for gdb
+    ],
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : { # compute node template
+            "daemons" : [  # running munged, slurmd, and ldmsd (sampler)
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler", # see below
+                },
+                {
+                    "name" : "slurmd",
+                    "requires" : [ "munged" ],
+                    "!extends" : "slurmd", # see below
+                },
+            ],
+        },
+        "slurmd" : { # template for slurmd
+            "type" : "slurmd",
+            "plugstack" : [
+                {
+                    "required" : True,
+                    "path" : SLURM_NOTIFIER,
+                    "args" : [
+                        "auth=none",
+                        "port=10000",
+                    ],
+                },
+            ],
+        },
+        "ldmsd-sampler" : { # template for ldmsd (sampler)
+            "type" : "ldmsd",
             "listen_port" : 10000,
             "listen_xprt" : "sock",
             "listen_auth" : "none",
-            "env" : [
-                "INTERVAL=1000000",
-                "OFFSET=0"
-            ],
             "samplers" : [
                 {
                     "plugin" : "slurm_sampler",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}",
-                    ]
+                    "!extends" : "sampler_plugin",
+                    "start" : False, # override
                 },
                 {
                     "plugin" : "meminfo",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin", # see below
                 },
                 {
                     "plugin" : "vmstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin",
                 },
                 {
                     "plugin" : "procstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin",
                 }
-            ]
-        }
-    ],
-    "daemons" : [
-        {
-            "host" : "sampler-1",
-            "asset" : "sampler-daemon",
-            "env" : {
-                "COMPONENT_ID" : "10001",
-                "HOSTNAME" : "%host%",
-            }
-        },
-        {
-            "host" : "sampler-2",
-            "asset" : "sampler-daemon",
-            "env" : [
-                "COMPONENT_ID=10002",
-                "HOSTNAME=%host%"
-            ]
-        },
-        {
-            "host" : "agg-1",
-            "listen_port" : 20000,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
-            "env" : [
-                "HOSTNAME=%host%"
             ],
+        },
+        "sampler_plugin" : { # template for common sampler plugin config
+            "interval" : 1000000,
+            "offset" : 0,
             "config" : [
-                "prdcr_add name=sampler-1 host=sampler-1 port=10000" \
-                         " xprt=sock type=active interval=20000000",
-                "prdcr_add name=sampler-2 host=sampler-2 port=10000" \
-                         " xprt=sock type=active interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
+                "component_id=%component_id%",
+                "instance=%hostname%/%plugin%",
+                "producer=%hostname%",
+            ],
+            "start" : True,
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : 10000,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "compute-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "compute-2",
+            "component_id" : 10002,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "aggregator",
+                    "type" : "ldmsd",
+                    "listen_port" : 20000,
+                    "listen_xprt" : "sock",
+                    "listen_auth" : "none",
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "compute-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "compute-2",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
             ]
         },
         {
-            "host" : "agg-2",
-            "listen_port" : 20001,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
-            "env" : [
-                "HOSTNAME=%host%"
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "aggregator",
+                    "type" : "ldmsd",
+                    "listen_port" : 20001,
+                    "listen_xprt" : "sock",
+                    "listen_auth" : "none",
+                    "config" : [
+                        "prdcr_add name=agg-1 host=agg-1 port=20000 "\
+                                  "xprt=sock type=active interval=20000000",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
             ],
-            "config" : [
-                "prdcr_add name=agg-1 host=agg-1 port=20000 xprt=sock" \
-                         " type=active interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
             ]
-        }
+        },
     ],
 
-    #"image": "ovis-centos-build:slurm",
-    "image": "ovis-centos-build",
-    "ovis_prefix": "/home/narate/opt/ovis",
-    "env" : { "FOO": "BAR" },
-    "mounts": [
-        "{}/db:/db:rw".format(os.path.realpath(sys.path[0])),
-    ]
 }
 ```
 
 
 Start Daemons
 -------------
-
 The containers in the virtual cluster has only main process (`/bin/bash`)
-running initially. We need to manually start the daemons. All `start_*()`
-methods of supported daemons do nothing if the daemon has already started.
-The following is the list of supported daemons and the corresponding
-`LDMSDCluster` method to starts it:
+running initially. We need to manually start the daemons.
+
+`cluster.start_daemons()` is a convenient method that subsequently calls
+`container.start_daemons()` for each container in the cluster.
+`container.start_daemons()` starts all daemon sequentially according to the
+`spec["nodes"][X]["daemons"]` definition. For each daemon, if it has already
+been started, the starting routine does nothing. The following is a list of
+`start_*()` methods of supported daemons if one wishes to start each daemon
+manually:
 
 - `cluster.start_sshd()` to start `sshd` in each container. This is convenient
   for debugging.

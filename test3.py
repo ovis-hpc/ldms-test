@@ -92,102 +92,148 @@ spec = {
     "name" : CLUSTERNAME,
     "description" : "{}'s test3 cluster".format(USER),
     "type" : "NA",
-    "define" : [
-        {
-            "name" : "sampler-daemon",
-            "type" : "sampler",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler",
+                },
+                {
+                    "name" : "slurmd",
+                    "requires" : [ "munged" ],
+                    "!extends" : "slurmd",
+                },
+            ],
+        },
+        "slurmd" : {
+            "type" : "slurmd",
+            "plugstack" : [
+                {
+                    "required" : True,
+                    "path" : SLURM_NOTIFIER,
+                    "args" : [
+                        "auth=none",
+                        "port=10000",
+                    ],
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : [
+                "component_id=%component_id%",
+                "instance=%hostname%/%plugin%",
+                "producer=%hostname%",
+            ],
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
             "listen_port" : 10000,
             "listen_xprt" : "sock",
             "listen_auth" : "none",
-            "env" : [
-                "INTERVAL=1000000",
-                "OFFSET=0"
-            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
             "samplers" : [
                 {
                     "plugin" : "slurm_sampler",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}",
-                    ]
+                    "!extends" : "sampler_plugin",
+                    "start" : False, # override
                 },
                 {
                     "plugin" : "meminfo",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin",
                 },
                 {
                     "plugin" : "vmstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin",
                 },
                 {
                     "plugin" : "procstat",
-                    "config" : [
-                        "instance=${HOSTNAME}/%plugin%",
-                        "producer=${HOSTNAME}"
-                    ],
-                    "start" : True
+                    "!extends" : "sampler_plugin",
                 }
-            ]
-        }
-    ],
-    "daemons" : [
-        {
-            "host" : "sampler-1",
-            "asset" : "sampler-daemon",
-            "env" : {
-                "COMPONENT_ID" : "10001",
-                "HOSTNAME" : "%host%",
-            }
-        },
-        {
-            "host" : "sampler-2",
-            "asset" : "sampler-daemon",
-            "env" : [
-                "COMPONENT_ID=10002",
-                "HOSTNAME=%host%"
-            ]
-        },
-        {
-            "host" : "agg-1",
-            "listen_port" : 20000,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
-            "env" : [
-                "HOSTNAME=%host%"
             ],
-            "config" : [
-                "prdcr_add name=sampler-1 host=sampler-1 port=10000 xprt=sock type=active interval=20000000",
-                "prdcr_add name=sampler-2 host=sampler-2 port=10000 xprt=sock type=active interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : 10000,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "compute-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "compute-2",
+            "component_id" : 10002,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "listen_port" : 20000, # override
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "compute-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "compute-2",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
             ]
         },
         {
-            "host" : "agg-2",
-            "listen_port" : 20001,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
-            "env" : [
-                "HOSTNAME=%host%"
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "listen_port" : 20001, # override
+                    "config" : [
+                        "prdcr_add name=agg-1 host=agg-1 port=20000 "\
+                                  "xprt=sock type=active interval=20000000",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
             ],
-            "config" : [
-                "prdcr_add name=agg-1 host=agg-1 port=20000 xprt=sock type=active interval=20000000",
-                "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=0",
-                "updtr_prdcr_add name=all regex=.*",
-                "updtr_start name=all"
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
             ]
-        }
+        },
     ],
 
     #"image": "ovis-centos-build:slurm",
@@ -208,8 +254,10 @@ test = TADA.Test(test_suite = "LDMSD",
                  test_name = "LDMSD 2-level agg with slurm",
                  tada_addr = args.tada_addr)
 test.add_assertion(1, "ldms_ls agg-2")
-test.add_assertion(2, "slurm job_id verification on sampler-1")
-test.add_assertion(3, "slurm job_id verification on sampler-2")
+test.add_assertion(2, "slurm job_id verification in compute-1/slurm_sampler")
+test.add_assertion(3, "slurm job_id verification in compute-2/slurm_sampler")
+test.add_assertion(4, "component_id verification in compute-1/slurm_sampler")
+test.add_assertion(5, "component_id verification in compute-2/slurm_sampler")
 
 
 #### Start! ####
@@ -218,32 +266,19 @@ test.start()
 print "-- Get or create the cluster --"
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
-print "-- start/check sshd --"
-cluster.start_sshd()
-cluster.make_known_hosts()
-print "-- start/check munged --"
-cluster.start_munged()
-# prep plugstack.conf for slurm_notifier
-plugstack = "required {} auth=none port=10000".format(SLURM_NOTIFIER)
-for cont in cluster.containers:
-    cont.write_file("/etc/slurm/plugstack.conf", plugstack)
-cluster.start_slurm()
-
-print "-- start/check ldmsd --"
-cluster.start_ldmsd()
+print "-- Start daemons --"
+cluster.start_daemons()
 
 print "... wait a bit to make sure ldmsd's are up"
 time.sleep(5)
 
-# agg1 = cluster.get_container("agg-1")
-# samp1 = cluster.get_container("sampler-1")
-cont = cluster.containers[-1] # the last node is the free node with no ldms daemon
+cont = cluster.get_container("headnode")
 
 print "-- ldms_ls to agg-2 --"
 rc, out = cont.ldms_ls("-x sock -p 20001 -h agg-2")
 print out
 
-expect = set([ "{}/{}".format(p, s) for p in ["sampler-1", "sampler-2"] \
+expect = set([ "{}/{}".format(p, s) for p in ["compute-1", "compute-2"] \
                                    for s in ["slurm_sampler", "vmstat",
                                              "procstat", "meminfo"] ])
 result = set(out.splitlines())
@@ -265,13 +300,21 @@ jobid = cluster.sbatch("/db/job.sh")
 time.sleep(3) # enough time to update the jobid
 print "jobid: {}".format(jobid)
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l sampler-1/slurm_sampler")
+rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-1/slurm_sampler")
 _set = set(map(int, re.search(r'job_id\s+(\S+)', out).group(1).split(',')))
 verify(2, jobid in _set, "job_id verified")
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l sampler-2/slurm_sampler")
+rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-2/slurm_sampler")
 _set = set(map(int, re.search(r'job_id\s+(\S+)', out).group(1).split(',')))
 verify(3, jobid in _set, "job_id verified")
+
+rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-1/slurm_sampler")
+_set = set(map(int, re.search(r'component_id\s+(\S+)', out).group(1).split(',')))
+verify(4, _set == set([10001]), "component_id == 10001")
+
+rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-2/slurm_sampler")
+_set = set(map(int, re.search(r'component_id\s+(\S+)', out).group(1).split(',')))
+verify(5, _set == set([10002]), "component_id == 10001")
 
 test.finish()
 

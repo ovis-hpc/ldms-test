@@ -1,0 +1,296 @@
+#!/usr/bin/env python
+from __future__ import print_function
+import os
+import re
+import sys
+import json
+import time
+import docker
+import argparse
+
+from LDMS_Test import LDMSDCluster, LDMSDContainer
+import TADA
+
+dc = docker.from_env()
+USER = os.getlogin()
+
+spec = {
+    "name" : USER+"-spank_notifier_test-cluster",
+    "description" : "spank_notifier_test cluster",
+    "type" : "NA",
+    "templates" : {
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "slurmd",
+                    "!extends" : "slurmd-template",
+                },
+            ],
+        },
+        "slurmd-template" : {
+            "type" : "slurmd",
+            "plugstack" : [
+                {
+                    "required" : True,
+                    "path" : "%libdir%/ovis-ldms/libslurm_notifier.so",
+                    "args" : [
+                        "auth=none",
+                        "port=20000",
+                        "timeout=1",
+                    ],
+                },
+            ],
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "node-2",
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
+            ],
+        },
+    ],
+
+    "cap_add": [ "SYS_PTRACE" ],
+    "image": "ovis-centos-build",
+    "libdir": "/opt/ovis/lib64",
+}
+
+def verify(test, num, cond, cond_str):
+    a = test.assertions[num]
+    print(a["assert-desc"] + ": " + ("Passed" if cond else "Failed"))
+    test.assert_test(num, cond, cond_str)
+
+def make_dict_from_out(out):
+    env = out.split('\n')
+    d = {}
+    for e in env:
+        e = e.split('=')
+        if len(e) > 1:
+            d[e[0]] = e[1]
+    return d
+
+def remove_job_out(cluster):
+    for cont in cluster.containers:
+        rc, out = cont.exec_run("rm -f /db/slurm_env_{node}.out".format(node=cont.hostname))
+        rc, out = cont.exec_run("rm -f /db/crash_env_{node}.out".format(node=cont.hostname))
+        rc, out = cont.exec_run("rm -f /db/spank_stream_{node}.out".format(node=cont.hostname))
+
+if __name__ == "__main__":
+    execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+    parser = argparse.ArgumentParser(description="Run an FVT test")
+    parser.add_argument("--data_root", required=True, help="The test data root path")
+    parser.add_argument("--tada_addr",
+                        help="The test automation server host and port as host:port.",
+                        default="localhost:9862")
+    parser.add_argument("--prefix",
+                        help="The directory where libraries are installed.",
+                        default="/opt/ovis")
+    parser.add_argument("--libdir",
+                        help="The directory where the test target is installed.",
+                        default="/opt/ovis/lib64")
+    parser.add_argument("--home", help="Home directory for debugging.")
+    parser.add_argument("--tada-addr",
+                        help="The TADA Daemon address as a host:port string")
+    args = parser.parse_args()
+
+    test = TADA.Test("Slurm_Plugins", "FVT", "slurm_notifier_test",
+                     tada_addr=args.tada_addr)
+    test.add_assertion(0, 'Missing stream listener on node-1 does not affect job execution')
+    test.add_assertion(1, 'Missing stream listener on node-2 does not affect job execution')
+    test.add_assertion(2, "first event on node-1 is 'init'")
+    test.add_assertion(3, "'init' event on node-1 contains subscriber data")
+    test.add_assertion(4, "second event on node-1 is 'task_init_priv'")
+    test.add_assertion(5, "third event on node-1 is 'task_exit'")
+    test.add_assertion(6, "fourth event on node-1 is 'exit'")
+    test.add_assertion(7, "first event on node-2 is 'init'")
+    test.add_assertion(8, "'init' event on node-2 contains subscriber data")
+    test.add_assertion(9, "second event on node-2 is 'task_init_priv'")
+    test.add_assertion(10, "third event on node-2 is 'task_exit'")
+    test.add_assertion(11, "fourth event on node-2 is 'exit'")
+    test.add_assertion(12, "Killing stream listener does not affect job execution on node-1")
+    test.add_assertion(13, "Killing stream listener does not affect job execution on node-2")
+    test.start()
+
+    print("-- Create the cluster --")
+    spec['ovis_prefix'] = args.prefix
+    spec['mounts'] = [ args.data_root + ':/db:rw' ]
+    if args.home:
+        spec['mounts'].append("{home}:{home}:rw".format(home=args.home))
+    # modify slurm_notifier path in spec
+    spec["libdir"] = args.libdir
+    try:
+        cluster = LDMSDCluster.get(spec["name"], create=False, spec = spec)
+        cluster.remove()
+    except:
+        pass
+    cluster = LDMSDCluster.get(spec["name"], create=True, spec = spec)
+
+    print("-- Start daemons --")
+    cluster.start_daemons()
+
+    # Test Strategy:
+    #
+    # 1. Run the test tool ldmsd_stream_subscriber to listen to stream
+    #    data on the stream named "slurm" and writes the events to a
+    #    file called 'spank_stream.out'
+    #
+    # 2. The spank notifier will write respond to the spank events by
+    #    writing the job data to an LDMSD Stream called "slurm".
+    #
+    # 3. Run a job that writes the SLURM environment variables to a
+    #    file called 'spank_test.out'
+    #
+    # 4. The assertions will confirm that the SLURM environment
+    #    variables match the data received on the LDMSD Stream
+    #
+
+    print("-- Create the sbatch and job scripts --")
+    cont = cluster.get_container("node-1")
+    cont.write_file('/db/show_spank_env.sh',
+                    '#!/bin/bash\n'\
+                    'env | grep SLURM > /db/slurm_env_$(hostname).out\n')
+    cont.write_file('/db/spank_job.sh',
+                    '#!/bin/bash\n'\
+                    '#SBATCH -N 2\n'\
+                    '#SBATCH --output spank_test.out\n'\
+                    '#SBATCH -D /db\n'\
+                    'export LDMS_SUBSCRIBER_DATA="spank:notifier:test:data"\n'\
+                    'srun bash /db/show_spank_env.sh\n')
+
+    # If there is no one listening for stream events, the job still runs.
+    print("-- Submitting job with no stream listener --", end='')
+    remove_job_out(cluster)
+    jobid = cluster.sbatch("/db/spank_job.sh")
+    print("jobid = {0}".format(jobid))
+    time.sleep(10) # enough time for the job to run
+
+    # Read the environment file to confirm that the job ran
+    assert_no = 0
+    for node in [ 'node-1', 'node-2' ]:
+        cont = cluster.get_container(node)
+        out = cont.read_file('/db/slurm_env_{node}.out'.format(node=cont.hostname))
+        d = make_dict_from_out(out)
+        test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
+        assert_no += 1
+
+    # cleanup prior job's results
+    remove_job_out(cluster)
+
+    slurmd_containers = [cluster.get_container(c) for c in ["node-1","node-2"]]
+
+    # start a stream subscriber
+    for cont in slurmd_containers:
+        rc, out = cont.exec_run("ldmsd_stream_subscribe -p 20000 "\
+                                "-s slurm -f /db/spank_stream_{node}.out "\
+                                "-D".format(node=cont.hostname))
+        if rc != 0:
+            print(out)
+            cluster.remove()
+            sys.exit(1)
+
+    print("-- Submitting job with listener --", end='')
+    jobid = cluster.sbatch("/db/spank_job.sh")
+    print("jobid = {0}".format(jobid))
+    time.sleep(3) # enough time for the job to run
+
+    # Read the environment file to see that it ran
+    node_env = []
+    stream_data = []
+    for cont in slurmd_containers:
+        node_env.append(cont.read_file('/db/slurm_env_{node}.out'.format(node=cont.hostname)))
+        stream_data.append(cont.read_file('/db/spank_stream_{node}.out'.format(node=cont.hostname)))
+
+    # Parse the files and create dictionaries
+    env_dict = []
+    for env in node_env:
+        env = env.split('\n')
+        d = {}
+        for e in env:
+            e = e.split('=')
+            if len(e) > 1:
+                d[e[0]] = e[1]
+        env_dict.append(d)
+
+    node_events = []
+    for events in stream_data:
+        events = events.split('EVENT:')
+        event_list = []
+        for event in events:
+            if len(event) == 0:
+                continue
+            d = json.loads(event)
+            e = d['event']
+            event_list.append(e)
+        node_events.append(event_list)
+
+    subscriber_data = "spank:notifier:test:data"
+    for node in range(0, 2):
+        e = env_dict[node]
+        events = node_events[node]
+        test.assert_test(assert_no, events[0]['event'] == 'init',
+                         '{0} == {1}'.format(events[0]['event'], 'init'))
+        assert_no += 1
+        test.assert_test(assert_no, events[0]['subscriber_data'] == subscriber_data,
+                         '{0} == {1}'.format(events[0]['subscriber_data'], subscriber_data))
+        assert_no += 1
+        test.assert_test(assert_no, events[1]['event'] == 'task_init_priv',
+                         '{0} == {1}'.format(events[1]['event'], 'task_init_priv'))
+        assert_no += 1
+        test.assert_test(assert_no, events[2]['event'] == 'task_exit',
+                         '{0} == {1}'.format(events[2]['event'], 'task_exit'))
+        assert_no += 1
+        test.assert_test(assert_no, events[3]['event'] == 'exit',
+                         '{0} == {1}'.format(events[3]['event'], 'exit'))
+        assert_no += 1
+
+    # Run a job that crashes the stream listener while the job is running
+    cont = cluster.get_container("node-1")
+    cont.write_file('/db/crash_stream_listener.sh',
+                    '#!/bin/bash\n'\
+                    'pkill ldmsd_stream_subscriber\n'\
+                    'env | grep SLURM > /db/crash_env_$(hostname).out\n')
+    cont.write_file('/db/spank_job_2.sh',
+                    '#!/bin/bash\n'\
+                    '#SBATCH -N 2\n'\
+                    '#SBATCH --output spank_test.out\n'\
+                    '#SBATCH -D /db\n'\
+                    'export LDMS_SUBSCRIBER_DATA="spank:notifier:test:data"\n'\
+                    'srun bash /db/crash_stream_listener.sh\n')
+
+    remove_job_out(cluster)
+
+    print("-- Submitting job that crashes listener --", end='')
+    jobid = cluster.sbatch("/db/spank_job_2.sh")
+    print("jobid = {0}".format(jobid))
+    time.sleep(3) # enough time for the job to run
+
+    for node in [ 'node-1', 'node-2' ]:
+        cont = cluster.get_container(node)
+        out = cont.read_file('/db/crash_env_{node}.out'.format(node=cont.hostname))
+        d = make_dict_from_out(out)
+        test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
+        assert_no += 1
+
+    test.finish()
+
+    cluster.remove() # this destroys entire cluster
