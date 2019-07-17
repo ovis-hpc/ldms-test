@@ -95,6 +95,23 @@ def get_docker_clients():
     return [ docker.DockerClient(base_url = "tcp://{}:2375".format(a)) \
                     for a in addrs ]
 
+def jprint(obj):
+    """Pretty print JSON object"""
+    print(json.dumps(obj, indent=2))
+
+def get_ovis_commit_id(prefix):
+    """Get commit_id of the ovis installation"""
+    try:
+        path = "{}/bin/ldms-pedigree".format(prefix)
+        f = open(path)
+        for l in f.readlines():
+            if l.startswith("echo commit-id: "):
+                e, c, commit_id = l.split()
+                return commit_id
+    except:
+        pass
+    return None
+
 
 #####################################################
 #                                                   #
