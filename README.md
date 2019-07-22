@@ -1,6 +1,8 @@
 TOC
 ===
 
+* [tadad](tadad.md)
+* [tadaq](tadaq.md)
 * [Overview](#overview)
 * [SYNOPSIS](#synopsis)
 * [Docker Host Cluster Setup](#docker-host-cluster-setup)
@@ -874,6 +876,8 @@ The following is the list of utilities for executing Slurm-related programs:
 TADA Utilities
 --------------
 
+For the information on how to operate `tadad`, please see [tadad(1)](tadad.md).
+
 To report test results to TADA Daemon (`tadad`), first we need to create a
 TADATest object and define assertions as follows:
 
@@ -881,12 +885,18 @@ TADATest object and define assertions as follows:
 test = TADATest(test_suite = "LDMSD",
             test_type = "LDMSD",
             test_name = "agg + slurm_sampler + slurm_notifier",
-            tada_host = "cygnus-08",
-            tada_port = 9862)
+            test_user = "bob",
+            commit-id = "abcdefg",
+            tada_addr = "cygnus-08:9862")
 test.add_assertion(1, "ldms_ls agg-2")
 test.add_assertion(2, "slurm job_id verification on sampler-1")
 test.add_assertion(3, "slurm job_id verification on sampler-2")
 ```
+
+The `test_suite`, `test_type`, `test_name`, `test_user` and `commit_id`
+combination identifies the test run. When the test rerun with the same
+combination, the results in the database is over-written. The `commit_id` is
+meant to be the commit ID from the target program being tested (e.g. ldmsd).
 
 Then, notify the `tadad` that we are starting the test:
 ```python
@@ -904,6 +914,13 @@ test.assert_test(1, result, "ldms_ls results")
 result = verify_jobid()
 test.assert_test(3, result, "job_id results")
 ```
+
+Finally, notify `tadad` that the test finishes by:
+```python
+test.finish()
+```
+
+The defined assertions that were not tested will be reported as `SKIPPED`.
 
 
 Debugging

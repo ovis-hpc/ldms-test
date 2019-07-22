@@ -5,10 +5,17 @@ import socket
 import json
 import datetime as dt
 import sys
+import os
+import ConfigParser
+import binascii
+import hashlib
+
+from TADA import TADA_DB
 
 log = logging.getLogger('tada_server')
 
 results = {}
+db = None # the database
 
 class bcolors:
     HEADER = '\033[95m'
@@ -34,9 +41,9 @@ def test_start(addr, result):
     print("{0} - [{1}:{2:5}]".format(result['test-suite'], addr[0], addr[1]))
     timestamp = dt.datetime.fromtimestamp(int(result['timestamp']))
     print("    {0} {1}".format(str(timestamp), result['test-name']))
+    print("    test-id: {0}".format(result["test-id"]))
 
 def test_assert(addr, result):
-
     status = result['test-status']
     if status == 'passed':
         status = bcolors.OKGREEN + 'passed' + bcolors.ENDC
@@ -52,40 +59,127 @@ def test_assert(addr, result):
                   result['assert-cond']))
 
 def test_finish(addr, results):
+    test_id = results[0]["test-id"]
+    obj = db.getTest(test_id = test_id)
     for r in results:
         msg_type = r['msg-type']
         if msg_type == 'test-start':
             test_start(addr, r)
+            db_test_start(obj, r)
         elif msg_type == 'assert-status':
             test_assert(addr, r)
+            db_test_assert(obj, r)
+        elif msg_type == 'test-finish':
+            db_test_finish(obj, r)
         else:
             log.debug("Unrecognized message type {0}".format(msg_type))
 
-FORMAT_CONS = '%(asctime)s %(name)-12s %(levelname)8s\t%(message)s'
-logging.basicConfig(level=logging.DEBUG, format=FORMAT_CONS)
+def db_test_start(obj, result):
+    obj.test_suite = result["test-suite"]
+    obj.test_type = result["test-type"]
+    obj.test_name = result["test-name"]
+    obj.test_user = result["test-user"]
+    obj.commit_id = result["commit-id"]
+    obj.test_desc = result.get("test-desc", obj.test_name)
+    obj.test_start = int(result["timestamp"])
+    obj.commit()
+
+def db_test_assert(test_obj, result):
+    assert_id = result["assert-no"]
+    obj = test_obj.getAssertion(assert_id)
+    obj.assert_result = result["test-status"]
+    obj.assert_cond = result["assert-cond"]
+    obj.assert_desc = result["assert-desc"]
+    obj.commit()
+
+def db_test_finish(obj, result):
+    obj.test_finish = int(result["timestamp"])
+    obj.commit()
 
 if __name__ == "__main__":
+    if sys.flags.interactive:
+        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+    FORMAT_CONS = '%(asctime)s %(name)-12s %(levelname)8s\t%(message)s'
+    logging.basicConfig(level=logging.DEBUG, format=FORMAT_CONS)
+
+    # program argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--port", help="Port number for tada server",
+    parser.add_argument("--config", "-c", type=str,
+                        help="Path to config file. If not specified, "
+                        "environment variable '$TADAD_CONF' is looked up first,"
+                        " then '$PWD/tadad.conf', and then '/etc/tadad.conf'. "
+                        "Only the first config file found in the search order "
+                        "is processed.")
+    parser.add_argument("--port", "-p", help="Port number for tada server",
                         type=int, default=9862)
-    args = parser.parse_args() 
-    if not args.port:
-        print("tada server requires port to deploy to")
+    parser.add_argument("--db-driver", type=str, default="sqlite",
+                        help="The database driver (sqlite, mysql or pgsql).")
+    parser.add_argument("--db-database", type=str, default="tada_db",
+                        help="The name of the database.")
+    parser.add_argument("--db-path", type=str, default="tada_db.sqlite",
+                        help="Path to database file (for sqlite)")
+    parser.add_argument("--db-host", type=str, default="localhost",
+                        help="Host address of the database.")
+    parser.add_argument("--db-port", type=int,
+                        help="Port of the database.")
+    parser.add_argument("--db-user", type=str,
+                        help="Username used for database authentication.")
+    parser.add_argument("--db-password", type=str,
+                        help="Password used for database authentication.")
+    parser.add_argument("--db-purge", action = "store_true",
+                        help="Purge existing tables.")
+
+    # argparse for processing `--config` option only
+    cfg_ap = argparse.ArgumentParser(add_help = False)
+    cfg_ap.add_argument("--config", "-c", type=str)
+
+    # get the `--config` first
+    cfg, cmd_args = cfg_ap.parse_known_args()
+    env_cfg = os.getenv("TADAD_CONF")
+    if cfg.config:
+        config = cfg.config
+    elif env_cfg:
+        config = env_cfg
+    elif os.path.exists("tadad.conf"):
+        config = "tadad.conf"
+    elif os.path.exists("/etc/tadad.conf"):
+        config = "/etc/tadad.conf"
+    else:
+        config = None
+    if config:
+        import ConfigParser
+        cp = ConfigParser.SafeConfigParser()
+        cp.read(config)
+        conf = dict(cp.items("tada"))
+        parser.set_defaults(**conf)
+
+    # parse the remaining arguments
+    args = parser.parse_args()
+
+    db = TADA_DB(**args.__dict__)
+
+    if args.db_purge:
+        db.drop_tables()
+        db.init_tables()
+
     for addr, data in tada_server(port=args.port):
         try:
             result = json.loads(data)
+            result.setdefault("test-user", "NONE")
         except:
             log.debug("Could not parse the test result message")
             log.debug("{0}: {1}".format(addr, data))
             continue
 
         msg_type = result['msg-type']
-        test_key = result['test-suite'] + ':' + result['test-name'] + ':' + str(addr[0]) + ':' + str(addr[1])
+        test_key = result["test-id"]
         if msg_type == 'test-start':
             results[test_key] = [ result ]
         elif msg_type == 'assert-status':
             results[test_key].append(result)
         elif msg_type == 'test-finish':
+            results[test_key].append(result)
             test_finish(addr, results[test_key])
             del results[test_key]
         else:

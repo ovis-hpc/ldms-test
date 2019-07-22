@@ -1,0 +1,120 @@
+#!/usr/bin/python
+
+import os
+import sys
+import argparse
+import datetime as dt
+
+from TADA import TADA_DB
+
+class bcolors:
+    HEADER = '\033[95m'
+    OKBLUE = '\033[94m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
+    BOLD = '\033[1m'
+    UNDERLINE = '\033[4m'
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+    # program argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", "-c", type=str,
+                        help="Path to config file. If not specified, "
+                        "environment variable '$TADAD_CONF' is looked up first,"
+                        " then '$PWD/tadad.conf', and then '/etc/tadad.conf'. "
+                        "Only the first config file found in the search order "
+                        "is processed.")
+    parser.add_argument("--db-driver", type=str, default="sqlite",
+                        help="The database driver (sqlite, mysql or pgsql).")
+    parser.add_argument("--db-database", type=str, default="tada_db",
+                        help="The name of the database.")
+    parser.add_argument("--db-path", type=str, default="tada_db.sqlite",
+                        help="Path to database file (for sqlite)")
+    parser.add_argument("--db-host", type=str, default="localhost",
+                        help="Host address of the database.")
+    parser.add_argument("--db-port", type=int,
+                        help="Port of the database.")
+    parser.add_argument("--db-user", type=str,
+                        help="Username used for database authentication.")
+    parser.add_argument("--db-password", type=str,
+                        help="Password used for database authentication.")
+    # query filter
+    parser.add_argument("--test-suite", type=str, help="Test suite filter.")
+    parser.add_argument("--test-type", type=str, help="Test type filter.")
+    parser.add_argument("--test-name", type=str, help="Test name filter.")
+    parser.add_argument("--test-user", type=str, help="Test user filter.")
+    parser.add_argument("--commit-id", type=str, help="commit-id filter.")
+
+    # options regarding re-run tests
+    parser.add_argument("--latest", action = "store_true",
+                        help="Get only the latest test among the reruns.")
+    parser.add_argument("--purge-old-tests", action = "store_true",
+                        help="Purge old reruns.")
+
+
+    FILTERS = set(["test_suite", "test_type", "test_name", "test_user",
+                   "commit_id"])
+
+    # argparse for processing `--config` option only
+    cfg_ap = argparse.ArgumentParser(add_help = False)
+    cfg_ap.add_argument("--config", "-c", type=str)
+
+    # get the `--config` first
+    cfg, cmd_args = cfg_ap.parse_known_args()
+    env_cfg = os.getenv("TADAD_CONF")
+    if cfg.config:
+        config = cfg.config
+    elif env_cfg:
+        config = env_cfg
+    elif os.path.exists("tadad.conf"):
+        config = "tadad.conf"
+    elif os.path.exists("/etc/tadad.conf"):
+        config = "/etc/tadad.conf"
+    else:
+        config = None
+    if config:
+        import ConfigParser
+        cp = ConfigParser.SafeConfigParser()
+        cp.read(config)
+        conf = dict(cp.items("tada"))
+        parser.set_defaults(**conf)
+
+    # parse the remaining arguments
+    args = parser.parse_args()
+
+    db = TADA_DB(**args.__dict__)
+
+    if args.purge_old_tests:
+        db.purgeOldTests()
+        sys.exit(0)
+
+    fltr = { k: v  for k,v in args.__dict__.iteritems() \
+                       if k in FILTERS and v != None }
+    objs = db.findTests(latest = args.latest, **fltr)
+    for o in objs:
+        print("{o.test_suite} - {o.test_user} - commit_id: {o.commit_id}" \
+              .format(o = o))
+        start = dt.datetime.fromtimestamp(int(o.test_start))
+        finish = dt.datetime.fromtimestamp(int(o.test_finish))
+        print("    {} (start:{}, finish: {})" \
+                        .format(o.test_name, start, finish))
+        print("        {.test_desc}".format(o))
+        print("    test-id: {.test_id}".format(o))
+        for a in o.assertions:
+            status = a.assert_result
+            if status == 'passed':
+                status = bcolors.OKGREEN + 'passed' + bcolors.ENDC
+            elif status == 'failed':
+                status = bcolors.FAIL + 'failed' + bcolors.ENDC
+            elif status == 'skipped':
+                status = bcolors.WARNING + status + bcolors.ENDC
+            print("        {0:10} {1:4} {2}, {3}"
+                  .format(status,
+                          a.assert_id,
+                          a.assert_desc,
+                          a.assert_cond))

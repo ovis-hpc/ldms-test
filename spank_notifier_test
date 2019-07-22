@@ -95,8 +95,22 @@ def remove_job_out(cluster):
         rc, out = cont.exec_run("rm -f /db/crash_env_{node}.out".format(node=cont.hostname))
         rc, out = cont.exec_run("rm -f /db/spank_stream_{node}.out".format(node=cont.hostname))
 
+def get_ovis_commit_id(prefix):
+    """Get commit_id of the ovis installation"""
+    try:
+        path = "{}/bin/ldms-pedigree".format(prefix)
+        f = open(path)
+        for l in f.readlines():
+            if l.startswith("echo commit-id: "):
+                e, c, commit_id = l.split()
+                return commit_id
+    except:
+        pass
+    return "-"
+
 if __name__ == "__main__":
-    execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+    if sys.flags.interactive:
+        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
     parser = argparse.ArgumentParser(description="Run an FVT test")
     parser.add_argument("--data_root", required=True, help="The test data root path")
     parser.add_argument("--tada_addr",
@@ -113,8 +127,10 @@ if __name__ == "__main__":
                         help="The TADA Daemon address as a host:port string")
     args = parser.parse_args()
 
+    COMMIT_ID = get_ovis_commit_id(args.prefix)
+
     test = TADA.Test("Slurm_Plugins", "FVT", "slurm_notifier_test",
-                     tada_addr=args.tada_addr)
+                     commit_id = COMMIT_ID, tada_addr=args.tada_addr)
     test.add_assertion(0, 'Missing stream listener on node-1 does not affect job execution')
     test.add_assertion(1, 'Missing stream listener on node-2 does not affect job execution')
     test.add_assertion(2, "first event on node-1 is 'init'")

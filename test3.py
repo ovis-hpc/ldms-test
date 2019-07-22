@@ -32,7 +32,7 @@ def get_ovis_commit_id(prefix):
                 return commit_id
     except:
         pass
-    return None
+    return "-"
 
 #### default values #### ---------------------------------------------
 sbin_ldmsd = find_executable("ldmsd")
@@ -251,7 +251,9 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "LDMSD 2-level agg with slurm",
+                 test_name = "agg-slurm",
+                 test_desc = "LDMSD 2-level agg with slurm",
+                 commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
 test.add_assertion(1, "ldms_ls agg-2")
 test.add_assertion(2, "slurm job_id verification in compute-1/slurm_sampler")

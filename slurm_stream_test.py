@@ -252,8 +252,9 @@ slurm_exit['data'] = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "LDMSD",
-                 test_name = "slurm stream test",
-                 tada_addr = args.tada_addr)
+                 test_name = "slurm-stream-test",
+                 tada_addr = args.tada_addr,
+                 commit_id = COMMIT_ID)
 test.add_assertion(1, "ldms_ls Jobs are assigned to next slot")
 test.add_assertion(2, "Newest job replaces oldest job when slots full")
 test.add_assertion(3, "Task process id data in each metric set is correct")
@@ -385,7 +386,7 @@ for hosts in ['compute-1', 'compute-2']:
             verify(4, int(tids[k]) == 9000+k, ' correct task process id in metric set with max jobs')
             k += 1
         cnt += 1
-            
+
 # Add extra job, and ensure it takes oldest job slot
 slurm_init['data']['job_id'] = 12353
 slurm_init['timestamp'] = 1561661512
