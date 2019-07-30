@@ -201,53 +201,112 @@ spec = {
     ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }
 
-### slurm-stream data ###
-init_data = {
-    "job_id" : 12345,
-    "job_name" : "test-job",
-    "subscriber_data" : "test",
-    "uid" : 0,
-    "gid" : 0,
-    "nnodes" : 1,
-    "nodeid" : 1,
-    "local_tasks" : 8,
-    "total_tasks" : 8
+### new slurm stream data ###
+slurm_init_0 = {
+    "schema" : "mt-slurm",
+    "timestamp" : 1561661493,
+    "context" : "remote",
+    "event" : "init",
+    "data" : {
+        "job_id" : 12345,
+        "job_name" : "compute-1-job_0",
+        "subscriber_data" : "test",
+        "uid" : 0,
+        "gid" : 0,
+        "nnodes" : 1,
+        "nodeid" : 0,
+        "local_tasks" : 8,
+        "total_tasks" : 8
+    }
 }
+
+
+slurm_init_1 = {
+    "schema" : "mt-slurm",
+    "timestamp" : 1561661493,
+    "context" : "remote",
+    "event" : "init",
+    "data" : {
+        "job_id" : 12355,
+        "job_name" : "compute-2-job_0",
+        "subscriber_data" : "test",
+        "uid" : 0,
+        "gid" : 0,
+        "nnodes" : 1,
+        "nodeid" : 1,
+        "local_tasks" : 16,
+        "total_tasks" : 16
+    }
+}
+
+slurm_exit_0 = {
+    "schema" : "mt-slurm",
+    "timestamp" : 1561661493,
+    "context" : "remote",
+    "event" : "exit",
+    "data" : {
+        "job_id" : 12345,
+        "nodeid" : 0
+    }
+}
+
+slurm_exit_1 = {
+    "schema" : "mt-slurm",
+    "timestamp" : 1561661493,
+    "context" : "remote",
+    "event" : "exit",
+    "data" : {
+        "job_id" : 12355,
+        "nodeid" : 1
+    }
+}
+
 event_template = {
-    "schema" : "meminfo",
+    "schema" : "mt-slurm",
     "timestamp" : 1561661493,
     "context" : "remote"
 }
-slurm_init = event_template.copy()
-slurm_init['event'] = "init"
-slurm_init['data'] = init_data
 
-slurm_task_init = event_template.copy()
-slurm_task_init['event'] = "task_init_priv"
-slurm_task_init['data'] = {
+slurm_task_init_0 = event_template.copy()
+slurm_task_init_0['event'] = "task_init_priv"
+slurm_task_init_0['data'] = {
     "job_id" : 12345,
     "task_id" : 0,
     "task_global_id" : 0,
-    "task_pid" : 9000,
+    "task_pid" : 1,
+    "nodeid" : 0
+}
+slurm_task_exit_0 = event_template.copy()
+slurm_task_exit_0['event'] = "task_exit"
+slurm_task_exit_0['data'] = {
+    "job_id" : 12345,
+    "task_id" : 0,
+    "task_global_id" : 0,
+    "task_pid" : 1,
+    "nodeid" : 0,
+    "task_exit_status" : 0
+}
+
+slurm_task_init_1 = event_template.copy()
+slurm_task_init_1['event'] = "task_init_priv"
+slurm_task_init_1['data'] = {
+    "job_id" : 12355,
+    "task_id" : 0,
+    "task_global_id" : 0,
+    "task_pid" : 100,
     "nodeid" : 1
 }
-slurm_task_exit = event_template.copy()
-slurm_task_exit['event'] = "task_exit"
-slurm_task_exit['data'] = {
-    "job_id" : 12345,
+slurm_task_exit_1 = event_template.copy()
+slurm_task_exit_1['event'] = "task_exit"
+slurm_task_exit_1['data'] = {
+    "job_id" : 12355,
     "task_id" : 0,
     "task_global_id" : 0,
-    "task_pid" : 8000,
+    "task_pid" : 100,
     "nodeid" : 1,
     "task_exit_status" : 0
 }
 
-slurm_exit = event_template.copy()
-slurm_exit['event'] = "exit"
-slurm_exit['data'] = {
-    "job_id" : 12345,
-    "nodeid" : 1
-}
 
 #### test definition ####
 
@@ -258,7 +317,7 @@ test = TADA.Test(test_suite = "LDMSD",
                  commit_id = COMMIT_ID)
 test.add_assertion(1, "ldms_ls Jobs are assigned to next slot")
 test.add_assertion(2, "Newest job replaces oldest job when slots full")
-test.add_assertion(3, "Task process id data in each metric set is correct")
+test.add_assertion(3, "mult jobs running, metric set reflects all active jobs")
 test.add_assertion(4, "Max number of jobs, with all jobs correctly represented")
 test.add_assertion(5, "Job data in each metric set reflects matching text file")
 
@@ -279,83 +338,200 @@ cont = cluster.get_container('headnode')
 
 def verify(num, cond, cond_str):
     a = test.assertions[num]
-    print a["assert-desc"] + ": " + ("Passed" if cond else "Failed")
+    print a["assert-desc"] + ": " + ("Passed - "+cond_str if cond else "Failed "+cond_str)
     test.assert_test(num, cond, cond_str)
 
 json_path = args.db
 
+### job for compute-1 ###
+
 # Add job events over stream
 i = 0
-job_count = 8
-while i < job_count:
-    slurm_init['timestamp'] += 1
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_init)
-    data_file = "/db/Slurm_Test-data.json"
+j = 0
+task_count = 8
 
-    for host in [ 'compute-1', 'compute-2' ]:
-        cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x sock -p 10000"
+slurm_init_0['timestamp'] += 1
+data_file = "/db/Slurm_Test-data.json"
+
+while j < 8:
+    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_init_0)
+    cont = cluster.get_container("compute-1")
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
+    while i < task_count:
+        slurm_task_init_0['timestamp'] += 1
+        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_init_0)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
                                 " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host))
-    slurm_task_init['timestamp'] += 1
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_init)
-    for host in [ 'compute-1', 'compute-2' ]:
-        cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host))
+                                .format(fname=data_file))
         if out:
-           print(out)
-    slurm_task_exit['timestamp'] += 1
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_exit)
-    for host in [ 'compute-1', 'compute-2' ]:
-        cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x sock -p 10000"
+            print(out)
+        slurm_task_exit_0['timestamp'] += 1
+        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_exit_0)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
                                 " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host))
-    slurm_exit['timestamp'] += 1
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_exit)
-    for host in [ 'compute-1', 'compute-2' ]:
-        cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host))
+                                .format(fname=data_file))
         if out:
-           print(out)
-        rc, out = cont.ldms_ls("-h {host} -p 10000 -x sock -a munge -l".format(host=host))
-        cnt = 0
-        for line in (out.split('\n')):
-            if cnt == 2:
-                ids = line.split()[3].split(',')
-                print(ids)
-                jid = 12345
-                verify(1, int(ids[i]) == jid+i, 'correct job_id fills next job_slot')
-            elif cnt == 14+i:
-                tids = line.split()[3].split(',')
-                verify(3, int(tids[i]) == 9000+i, ' correct task process id in metric set')
-            cnt += 1
-    slurm_init['data']['job_id'] += 1
-    slurm_init['data']['nodeid'] += 1
-    slurm_task_init['data']['job_id'] += 1
-    slurm_task_init['data']['task_pid'] += 1
-    slurm_task_init['data']['task_id'] += 1
-    slurm_task_init['data']['task_global_id'] += 1
-    slurm_task_init['data']['nodeid'] += 1
-    slurm_task_exit['data']['job_id'] += 1
-    slurm_task_exit['data']['task_pid'] += 1
-    slurm_task_exit['data']['task_id'] += 1
-    slurm_task_exit['data']['task_global_id'] += 1
-    slurm_task_exit['data']['nodeid'] += 1
-    slurm_exit['data']['job_id'] += 1
-    slurm_exit['data']['nodeid'] += 1
-    i += 1
+            print(out)
+        slurm_task_init_0['data']['task_pid'] += 1
+        slurm_task_init_0['data']['task_id'] += 1
+        slurm_task_init_0['data']['task_global_id'] += 1
+        slurm_task_exit_0['data']['task_pid'] += 1
+        slurm_task_exit_0['data']['task_id'] += 1
+        slurm_task_exit_0['data']['task_global_id'] += 1
+        i += 1
+
+    slurm_exit_0['timestamp'] = slurm_init_0['timestamp'] + 3600
+    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_exit_0)
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
+    rc, out = cont.ldms_ls("-h compute-1 -x sock -p 10000 -a munge -l")
+    cnt = 0
+    k = 0
+    tid = 1
+    for line in (out.split('\n')):
+        if cnt == 2:
+            ids = line.split()[3].split(',')
+            print(ids)
+            verify(1, int(ids[j]) == int(slurm_init_0['data']['job_id']), 'correct job_id fills next slot')
+        elif cnt == 10:
+            i = 0
+            tstamp = line.split()[3].split(',')
+            while i <= j:
+                verify(2, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented')
+                i += 1
+        elif cnt == 11:
+            i = 0
+            tstamp = line.split()[3].split(',')
+            while i <= j:
+                verify(3, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented')
+                i += 1
+        if cnt == 14+k:
+            i = 0
+            if k > j:
+                break
+            tids = line.split()[3].split(',')
+            while i < 8:
+                verify(3, int(tids[i]) == tid, 'compute-1 correct task pid in metric set')
+                print(str(tids[i]) + ' '+str(tid))
+                tid += 1
+                i += 1
+            k += 1
+        cnt += 1
+    j += 1
+    i = 0
+    slurm_init_0['timestamp'] += 1
+    slurm_init_0['data']['job_id'] += 1
+    slurm_init_0['data']['job_name'] = "compute-1-job_"+str(j)
+    slurm_exit_0['data']['job_id'] += 1
+
+    slurm_task_init_0['data']['task_id'] = 0
+    slurm_task_exit_0['data']['task_id'] = 0
+    slurm_task_init_0['data']['job_id'] += 1
+    slurm_task_exit_0['data']['job_id'] += 1
+
+print("compute-1 ldmsd_stream_publish finished")
+
+
+### compute-2 ###
+# add job events over stream
+
+slurm_init_1['timestamp'] += 1
+task_count = 16
+i = 0
+j=0
+while j < 8:
+    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_init_1)
+    cont = cluster.get_container("compute-2")
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
+    while i < task_count:
+        slurm_task_init_1['timestamp'] += 1
+        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_init_1)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
+                                " -a munge -s test-slurm-stream -t json -f {fname}"
+                                .format(fname=data_file))
+        if out:
+            print(out)
+        slurm_task_exit_1['timestamp'] += 1
+        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_exit_1)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
+                                " -a munge -s test-slurm-stream -t json -f {fname}"
+                                .format(fname=data_file))
+        if out:
+            print(out)
+        slurm_task_init_1['data']['task_pid'] += 1
+        slurm_task_init_1['data']['task_id'] += 1
+        slurm_task_init_1['data']['task_global_id'] += 1
+        slurm_task_exit_1['data']['task_pid'] += 1
+        slurm_task_exit_1['data']['task_id'] += 1
+        slurm_task_exit_1['data']['task_global_id'] += 1
+        i += 1
+
+    slurm_exit_1['timestamp'] = slurm_init_1['timestamp'] + 3600
+    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_exit_1)
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
+    rc, out = cont.ldms_ls("-h compute-2 -x sock -p 10000 -a munge -l")
+    cnt = 0
+    k = 0
+    tid = 100
+    for line in (out.split('\n')):
+        if cnt == 2:
+            ids = line.split()[3].split(',')
+            print(ids)
+            verify(1, int(ids[j]) == int(slurm_init_1['data']['job_id']), 'correct job_id fills next slot')
+        elif cnt == 10:
+            i = 0
+            tstamp = line.split()[3].split(',')
+            while i <= j:
+                print(tstamp)
+                verify(3, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented')
+                i += 1
+        elif cnt == 11:
+            i = 0
+            tstamp = line.split()[3].split(',')
+            while i <= j:
+                verify(3, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented')
+                i += 1
+        if cnt == 14+k:
+            i = 0
+            if k > j:
+                break
+            tids = line.split()[3].split(',')
+            while i < 16:
+                verify(3, int(tids[i]) == tid, ' compute-2 correct task pid in metric set')
+                tid += 1
+                i += 1
+            k += 1
+        cnt += 1
+    j += 1
+    i = 0
+    slurm_init_1['timestamp'] += 1
+    slurm_init_1['data']['job_id'] += 1
+    slurm_init_1['data']['job_name'] = "compute-2-job_"+str(j)
+    slurm_exit_1['data']['job_id'] += 1
+
+    slurm_task_init_1['data']['task_id'] = 0
+    slurm_task_exit_1['data']['task_id'] = 0
+    slurm_task_init_1['data']['job_id'] += 1
+    slurm_task_exit_1['data']['job_id'] += 1
+
+print("compute-2 ldmsd_stream_publish finished")
+
 
 # Check to ensure jobs are correctly represented with max number of jobs running
-for hosts in ['compute-1', 'compute-2']:
+for host in ['compute-1', 'compute-2']:
+    if host == "compute-1":
+        jid = 12345
+        tid = 1
+    else:
+        jid = 12355
+        tid = 100
     cont = cluster.get_container(host)
     rc, out = cont.ldms_ls("-h {host} -p 10000 -x sock -a munge -l".format(host=host))
     cnt = 0
@@ -364,7 +540,6 @@ for hosts in ['compute-1', 'compute-2']:
         if cnt == 2:
             i = 0
             ids = line.split()[3].split(',')
-            jid = 12345
             while i < 8:
                 verify(4, int(ids[i]) == jid+i, 'job_ids correctly represented with max jobs')
                 i += 1
@@ -372,67 +547,100 @@ for hosts in ['compute-1', 'compute-2']:
             i = 0
             tstamp = line.split()[3].split(',')
             while i < 8:
+                print(tstamp)
                 verify(4, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented with max jobs')
                 i += 1
         elif cnt == 11:
             i = 0
             tstamp = line.split()[3].split(',')
             while i < 8:
-                verify(4, int(tstamp[i]) == 1561661494+i, 'job_end correctly represented with max jobs')
+                verify(4, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented with max jobs')
                 i += 1
         if cnt == 14+k:
+            i = 0
             if k == 8:
                 break
             tids = line.split()[3].split(',')
-            verify(4, int(tids[k]) == 9000+k, ' correct task process id in metric set with max jobs')
+            if host == "compute-1":
+                while i < 8:
+                    verify(4, int(tids[i]) == tid, 'compute-1 correct task pid in metric set with max jobs')
+                    tid += 1
+                    i += 1
+            else:
+                while i < 16:
+                    verify(4, int(tids[i]) == tid, 'compute-2 correct task pid in metric set with max jobs')
+                    tid += 1
+                    i += 1
             k += 1
         cnt += 1
 
 # Add extra job, and ensure it takes oldest job slot
-slurm_init['data']['job_id'] = 12353
-slurm_init['timestamp'] = 1561661512
-slurm_init['data']['nodeid'] += 1
+slurm_init_0['data']['job_id'] = 12353
+slurm_init_0['timestamp'] = 1561661512
 
-slurm_task_init['data']['job_id'] = 12353
-slurm_task_init['timestamp'] = 1561661512
-slurm_task_init['data']['task_pid'] += 1
-slurm_task_init['data']['task_id'] += 1
-slurm_task_init['data']['task_global_id'] += 1
-slurm_task_init['data']['nodeid'] += 1
+slurm_task_init_0['data']['job_id'] = 12353
+slurm_task_init_0['timestamp'] = slurm_init_0['timestamp']
 
-slurm_task_exit['data']['job_id'] = 12353
-slurm_task_exit['timestamp'] = 1561661514
-slurm_task_exit['data']['task_pid'] += 1
-slurm_task_exit['data']['task_id'] += 1
-slurm_task_exit['data']['task_global_id'] += 1
-slurm_task_exit['data']['nodeid'] += 1
+slurm_task_exit_0['data']['job_id'] = 12353
+slurm_task_exit_0['timestamp'] = slurm_task_init_0['timestamp'] + 3600
 
-slurm_exit['data']['job_id'] = 12353
-slurm_exit['timestamp'] = 1561661515
-slurm_exit['data']['nodeid'] += 1
+slurm_exit_0['data']['job_id'] = 12353
+slurm_exit_0['timestamp'] = slurm_init_0['timestamp'] + 3600
 
-last_job = [ slurm_init, slurm_task_init, slurm_task_exit, slurm_exit ]
+slurm_init_1['data']['job_id'] = 12363
+slurm_init_1['timestamp'] = 1561661512
 
-for event in last_job:
+slurm_task_init_1['data']['job_id'] = 12363
+slurm_task_init_1['timestamp'] = slurm_init_1['timestamp']
+
+slurm_task_exit_1['data']['job_id'] = 12363
+slurm_task_exit_1['timestamp'] = slurm_task_init_1['timestamp']+3600
+
+slurm_exit_1['data']['job_id'] = 12363
+slurm_exit_1['timestamp'] = slurm_init_1['timestamp'] + 3600
+
+last_job_0 = [ slurm_init_0, slurm_task_init_0, slurm_task_exit_0, slurm_exit_0 ]
+last_job_1 = [ slurm_init_1, slurm_task_init_1, slurm_task_exit_1, slurm_exit_1 ]
+
+for event in last_job_0:
     update_expect_file(json_path+"/Slurm_Test-data.json", event)
-    for host in [ 'compute-1', 'compute-2' ]:
-        cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host))
-for host in [ 'compute-1', 'compute-2' ]:
-    cont = cluster.get_container(host)
-    rc, out = cont.ldms_ls("-h {host} -p 10000 -x sock -a munge -l".format(host=host))
-    cnt = 0
-    for line in (out.split('\n')):
-        if cnt == 2:
-            ids = line.split()[3].split(',')
-            print(ids)
-            verify(2, int(ids[0]) == 12353, 'slots full, oldest job slot selected')
-            break
-        cnt += 1
+    cont = cluster.get_container("compute-1")
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
 
+for event in last_job_1:
+    update_expect_file(json_path+"/Slurm_Test-data.json", event)
+    cont = cluster.get_container("compute-2")
+    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
+                            " -a munge -s test-slurm-stream -t json -f {fname}"
+                            .format(fname=data_file))
+
+# check last job filled oldest slot
+cont = cluster.get_container("compute-1")
+rc, out = cont.ldms_ls("-h compute-1 -p 10000 -x sock -a munge -l")
+cnt = 0
+for line in (out.split('\n')):
+    if cnt == 2:
+        ids = line.split()[3].split(',')
+        print(ids)
+        verify(2, int(ids[0]) == 12353, 'slots full, oldest job slot selected')
+        break
+    cnt += 1
+
+# check job fills oldest slot on compute-1
+cont = cluster.get_container("compute-2")
+rc, out = cont.ldms_ls("-h compute-2 -p 10000 -x sock -a munge -l")
+cnt = 0
+for line in (out.split('\n')):
+    if cnt == 2:
+        ids = line.split()[3].split(',')
+        print(ids)
+        verify(2, int(ids[0]) == 12363, 'slots full, oldest job slot selected')
+        break
+    cnt += 1
+
+# check job fills oldest slot on compute-2
 test_results = open(json_path+"/Slurm_Test-results.txt", 'w')
 for host in [ 'compute-1', 'compute-2' ]:
     cont = cluster.get_container(host)
@@ -446,7 +654,6 @@ for host in [ 'compute-1', 'compute-2' ]:
         cnt += 1
 
 test_results.close()
-
 results = open(json_path+'/Slurm_Test-results.txt').read()
 expected_data = open(json_path+'/Slurm_Test-static.txt').read()
 verify(5, (results == expected_data), 'ldms_ls == text_file')
