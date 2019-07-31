@@ -172,8 +172,11 @@ if __name__ == "__main__":
             log.debug("{0}: {1}".format(addr, data))
             continue
 
-        msg_type = result['msg-type']
-        test_key = result["test-id"]
+        test_key = result.get("test-id")
+        if not test_key:
+            log.warn("result message does not contain `test-id`")
+            continue
+        msg_type = result.get('msg-type')
         if msg_type == 'test-start':
             results[test_key] = [ result ]
         elif msg_type == 'assert-status':
