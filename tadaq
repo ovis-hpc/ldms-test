@@ -44,6 +44,7 @@ if __name__ == "__main__":
     parser.add_argument("--db-password", type=str,
                         help="Password used for database authentication.")
     # query filter
+    parser.add_argument("--test-id", type=str, help="Test ID filter.")
     parser.add_argument("--test-suite", type=str, help="Test suite filter.")
     parser.add_argument("--test-type", type=str, help="Test type filter.")
     parser.add_argument("--test-name", type=str, help="Test name filter.")
@@ -57,8 +58,8 @@ if __name__ == "__main__":
                         help="Purge old reruns.")
 
 
-    FILTERS = set(["test_suite", "test_type", "test_name", "test_user",
-                   "commit_id"])
+    FILTERS = set(["test_id", "test_suite", "test_type", "test_name",
+                   "test_user", "commit_id"])
 
     # argparse for processing `--config` option only
     cfg_ap = argparse.ArgumentParser(add_help = False)
