@@ -1819,6 +1819,44 @@ class LDMSDContainer(DockerClusterContainer):
                 raise RuntimeError("Unsupported daemon type:{}".format(tp))
             fn()
 
+    def config_ldmsd(self, cmds):
+        if not self.pgrepc('ldmsd'):
+            raise RuntimeError("There is no running ldmsd to configure")
+        spec = self.ldmsd_spec
+        if type(cmds) not in (list, tuple):
+            cmds = [ cmds ]
+        sio = StringIO()
+        D.sio = sio
+        for _cmd in cmds:
+            sio.write(_cmd)
+            sio.write('\n')
+        cmd = 'bash -c \'ldmsd_controller --host {host} ' \
+              '--xprt {xprt} ' \
+              '--port {port} ' \
+              '--auth {auth} ' \
+              ' && true \' ' \
+                  .format(
+                      host=self.hostname,
+                      xprt=spec["listen_xprt"],
+                      port=spec["listen_port"],
+                      auth=spec["listen_auth"],
+                  )
+        D.cmd = cmd
+        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        sock.setblocking(True)
+        sock.send(sio.getvalue())
+        sock.shutdown(socket.SHUT_WR)
+        D.ret = ret = sock.recv(8192)
+        if len(ret) == 0:
+            rc = 0
+            output = ''
+        else:
+            output = ret[8:]
+            rc = bytearray(ret[0])[0]
+            if rc == 1: # OK
+                rc = 0
+        return rc, output
+
 
 BaseCluster = DockerCluster if not use_docker_service else DockerClusterService
 
