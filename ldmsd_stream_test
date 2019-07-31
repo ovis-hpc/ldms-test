@@ -1,0 +1,314 @@
+#!/usr/bin/env python
+from __future__ import print_function
+import argparse
+import os
+import sys
+import TADA
+import time
+import json
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, D
+
+def get_ovis_commit_id(prefix):
+    """Get commit_id of the ovis installation"""
+    try:
+        path = "{}/bin/ldms-pedigree".format(prefix)
+        f = open(path)
+        for l in f.readlines():
+            if l.startswith("echo commit-id: "):
+                e, c, commit_id = l.split()
+                return commit_id
+    except:
+        pass
+    return "-"
+
+def update_expect_file(fname, data):
+    s = json.dumps(data)
+    f = open(fname, 'w')
+    f.write(s)
+    f.close()
+
+USER = os.getlogin()
+
+spec = {
+    "name" : "REPLACE_ME",
+    "description" : "{}'s cluster for ldmsd_stream_test".format(USER),
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "test_stream_sampler",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%",
+                        "stream=test_stream",
+                        "expect=/data/Stream_Test-data.json"
+                    ]
+                },
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen_port" : 10000,
+            "listen_xprt" : "sock",
+            "listen_auth" : "munge",
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : 10000,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "stream-sampler-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "stream-sampler-2",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "listen_port" : 20000, # override
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "stream-sampler-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "stream-sampler-2",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_subscribe regex=.* stream=test_stream",
+                        "prdcr_start_regex regex=.*",
+                    ],
+                },
+            ]
+        },
+    ],
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": "REPLACE_ME",
+    "env" : { "TADA_USER": os.getlogin() },
+    "mounts": [ ],
+}
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+    parser = argparse.ArgumentParser(description="ldmsd_stream_publish/subscribe FVT test")
+    parser.add_argument("--data_root", required=True, help="The test data root path")
+    parser.add_argument("--tada_addr",
+                        help="The test automation server host and port as host:port.",
+                        default="tada-host:9862")
+    parser.add_argument("--prefix",
+                        help="The directory where the test target is installed.",
+                        default="/opt/ovis")
+    parser.add_argument("--src", type=str,
+                        help="The OVIS source tree (for debugging).")
+
+    args = parser.parse_args()
+
+    COMMIT_ID = get_ovis_commit_id(args.prefix)
+    cluster_name = "{}-ldmsd_stream_test-{:.7}".format(os.getlogin(), COMMIT_ID)
+
+    spec["ovis_prefix"] = args.prefix
+    spec["name"] = cluster_name
+    spec["mounts"] += [ "{}:/data:rw".format(args.data_root) ]
+    if args.src:
+        spec["mounts"] += [ "{0}:{0}:ro".format(args.src) ]
+    spec["env"]["TADA_ADDR"] = args.tada_addr
+
+    # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
+    test = TADA.Test(test_suite = "LDMSD",
+                     test_type = "SVT",
+                     test_name = "ldmsd_stream_test",
+                     test_desc = "LDMSD stream system verification test",
+                     test_user = os.getlogin(),
+                     commit_id = COMMIT_ID,
+                     tada_addr = args.tada_addr)
+    test.add_assertion(0, 'ldmsd_stream_publish of JSON data to stream-sampler-1 succeeds')
+    test.add_assertion(1, 'ldmsd_stream_publish of STRING data to stream-sampler-1 succeeds')
+    test.add_assertion(2, 'ldmsd_stream_publish to JSON data to stream-sampler-2 succeeds')
+    test.add_assertion(3, 'ldmsd_stream_publish of STRING data to stream-sampler-2 succeeds')
+    test.add_assertion(4, 'Stopping the producers succeeds')
+    test.add_assertion(5, 'Restarting the producers succeeds')
+    test.add_assertion(6, 'JSON stream data resumes after producer restart on stream-sampler-1')
+    test.add_assertion(7, 'STRING stream data resumes after producer rerestart on stream-sampler-1')
+    test.add_assertion(8, 'JSON stream data resumes after producer restart on stream-sampler-2')
+    test.add_assertion(9, 'STRING stream data resumes after producer rerestart on stream-sampler-2')
+    test.add_assertion(10, 'stream-sampler-1 is not running')
+    test.add_assertion(11, 'stream-sampler-1 has restarted')
+    test.add_assertion(12, 'JSON stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(13, 'STRING stream data resumes after stream-sampler-1 restart')
+
+    # Tell the TADA infrastructure that the test is starting
+    test.start()
+
+    # Create the containers required to ruyn the test
+    cluster = LDMSDCluster.get(cluster_name, create = True, spec = spec)
+
+    # Start all the LDMS Daemons configured in each container. NB: LDMSD can also be started
+    # individually with start_daemon('hostname')
+    cluster.start_daemons()
+
+    # Give the daemons a few seconds to start
+    time.sleep(5)
+
+    # Create the test data
+    data = { "gen" : 1,
+             "schema" : "stream_test",
+             "timestamp" : 1559242264,
+             "data" : {
+                 "id" : 12345,
+                 "list" : [ 1, 2, 3, 4 ]
+             }
+         }
+
+    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
+    data_file = '/data/Stream_Test-data.json'
+
+    assert_no = 0
+    for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
+        cont = cluster.get_container(host)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t json -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+        # Test a STRING formatted stream
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t string -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+    agg_h = cluster.get_container('agg-1')
+    rc, out = agg_h.config_ldmsd([ "prdcr_stop_regex regex=.*" ])
+    test.assert_test(assert_no, (len(out) == 0), out)
+    assert_no += 1
+
+    rc, out = agg_h.config_ldmsd([ "prdcr_start_regex regex=.*" ])
+    test.assert_test(assert_no, (len(out) == 0), out)
+    assert_no += 1
+
+    for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
+        cont = cluster.get_container(host)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t json -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+        # Test a STRING formatted stream
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t string -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+    cont = cluster.get_container('stream-sampler-1')
+
+    cont.kill_ldmsd()
+    time.sleep(1)
+    running = cont.pgrepc('ldmsd')
+    test.assert_test(assert_no, (running == False), '(running == False)')
+    assert_no += 1
+
+    cont.start_ldmsd()
+    time.sleep(1)
+    running = cont.pgrepc('ldmsd')
+    test.assert_test(assert_no, (running == True), '(running == True)')
+    assert_no += 1
+
+    for host in [ 'stream-sampler-1' ]:
+        cont = cluster.get_container(host)
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t json -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+        # Test a STRING formatted stream
+        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
+                                " -a {auth} -s test_stream -t string -f {fname}"
+                                .format(fname=data_file,
+                                        host=host,
+                                        xprt=cont.ldmsd_spec["listen_xprt"],
+                                        port=cont.ldmsd_spec["listen_port"],
+                                        auth=cont.ldmsd_spec["listen_auth"]
+                                    ))
+        test.assert_test(assert_no, (len(out) == 0), out)
+        assert_no += 1
+
+    test.finish()
+    cluster.remove()
