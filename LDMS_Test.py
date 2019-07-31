@@ -2132,6 +2132,8 @@ class LDMSDCluster(BaseCluster):
                 "LD_LIBRARY_PATH" : "/opt/ovis/lib:/opt/ovis/lib64",
                 "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
                 "LDMSD_PLUGIN_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
+                "PYTHONPATH" : "/opt/ovis/lib/python2.7/site-packages:" \
+                               "/opt/ovis/lib64/python2.7/site-packages"
             }
         env.update(env_dict(spec.get("env", {})))
         kwargs = dict(
