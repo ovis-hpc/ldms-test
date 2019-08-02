@@ -1,0 +1,719 @@
+#!/usr/bin/env python
+
+import os
+import re
+import sys
+import json
+import time
+import docker
+import argparse
+import subprocess
+import TADA
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+def jprint(obj):
+    """Pretty print JSON object"""
+    print json.dumps(obj, indent=2)
+
+def get_ovis_commit_id(prefix):
+    """Get commit_id of the ovis installation"""
+    try:
+        path = "{}/bin/ldms-pedigree".format(prefix)
+        f = open(path)
+        for l in f.readlines():
+            if l.startswith("echo commit-id: "):
+                e, c, commit_id = l.split()
+                return commit_id
+    except:
+        pass
+    return None
+
+def update_expect_file(fname, data):
+    s = json.dumps(data)
+    f = open(fname, 'w')
+    f.write(s)
+    f.close()
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/nick/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description =
+                         "Run test scenario of slurm stream using ldmsd_stream_publish " \
+                         "with slurm_store container data and rata verification." )
+ap.add_argument("--clustername", type = str,
+                help = "The name of the cluster. The default is "
+                "USER-slurm-test-COMMIT_ID.")
+ap.add_argument("--prefix", type = str,
+                default = default_prefix,
+                help = "The OVIS installation prefix.")
+ap.add_argument("--src", type = str,
+                help = "The path to OVIS source tree (for gdb). " \
+                       "If not specified, src tree won't be mounted.")
+ap.add_argument("--db", type = str,
+                default = "{}/db".format(os.path.realpath(sys.path[0])),
+                help = "The path to host db directory, location of Slurm_Test-static.json file." )
+ap.add_argument("--tada_addr", help="Test automation server host and port " \
+		" as host:port")
+args = ap.parse_args()
+
+#### config variables #### ------------------------------
+USER = os.getlogin()
+PREFIX = args.prefix
+COMMIT_ID = get_ovis_commit_id(PREFIX)
+SRC = args.src
+CLUSTERNAME = args.clustername if args.clustername else \
+              "{}-slurm-store-test-{:.7}".format(USER, COMMIT_ID)
+DB = args.db
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s slurm store test cluster".format(USER),
+    "type" : "NA",
+    "templates" : {
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler",
+                }
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen_port" : 10000,
+            "listen_xprt" : "sock",
+            "listen_auth" : "munge",
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "slurm_sampler",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "stream=test-slurm-stream",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%"
+                    ],
+                    "start" : True,
+                }
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : 10000,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "compute-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "compute-2",
+            "component_id" : 10002,
+            "!extends" : "compute-node",
+            "task_count" : 16
+        },
+        {
+            "hostname" : "compute-3",
+            "component_id" : 10003,
+            "!extends" : "compute-node",
+            "task_count" : 16
+        },
+        {
+            "hostname" : "compute-4",
+            "component_id" : 10004,
+            "!extends" : "compute-node",
+            "task_count" : 16
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "munged",
+                    "type" : "munged"
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "listen_port" : 20000,
+                    "prdcrs" : [
+                        {
+                            "name" : "compute-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "compute-2",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "compute-3",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "compute-4",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [
+                        "load name=store_slurm",
+                        "config name=store_slurm path=/db verbosity=1",
+                        "prdcr_start_regex regex=.*",
+                        "strgp_add name=slurm-test plugin=store_slurm container=slurm-test schema=mt-slurm",
+                        "strgp_prdcr_add name=slurm-test regex=.*",
+                        "strgp_start name=slurm-test",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
+            ]
+        },
+    ],
+
+    "cap_add": [ "SYS_PTRACE" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "LDMSD",
+                 test_name = "slurm store test",
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "Every job in input data represented in output")
+test.add_assertion(2, "Job 10000 has 27 rank")
+test.add_assertion(3, "Job 10100 has 64 rank")
+
+test.add_assertion(4, "For Job 10000 job_size in metric set matches database")
+test.add_assertion(5, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(6, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(7, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(8, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(9, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(10, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(11, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(12, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(13, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(14, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(15, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(16, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(17, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(18, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(19, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(20, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(21, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(22, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(23, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(24, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(25, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(26, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(27, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(28, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(29, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(30, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(31, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(32, "For Job 10000 job_size in metric set matches database")
+test.add_assertion(33, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(34, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(35, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(36, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(37, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(38, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(39, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(40, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(41, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(42, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(43, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(44, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(45, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(46, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(47, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(48, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(49, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(50, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(51, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(52, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(53, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(54, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(55, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(56, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(57, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(58, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(59, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(60, "For Job 10000 job_size in metric set matches database")
+test.add_assertion(61, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(62, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(63, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(64, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(65, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(66, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(67, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(68, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(69, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(70, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(71, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(72, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(73, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(74, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(75, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(76, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(77, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(78, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(79, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(80, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(81, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(82, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(83, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(84, "For Job 10000 job_pid in metric set matches database")
+test.add_assertion(85, "For Job 10000 job_id in metric set matches database")
+test.add_assertion(86, "For Job 10000 task_rank in metric set matches database")
+test.add_assertion(87, "For Job 10000 job_pid in metric set matches database")
+
+test.add_assertion(88, "For Job 10100 job_size in metric set matches database")
+test.add_assertion(89, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(90, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(91, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(92, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(93, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(94, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(95, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(96, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(97, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(98, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(99, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(100, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(101, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(102, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(103, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(104, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(105, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(106, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(107, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(108, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(109, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(110, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(111, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(112, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(113, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(114, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(115, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(116, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(117, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(118, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(119, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(120, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(121, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(122, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(123, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(124, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(125, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(126, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(127, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(128, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(129, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(130, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(131, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(132, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(133, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(134, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(135, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(136, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(137, "For Job 10100 job_size in metric set matches database")
+test.add_assertion(138, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(139, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(140, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(141, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(142, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(143, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(144, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(145, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(146, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(147, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(148, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(149, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(150, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(151, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(152, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(153, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(154, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(155, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(156, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(157, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(158, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(159, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(160, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(161, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(162, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(163, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(164, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(165, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(166, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(167, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(168, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(169, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(170, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(171, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(172, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(173, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(174, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(175, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(176, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(177, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(178, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(179, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(180, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(181, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(182, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(183, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(184, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(185, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(186, "For Job 10100 job_size in metric set matches database")
+test.add_assertion(187, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(188, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(189, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(190, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(191, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(192, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(193, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(194, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(195, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(196, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(197, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(198, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(199, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(200, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(201, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(202, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(203, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(204, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(205, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(206, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(207, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(208, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(209, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(210, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(211, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(212, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(213, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(214, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(215, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(216, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(217, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(218, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(219, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(220, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(221, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(222, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(223, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(224, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(225, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(226, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(227, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(228, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(229, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(230, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(231, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(232, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(233, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(234, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(235, "For Job 10100 job_size in metric set matches database")
+test.add_assertion(236, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(237, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(238, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(239, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(240, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(241, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(242, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(243, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(244, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(245, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(246, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(247, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(248, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(249, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(250, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(251, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(252, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(253, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(254, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(255, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(256, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(257, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(258, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(259, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(260, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(261, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(262, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(263, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(264, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(265, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(266, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(267, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(268, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(269, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(270, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(271, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(272, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(273, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(274, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(275, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(276, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(277, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(278, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(279, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(280, "For Job 10100 job_pid in metric set matches database")
+test.add_assertion(281, "For Job 10100 job_id in metric set matches database")
+test.add_assertion(282, "For Job 10100 task_rank in metric set matches database")
+test.add_assertion(283, "For Job 10100 job_pid in metric set matches database")
+
+test.add_assertion(284, "Job 10000 has 3 nodes")
+test.add_assertion(285, "Job 10100 has 4 nodes")
+
+#### Start! ####
+test.start()
+
+print "-- Get or create the cluster --"
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+print "-- Start daemons --"
+cluster.start_daemons()
+
+print "... wait a bit to make sure ldmsd's are up"
+time.sleep(5)
+
+def verify(num, cond, cond_str):
+    a = test.assertions[num]
+    print a["assert-desc"] + ": " + (cond_str+": Passed" if cond else cond_str+": Failed")
+    test.assert_test(num, cond, cond_str)
+
+json_path = args.db
+
+
+### job for compute-1 ###
+# Add 8 jobs with 8 tasks per job
+
+i = 0
+j = 0
+task_count = 8
+
+data_file = "/db/Slurm_Test-data.json"
+
+def create_events(node_count, task_count, job_id):
+    """
+    Generate events for node_count nodes. Each node will
+    have total_tasks / node_count tasks
+
+    The return value is an array of arrays as follows:
+    node_events[node][event]
+
+    node_events[node] is an array of events
+    node_events[node][event] is  a dictionary
+    """
+    nodes = []
+    task_start = 0
+    for node in range(0, node_count):
+        events = []
+        init_event = {}
+        init_event['timestamp'] = int(time.time())
+        init_event['schema'] = 'mt-slurm'
+        init_event['event'] = 'init'
+        init_event['context'] = 'remote'
+        init_event['data'] = {}
+        init_event['data']['job_name'] = 'test'
+        init_event['data']['job_id'] = job_id
+        init_event['data']['subscriber_data'] = 'test'
+        init_event['data']['uid'] = 0
+        init_event['data']['gid'] = 0
+        init_event['data']['nnodes'] = node_count
+        init_event['data']['nodeid'] = node
+        init_event['data']['local_tasks'] = task_count / node_count
+        init_event['data']['total_tasks'] = task_count
+        events.append(init_event)
+        for task in range(0, task_count / node_count):
+            init_task = {}
+            init_task['schema'] = 'mt-slurm'
+            init_task['event'] = 'task_init_priv'
+            init_task['context'] = 'remote'
+            init_task['timestamp'] = int(time.time())
+            init_task['data'] = {}
+            init_task['data']['job_id'] = job_id
+            init_task['data']['task_pid'] = task + job_id
+            init_task['data']['task_id'] = task
+            init_task['data']['task_global_id'] = task + task_start
+            init_task['data']['nodeid'] = node
+            events.append(init_task)
+        for task in range(0, task_count / node_count):
+            exit_task = {}
+            exit_task['schema'] = 'mt-slurm'
+            exit_task['event'] = 'task_exit'
+            exit_task['context'] = 'remote'
+            exit_task['timestamp'] = int(time.time())
+            exit_task['data'] = {}
+            exit_task['data']['job_id'] = job_id
+            exit_task['data']['task_pid'] = task + job_id
+            exit_task['data']['task_id'] = task
+            exit_task['data']['task_global_id'] = task + task_start
+            exit_task['data']['nodeid'] = node
+            exit_task['data']['task_exit_status'] = 0
+            events.append(exit_task)
+        exit_event = {}
+        exit_event['schema'] = 'mt-slurm'
+        exit_event['event'] = 'exit'
+        exit_event['context'] = 'remote'
+        exit_event['timestamp'] = int(time.time())
+        exit_event['data'] = {}
+        exit_event['data']['job_id'] = job_id
+        exit_event['nodeid'] = node
+        events.append(exit_event)
+        nodes.append(events)
+        task_start += task_count / node_count
+    return nodes
+
+def deliver_events(events):
+    for node in events:
+         cont = cluster.get_container("compute-{0}".format(int(node[0]['data']['nodeid'])+1))
+         for event in node:
+            update_expect_file(json_path+"/event-file.json", event)
+            rc, out = cont.exec_run("ldmsd_stream_publish -h compute-{node} -x sock -p 10000"
+                              " -a munge -s test-slurm-stream -t json -f {fname}"
+                                .format(fname="/db/event-file.json",
+                                        node=int(node[0]['data']['nodeid'])+1))
+
+job_list = [ 10000, 10100 ]
+
+events_3_27 = create_events(3, 27, 10000)
+deliver_events(events_3_27)
+
+events_4_64 = create_events(4, 64, 10100)
+deliver_events(events_4_64)
+
+
+cont = cluster.get_container('agg-1')
+
+# Test all jobs in input are present in output
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id"
+                        " -V job_id -F job_id:unique -f csv")
+
+cnt = 0
+for line in out.split('\n'):
+    if cnt < 1 or cnt > 2:
+        cnt += 1
+        continue
+
+    verify(1, int(line) == job_list[cnt-1], "")
+    cnt += 1
+
+job_10000_ranks = 27
+job_10100_ranks = 64
+# Test each rank in job results in row in output
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+                        " -V task_rank -V timestamp -F job_id:eq:10000 -f csv")
+out = out.split('\n')
+print(out)
+verify(2, len(out) - 3 == job_10000_ranks, "")
+
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+                        " -V task_rank -V timestamp -F job_id:eq:10100 -f csv")
+out = out.split('\n')
+verify(3, len(out) - 3 == job_10100_ranks, "")
+
+# Test each row contains all common data correctly
+
+assert_num = 4
+
+def test_job(node_count, job_events):
+    global assert_num
+    for nodeid in range(0, node_count):
+        cnt = 0
+        # get task_init events out of job_events
+        events = []
+        init_events = list(job_events[nodeid])
+        for i in range(0, len(init_events)):
+            if init_events[i]['event'] == 'task_init_priv':
+                events.append(init_events[i])
+        cid = nodeid+10001
+        rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+                                " -V job_id -V component_id -V job_size -V task_rank "
+                                " -V task_pid -f csv -F component_id:eq:{comp_id} "
+                                " -F job_id:eq:{job_id}"
+                                .format(comp_id=str(cid),
+                                        job_id=str(job_events[nodeid][0]['data']['job_id'])))
+        for line in out.split('\n')[: len(out.split('\n')) - 2]:
+            if cnt < 1:
+                cnt += 1
+                continue
+            cdata = line.split(',')
+            if cnt == 1:
+                verify(assert_num, int(cdata[2]) == int(job_events[nodeid][0]['data']['total_tasks']),
+                       'job_size input match '+str(cdata[2]))
+                assert_num += 1
+                print(cdata[2])
+                print(job_events[nodeid][0]['data']['total_tasks'])
+            verify(assert_num, int(cdata[0]) == int(events[cnt-1]['data']['job_id']), 'job_id match')
+            assert_num += 1
+            verify(assert_num, int(cdata[3]) == int(events[cnt-1]['data']['task_global_id']), 'task_rank match')
+            assert_num += 1
+            verify(assert_num, int(cdata[4]) == int(events[cnt-1]['data']['task_pid']), 'task_pid match')
+            assert_num += 1
+            cnt += 1
+
+test_job(3, events_3_27)
+
+test_job(4, events_4_64)
+
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id -V node_count"
+                        " -F node_count:unique -F job_id:eq:10000 -f csv")
+
+verify(284, int(out.split('\n')[1]) == 3, "node count 3 correct")
+
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id -V node_count"
+                        " -F node_count:unique -F job_id:eq:10100 -f csv")
+
+verify(285, int(out.split('\n')[1]) == 4, "node count 4 correct")
+
+test.finish()
+
+cluster.remove()
+
+rm_store = subprocess.Popen(['rm', '-rf', args.db+'/slurm-test'], stdout=subprocess.PIPE)
+rm_store.communicate()
+print('Test Finished')
