@@ -3,6 +3,7 @@ from __future__ import print_function
 import argparse
 import os
 import sys
+import pwd
 import TADA
 import time
 import json
@@ -29,7 +30,7 @@ def update_expect_file(fname, data):
     f.write(s)
     f.close()
 
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 
 spec = {
     "name" : "REPLACE_ME",
@@ -132,7 +133,7 @@ spec = {
     "cap_add": [ "SYS_PTRACE" ],
     "image": "ovis-centos-build",
     "ovis_prefix": "REPLACE_ME",
-    "env" : { "TADA_USER": os.getlogin() },
+    "env" : { "TADA_USER": USER },
     "mounts": [ ],
 }
 
@@ -153,7 +154,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     COMMIT_ID = get_ovis_commit_id(args.prefix)
-    cluster_name = "{}-ldmsd_stream_test-{:.7}".format(os.getlogin(), COMMIT_ID)
+    cluster_name = "{}-ldmsd_stream_test-{:.7}".format(USER, COMMIT_ID)
 
     spec["ovis_prefix"] = args.prefix
     spec["name"] = cluster_name
@@ -167,7 +168,7 @@ if __name__ == "__main__":
                      test_type = "SVT",
                      test_name = "ldmsd_stream_test",
                      test_desc = "LDMSD stream system verification test",
-                     test_user = os.getlogin(),
+                     test_user = USER,
                      commit_id = COMMIT_ID,
                      tada_addr = args.tada_addr)
     test.add_assertion(0, 'ldmsd_stream_publish of JSON data to stream-sampler-1 succeeds')

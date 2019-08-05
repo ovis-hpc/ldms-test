@@ -2,12 +2,13 @@
 
 import os
 import sys
+import pwd
 from LDMS_Test import LDMSDCluster, jprint, deep_copy
 
 if __name__ != "__main__":
     raise RuntimeError("Do not import this! (not a dmodule)")
 
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 CNAME = USER + "-test_get_create"
 
 spec0 = {

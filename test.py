@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import os
 import sys
+import pwd
 import time
 import socket
 import docker
@@ -17,7 +18,7 @@ DB=os.path.realpath("db")
 if not os.path.exists(DB):
     os.makedirs(DB)
 
-USER = os.getlogin()
+USER = pwd.pwgetuid(os.geteuid())[0]
 
 NET = "{}_net".format(USER)
 

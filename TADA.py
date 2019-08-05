@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import pwd
 import time
 import json
 import socket
@@ -20,6 +21,8 @@ log = logging.getLogger(__name__)
 warnings.filterwarnings('ignore') # to suppress mysql bogus warnings
                                   # in CREATE TABLE IF NOT EXISTS
 
+LOGIN = pwd.getpwuid(os.geteuid())[0]
+
 class Test(object):
     """TADA Test Utility
 
@@ -31,7 +34,7 @@ class Test(object):
     And, optionally specify:
       - tada_addr : "ADDR:PORT" - for `tadad` connection
       - test_user : str - to specify `user` running the test
-        (default `os.getlogin()`)
+        (default `{LOGIN}`)
       - commit_id : str - to specify the commit_id of the target program in
         testing.
 
@@ -51,14 +54,14 @@ class Test(object):
     >>> test.assert_test(3, False) # this send assertion event to `tadad`
     >>> test.finish() # this send all skipped assertions to `tadad`, and
     >>>               # finally send `finish` event to `tadad`
-    """
+    """ % { "LOGIN": LOGIN }
 
     PASSED = "passed"
     FAILED = "failed"
     SKIPPED = "skipped"
 
     def __init__(self, test_suite, test_type, test_name, test_desc = None,
-                 tada_addr="localhost:9862", test_user=os.getlogin(),
+                 tada_addr="localhost:9862", test_user=LOGIN,
                  commit_id="-"):
         self.test_suite = test_suite
         self.test_type = test_type

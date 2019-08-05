@@ -3,6 +3,7 @@
 import os
 import re
 import sys
+import pwd
 import json
 import time
 import docker
@@ -71,7 +72,7 @@ ap.add_argument("--tada_addr", help="Test automation server host and port " \
 args = ap.parse_args()
 
 #### config variables #### ------------------------------
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 PREFIX = args.prefix
 COMMIT_ID = get_ovis_commit_id(PREFIX)
 SRC = args.src

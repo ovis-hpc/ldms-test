@@ -2,6 +2,7 @@
 
 import os
 import sys
+import pwd
 import argparse
 from LDMS_Test import DockerCluster
 
@@ -11,7 +12,7 @@ if __name__ != "__main__":
 execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
 
 SCRIPTDIR = os.path.realpath(sys.path[0])
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 
 ap = argparse.ArgumentParser(description = "Test container.write_file()")
 ap.add_argument("--name",

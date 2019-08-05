@@ -3,6 +3,7 @@ from __future__ import print_function
 import os
 import re
 import sys
+import pwd
 import json
 import time
 import docker
@@ -12,7 +13,7 @@ from LDMS_Test import LDMSDCluster, LDMSDContainer
 import TADA
 
 dc = docker.from_env()
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 
 spec = {
     "name" : USER+"-spank_notifier_test-cluster",

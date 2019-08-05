@@ -2,6 +2,7 @@
 
 import os
 import re
+import pwd
 import sys
 import json
 import time
@@ -67,7 +68,7 @@ ap.add_argument("--tada-addr",
 args = ap.parse_args()
 
 #### config variables #### ------------------------------
-USER = os.getlogin()
+USER = pwd.getpwuid(os.geteuid())[0]
 PREFIX = args.prefix
 COMMIT_ID = get_ovis_commit_id(PREFIX)
 SRC = args.src
