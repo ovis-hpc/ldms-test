@@ -129,7 +129,8 @@ spec = {
                         "component_id=%component_id%",
                         "stream=test-slurm-stream",
                         "instance=%hostname%/%plugin%",
-                        "producer=%hostname%"
+                        "producer=%hostname%",
+                        "task_count=16",
                     ],
                     "start" : True,
                 }
