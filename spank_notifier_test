@@ -190,7 +190,7 @@ if __name__ == "__main__":
                     '#SBATCH -N 2\n'\
                     '#SBATCH --output spank_test.out\n'\
                     '#SBATCH -D /db\n'\
-                    'export LDMS_SUBSCRIBER_DATA="spank:notifier:test:data"\n'\
+                    'export SUBSCRIBER_DATA=\'{"sub":"data"}\'\n'\
                     'srun bash /db/show_spank_env.sh\n')
 
     # If there is no one listening for stream events, the job still runs.
@@ -259,15 +259,15 @@ if __name__ == "__main__":
             event_list.append(e)
         node_events.append(event_list)
 
-    subscriber_data = "spank:notifier:test:data"
+    subscriber_data = {"sub": "data"}
     for node in range(0, 2):
         e = env_dict[node]
         events = node_events[node]
         test.assert_test(assert_no, events[0]['event'] == 'init',
                          '{0} == {1}'.format(events[0]['event'], 'init'))
         assert_no += 1
-        test.assert_test(assert_no, events[0]['subscriber_data'] == subscriber_data,
-                         '{0} == {1}'.format(events[0]['subscriber_data'], subscriber_data))
+        test.assert_test(assert_no, events[0]['data']['subscriber_data'] == subscriber_data,
+                         '{0} == {1}'.format(events[0]['data']['subscriber_data'], subscriber_data))
         assert_no += 1
         test.assert_test(assert_no, events[1]['event'] == 'task_init_priv',
                          '{0} == {1}'.format(events[1]['event'], 'task_init_priv'))
@@ -290,7 +290,7 @@ if __name__ == "__main__":
                     '#SBATCH -N 2\n'\
                     '#SBATCH --output spank_test.out\n'\
                     '#SBATCH -D /db\n'\
-                    'export LDMS_SUBSCRIBER_DATA="spank:notifier:test:data"\n'\
+                    'export SUBSCRIBER_DATA=\'{"sub":"data"}\'\n'\
                     'srun bash /db/crash_stream_listener.sh\n')
 
     remove_job_out(cluster)
