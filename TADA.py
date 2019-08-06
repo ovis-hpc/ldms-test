@@ -171,6 +171,7 @@ class SQLModel(object):
         # taking care of object ID first
         self._obj_id = self.__id_from_data(data)
         self._on_data_update(data)
+        self._qparam = conn_qparam(conn)
 
     def __iter__(self):
         for k in self.__colnames__:
@@ -212,12 +213,13 @@ class SQLModel(object):
         >>> objs = TADATestModel.find(conn, test_id = "abc")
         """
         cur = _conn.cursor()
-        cond = ""
-        if kwargs:
-            cond = " where " + (" and ".join([ "{} = '{}'".format(k,v) \
-                                               for k,v in kwargs.iteritems() ]))
-        sql = "SELECT * FROM " + cls.__table__ + cond
-        cur.execute(sql)
+        qparam = conn_qparam(_conn)
+        cond = " and ".join( "{}={}".format(k, qparam) for k in kwargs.keys() )
+        if cond:
+            sql = "SELECT * FROM {} where {}".format(cls.__table__, cond)
+        else:
+            sql = "SELECT * FROM {}".format(cls.__table__)
+        cur.execute(sql, map(str, kwargs.values()))
         lst = cur.fetchall()
         return [ cls(_conn, data) for data in lst ]
 
@@ -243,26 +245,29 @@ class SQLModel(object):
                 obj = args
         else:
             obj = kwargs
+        qparam = conn_qparam(_conn)
         obj_type = type(obj)
         if obj_type == dict:
-            cols, vals = zip(*obj.iteritems())
+            cols = obj.keys()
+            vals = obj.values()
             _id = { k: obj[k] for k in cls.__ids__ }
             sql = "INSERT INTO {} ({}) VALUES ({})" \
                 .format(
                     cls.__table__,
                     ",".join( cols ),
-                    ",".join( "'{}'".format(str(v).replace("'", "''")) \
-                                                            for v in vals )
+                    ",".join( [qparam] * len(vals) )
                 )
         elif obj_type in [ list, tuple ]:
+            vals = obj
             _id = cls.__id_from_data(obj)
             sql = "INSERT INTO {} VALUES ({})" \
                 .format(
                     cls.__table__,
-                    ",".join( "'{}'".format(v) for v in obj )
+                    ",".join( [qparam] * len(vals) )
                 )
         cur = _conn.cursor()
-        cur.execute(sql)
+        # use parameterized sql execution
+        cur.execute(sql, map(str, vals))
         _conn.commit()
         return cls.get(_conn, **_id)
 
@@ -291,10 +296,10 @@ class SQLModel(object):
 
     def _query(self):
         cur = self._conn.cursor()
-        cond = " and ".join([ "{} = '{}'".format(k,v) \
-                              for k,v in self._obj_id.iteritems() ])
-        sql = "SELECT * FROM " + self.__table__ + " where " + cond
-        cur.execute(sql)
+        cond = " and ".join( "{}={}".format(k, self._qparam) \
+                                            for k in self._obj_id.keys() )
+        sql = "SELECT * FROM {} where {}".format(self.__table__, cond)
+        cur.execute(sql, map(str, self._obj_id.values()))
         return cur.fetchone()
 
     def reload(self):
@@ -316,15 +321,15 @@ class SQLModel(object):
 
     def commit(self):
         """Commit attribute changes to the database"""
-        keys = set(self.__colnames__) - set(self._obj_id)
-        vals = ", ".join([ "{}='{}'".format(k, str(v).replace("'", "''")) \
-                            for k,v in self.__dict__.iteritems() \
-                                if k in keys and v != None])
-        cond = " and ".join([ "{} = '{}'".format(k,str(v).replace("'", "''")) \
-                              for k,v in self._obj_id.iteritems() ])
-        sql = "UPDATE {} SET {} WHERE {}".format(self.__table__, vals, cond)
+        vals = { k: v for k, v in self if k not in self._obj_id and v != None }
+        update = ", ".join( "{}={}".format(k, self._qparam) \
+                                            for k in vals.keys() )
+        cond = " and ".join( "{}={}".format(k, self._qparam) \
+                                            for k in self._obj_id.keys() )
+        sql = "UPDATE {} SET {} WHERE {}".format(self.__table__, update, cond)
         cur = self._conn.cursor()
-        cur.execute(sql)
+        params = vals.values() + self._obj_id.values()
+        cur.execute(sql, map(str, params))
         self._conn.commit()
 
     def __str__(self):
@@ -342,11 +347,11 @@ class SQLModel(object):
 
     def delete(self):
         """Deletethe object from the database"""
-        cond = " and ".join([ "{} = '{}'".format(k,v) \
-                              for k,v in self._obj_id.iteritems() ])
+        cond = " and ".join( "{}={}".format(k, self._qparam) \
+                                        for k in self._obj_id.keys() )
         sql = "DELETE FROM {} WHERE {}".format(self.__table__, cond)
         cur = self._conn.cursor()
-        cur.execute(sql)
+        cur.execute(sql, map(str, self._obj_id.values()))
         self._conn.commit()
 
     def __getitem__(self, key):
@@ -371,10 +376,10 @@ class TADATestModel(SQLModel):
     @property
     def assertions(self):
         """all assertions belong to this test"""
-        sql = "SELECT * FROM {} WHERE test_id='{}'" \
-              .format(TADAAssertionModel.__table__, self.test_id)
+        sql = "SELECT * FROM {} WHERE test_id={}" \
+              .format(TADAAssertionModel.__table__, self._qparam)
         cur = self._conn.cursor()
-        cur.execute(sql)
+        cur.execute(sql, [str(self.test_id)])
         return [ TADAAssertionModel(self._conn, d) for d in cur.fetchall() ]
 
     def getAssertion(self, assert_id):
@@ -413,6 +418,18 @@ class TADAAssertionModel(SQLModel):
         ]
     __ids__ = [ "test_id", "assert_id" ]
 
+
+def conn_module(conn):
+    """Get module from connection"""
+    m = type(conn).__module__.split('.')[0]
+    return importlib.import_module(m)
+
+def conn_qparam(conn):
+    """Determine query param string from connection"""
+    mod = conn_module(conn)
+    if mod.paramstyle == "qmark":
+        return "?"
+    return "%s"
 
 def db_loc(host, port):
     if port:
