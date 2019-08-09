@@ -129,8 +129,7 @@ spec = {
                         "component_id=%component_id%",
                         "stream=test-slurm-stream",
                         "instance=%hostname%/%plugin%",
-                        "producer=%hostname%",
-                        "task_count=16",
+                        "producer=%hostname%"
                     ],
                     "start" : True,
                 }
@@ -155,41 +154,6 @@ spec = {
             "component_id" : 10002,
             "!extends" : "compute-node",
         },
-        {
-            "hostname" : "agg-1",
-            "daemons" : [
-                {
-                    "name" : "aggregator",
-                    "!extends" : "ldmsd-base",
-                    "listen_port" : 20000,
-                    "prdcrs" : [
-                        {
-                            "name" : "compute-1",
-                            "!extends" : "prdcr",
-                        },
-                        {
-                            "name" : "compute-2",
-                            "!extends" : "prdcr",
-                        },
-                    ],
-                    "config" : [
-                        "prdcr_start_regex regex=.*",
-                        "updtr_add name=all interval=1000000 offset=0",
-                        "updtr_prdcr_add name=all regex=.*",
-                        "updtr_start name=all"
-                    ],
-                },
-            ]
-        },
-        {
-            "hostname" : "headnode",
-            "daemons" : [
-                {
-                    "name" : "slurmctld",
-                    "type" : "slurmctld",
-                },
-            ]
-        },
     ],
 
     "cap_add": [ "SYS_PTRACE" ],
@@ -202,125 +166,175 @@ spec = {
     ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }
 
-### new slurm stream data ###
-slurm_init_0 = {
-    "schema" : "mt-slurm",
-    "timestamp" : 1561661493,
-    "context" : "remote",
-    "event" : "init",
-    "data" : {
-        "job_id" : 12345,
-        "job_name" : "compute-1-job_0",
-        "subscriber_data" : "test",
-        "uid" : 0,
-        "gid" : 0,
-        "nnodes" : 1,
-        "nodeid" : 0,
-        "local_tasks" : 8,
-        "total_tasks" : 8
-    }
-}
-
-
-slurm_init_1 = {
-    "schema" : "mt-slurm",
-    "timestamp" : 1561661493,
-    "context" : "remote",
-    "event" : "init",
-    "data" : {
-        "job_id" : 12355,
-        "job_name" : "compute-2-job_0",
-        "subscriber_data" : "test",
-        "uid" : 0,
-        "gid" : 0,
-        "nnodes" : 1,
-        "nodeid" : 1,
-        "local_tasks" : 16,
-        "total_tasks" : 16
-    }
-}
-
-slurm_exit_0 = {
-    "schema" : "mt-slurm",
-    "timestamp" : 1561661493,
-    "context" : "remote",
-    "event" : "exit",
-    "data" : {
-        "job_id" : 12345,
-        "nodeid" : 0
-    }
-}
-
-slurm_exit_1 = {
-    "schema" : "mt-slurm",
-    "timestamp" : 1561661493,
-    "context" : "remote",
-    "event" : "exit",
-    "data" : {
-        "job_id" : 12355,
-        "nodeid" : 1
-    }
-}
-
-event_template = {
-    "schema" : "mt-slurm",
-    "timestamp" : 1561661493,
-    "context" : "remote"
-}
-
-slurm_task_init_0 = event_template.copy()
-slurm_task_init_0['event'] = "task_init_priv"
-slurm_task_init_0['data'] = {
-    "job_id" : 12345,
-    "task_id" : 0,
-    "task_global_id" : 0,
-    "task_pid" : 1,
-    "nodeid" : 0
-}
-slurm_task_exit_0 = event_template.copy()
-slurm_task_exit_0['event'] = "task_exit"
-slurm_task_exit_0['data'] = {
-    "job_id" : 12345,
-    "task_id" : 0,
-    "task_global_id" : 0,
-    "task_pid" : 1,
-    "nodeid" : 0,
-    "task_exit_status" : 0
-}
-
-slurm_task_init_1 = event_template.copy()
-slurm_task_init_1['event'] = "task_init_priv"
-slurm_task_init_1['data'] = {
-    "job_id" : 12355,
-    "task_id" : 0,
-    "task_global_id" : 0,
-    "task_pid" : 100,
-    "nodeid" : 1
-}
-slurm_task_exit_1 = event_template.copy()
-slurm_task_exit_1['event'] = "task_exit"
-slurm_task_exit_1['data'] = {
-    "job_id" : 12355,
-    "task_id" : 0,
-    "task_global_id" : 0,
-    "task_pid" : 100,
-    "nodeid" : 1,
-    "task_exit_status" : 0
-}
-
 
 #### test definition ####
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "LDMSD",
-                 test_name = "slurm-stream-test",
-                 tada_addr = args.tada_addr,
-                 commit_id = COMMIT_ID)
-test.add_assertion(1, "ldms_ls Jobs are assigned to next slot")
-test.add_assertion(2, "Newest job replaces oldest job when slots full")
-test.add_assertion(3, "mult jobs running, metric set reflects all active jobs")
-test.add_assertion(4, "Max number of jobs, with all jobs correctly represented")
-test.add_assertion(5, "Job data in each metric set reflects matching text file")
+                 test_name = "slurm stream test",
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "Job properly assigned to correct slot")
+test.add_assertion(2, "job_start correctly represented in metric set")
+test.add_assertion(3, "job_end correctly represented in metric set")
+test.add_assertion(4, "task_pid correctly represented")
+test.add_assertion(5, "task_pid correctly represented")
+test.add_assertion(6, "task_pid correctly represented")
+test.add_assertion(7, "task_pid correctly represented")
+test.add_assertion(8, "Job properly assigned to correct slot")
+test.add_assertion(9, "job_start correctly represented in metric set")
+test.add_assertion(10, "job_end correctly represented in metric set")
+test.add_assertion(11, "task_pid correctly represented")
+test.add_assertion(12, "task_pid correctly represented")
+test.add_assertion(13, "task_pid correctly represented")
+test.add_assertion(14, "task_pid correctly represented")
+test.add_assertion(15, "Job properly assigned to correct slot")
+test.add_assertion(16, "job_start correctly represented in metric set")
+test.add_assertion(17, "job_end correctly represented in metric set")
+test.add_assertion(18, "task_pid correctly represented")
+test.add_assertion(19, "task_pid correctly represented")
+test.add_assertion(20, "task_pid correctly represented")
+test.add_assertion(21, "task_pid correctly represented")
+test.add_assertion(22, "Job properly assigned to correct slot")
+test.add_assertion(23, "job_start correctly represented in metric set")
+test.add_assertion(24, "job_end correctly represented in metric set")
+test.add_assertion(25, "task_pid correctly represented")
+test.add_assertion(26, "task_pid correctly represented")
+test.add_assertion(27, "task_pid correctly represented")
+test.add_assertion(28, "task_pid correctly represented")
+test.add_assertion(29, "Job properly assigned to correct slot")
+test.add_assertion(30, "job_start correctly represented in metric set")
+test.add_assertion(31, "job_end correctly represented in metric set")
+test.add_assertion(32, "task_pid correctly represented")
+test.add_assertion(33, "task_pid correctly represented")
+test.add_assertion(34, "task_pid correctly represented")
+test.add_assertion(35, "task_pid correctly represented")
+test.add_assertion(36, "Job properly assigned to correct slot")
+test.add_assertion(37, "job_start correctly represented in metric set")
+test.add_assertion(38, "job_end correctly represented in metric set")
+test.add_assertion(39, "task_pid correctly represented")
+test.add_assertion(40, "task_pid correctly represented")
+test.add_assertion(41, "task_pid correctly represented")
+test.add_assertion(42, "task_pid correctly represented")
+test.add_assertion(43, "Job properly assigned to correct slot")
+test.add_assertion(44, "job_start correctly represented in metric set")
+test.add_assertion(45, "job_end correctly represented in metric set")
+test.add_assertion(46, "task_pid correctly represented")
+test.add_assertion(47, "task_pid correctly represented")
+test.add_assertion(48, "task_pid correctly represented")
+test.add_assertion(49, "task_pid correctly represented")
+test.add_assertion(50, "Job properly assigned to correct slot")
+test.add_assertion(51, "job_start correctly represented in metric set")
+test.add_assertion(52, "job_end correctly represented in metric set")
+test.add_assertion(53, "task_pid correctly represented")
+test.add_assertion(54, "task_pid correctly represented")
+test.add_assertion(55, "task_pid correctly represented")
+test.add_assertion(56, "task_pid correctly represented")
+
+test.add_assertion(57, "Job properly assigned to correct slot")
+test.add_assertion(58, "job_start correctly represented in metric set")
+test.add_assertion(59, "job_end correctly represented in metric set")
+test.add_assertion(60, "task_pid correctly represented")
+test.add_assertion(61, "task_pid correctly represented")
+test.add_assertion(62, "task_pid correctly represented")
+test.add_assertion(63, "task_pid correctly represented")
+test.add_assertion(64, "task_pid correctly represented")
+test.add_assertion(65, "task_pid correctly represented")
+test.add_assertion(66, "task_pid correctly represented")
+test.add_assertion(67, "task_pid correctly represented")
+test.add_assertion(68, "Job properly assigned to correct slot")
+test.add_assertion(69, "job_start correctly represented in metric set")
+test.add_assertion(70, "job_end correctly represented in metric set")
+test.add_assertion(71, "task_pid correctly represented")
+test.add_assertion(72, "task_pid correctly represented")
+test.add_assertion(73, "task_pid correctly represented")
+test.add_assertion(74, "task_pid correctly represented")
+test.add_assertion(75, "task_pid correctly represented")
+test.add_assertion(76, "task_pid correctly represented")
+test.add_assertion(77, "task_pid correctly represented")
+test.add_assertion(78, "task_pid correctly represented")
+test.add_assertion(79, "Job properly assigned to correct slot")
+test.add_assertion(80, "job_start correctly represented in metric set")
+test.add_assertion(81, "job_end correctly represented in metric set")
+test.add_assertion(82, "task_pid correctly represented")
+test.add_assertion(83, "task_pid correctly represented")
+test.add_assertion(84, "task_pid correctly represented")
+test.add_assertion(85, "task_pid correctly represented")
+test.add_assertion(86, "task_pid correctly represented")
+test.add_assertion(87, "task_pid correctly represented")
+test.add_assertion(88, "task_pid correctly represented")
+test.add_assertion(89, "task_pid correctly represented")
+test.add_assertion(90, "Job properly assigned to correct slot")
+test.add_assertion(91, "job_start correctly represented in metric set")
+test.add_assertion(92, "job_end correctly represented in metric set")
+test.add_assertion(93, "task_pid correctly represented")
+test.add_assertion(94, "task_pid correctly represented")
+test.add_assertion(95, "task_pid correctly represented")
+test.add_assertion(96, "task_pid correctly represented")
+test.add_assertion(97, "task_pid correctly represented")
+test.add_assertion(98, "task_pid correctly represented")
+test.add_assertion(99, "task_pid correctly represented")
+test.add_assertion(100, "task_pid correctly represented")
+test.add_assertion(101, "Job properly assigned to correct slot")
+test.add_assertion(102, "job_start correctly represented in metric set")
+test.add_assertion(103, "job_end correctly represented in metric set")
+test.add_assertion(104, "task_pid correctly represented")
+test.add_assertion(105, "task_pid correctly represented")
+test.add_assertion(106, "task_pid correctly represented")
+test.add_assertion(107, "task_pid correctly represented")
+test.add_assertion(108, "task_pid correctly represented")
+test.add_assertion(109, "task_pid correctly represented")
+test.add_assertion(110, "task_pid correctly represented")
+test.add_assertion(111, "task_pid correctly represented")
+test.add_assertion(112, "Job properly assigned to correct slot")
+test.add_assertion(113, "job_start correctly represented in metric set")
+test.add_assertion(114, "job_end correctly represented in metric set")
+test.add_assertion(115, "task_pid correctly represented")
+test.add_assertion(116, "task_pid correctly represented")
+test.add_assertion(117, "task_pid correctly represented")
+test.add_assertion(118, "task_pid correctly represented")
+test.add_assertion(119, "task_pid correctly represented")
+test.add_assertion(120, "task_pid correctly represented")
+test.add_assertion(121, "task_pid correctly represented")
+test.add_assertion(122, "task_pid correctly represented")
+test.add_assertion(123, "Job properly assigned to correct slot")
+test.add_assertion(124, "job_start correctly represented in metric set")
+test.add_assertion(125, "job_end correctly represented in metric set")
+test.add_assertion(126, "task_pid correctly represented")
+test.add_assertion(127, "task_pid correctly represented")
+test.add_assertion(128, "task_pid correctly represented")
+test.add_assertion(129, "task_pid correctly represented")
+test.add_assertion(130, "task_pid correctly represented")
+test.add_assertion(131, "task_pid correctly represented")
+test.add_assertion(132, "task_pid correctly represented")
+test.add_assertion(133, "task_pid correctly represented")
+test.add_assertion(134, "Job properly assigned to correct slot")
+test.add_assertion(135, "job_start correctly represented in metric set")
+test.add_assertion(136, "job_end correctly represented in metric set")
+test.add_assertion(137, "task_pid correctly represented")
+test.add_assertion(138, "task_pid correctly represented")
+test.add_assertion(139, "task_pid correctly represented")
+test.add_assertion(140, "task_pid correctly represented")
+test.add_assertion(141, "task_pid correctly represented")
+test.add_assertion(142, "task_pid correctly represented")
+test.add_assertion(143, "task_pid correctly represented")
+test.add_assertion(144, "task_pid correctly represented")
+
+
+
+test.add_assertion(145, "new job correctly replaces oldest slot")
+test.add_assertion(146, "new job_start correctly represented in metric set")
+test.add_assertion(147, "new job_end correctly represented in metric set")
+test.add_assertion(148, "new job's task replaces oldest slot")
+test.add_assertion(149, "new job's task replaces oldest slot")
+test.add_assertion(150, "new job's task replaces oldest slot")
+test.add_assertion(151, "new job's task replaces oldest slot")
+test.add_assertion(152, "new job's task replaces oldest slot")
+test.add_assertion(153, "new job's task replaces oldest slot")
+test.add_assertion(154, "new job's task replaces oldest slot")
+test.add_assertion(155, "new job's task replaces oldest slot")
+
+#test.add_assertion(156, "Job data in each metric set reflects matching text file")
 
 
 #### Start! ####
@@ -335,8 +349,6 @@ cluster.start_daemons()
 print "... wait a bit to make sure ldmsd's are up"
 time.sleep(5)
 
-cont = cluster.get_container('headnode')
-
 def verify(num, cond, cond_str):
     a = test.assertions[num]
     print a["assert-desc"] + ": " + ("Passed - "+cond_str if cond else "Failed "+cond_str)
@@ -344,310 +356,188 @@ def verify(num, cond, cond_str):
 
 json_path = args.db
 
+
+### create slurm stream data ###
+def create_events(node_count, task_count, job_id):
+    """ 
+    Generate events for node_count nodes. Each node will
+    have total_tasks / node_count tasks
+
+    The return value is an array of arrays as follows:
+    node_events[node][event]
+
+    node_events[node] is an array of events
+    node_events[node][event] is  a dictionary
+    """
+    nodes = []
+    task_start = 0 
+    for node in range(0, node_count):
+        events = []
+        init_event = {}
+        init_event['timestamp'] = int(time.time())
+        init_event['schema'] = 'mt-slurm'
+        init_event['event'] = 'init'
+        init_event['context'] = 'remote'
+        init_event['data'] = {}
+        init_event['data']['job_name'] = 'test'
+        init_event['data']['job_id'] = job_id
+        init_event['data']['subscriber_data'] = 'test'
+        init_event['data']['uid'] = 0 
+        init_event['data']['gid'] = 0 
+        init_event['data']['nnodes'] = node_count
+        init_event['data']['nodeid'] = node
+        init_event['data']['local_tasks'] = task_count / node_count
+        init_event['data']['total_tasks'] = task_count
+        events.append(init_event)
+        for task in range(0, task_count / node_count):
+            init_task = {}
+            init_task['schema'] = 'mt-slurm'
+            init_task['event'] = 'task_init_priv'
+            init_task['context'] = 'remote'
+            init_task['timestamp'] = int(time.time())
+            init_task['data'] = {}
+            init_task['data']['job_id'] = job_id
+            init_task['data']['task_pid'] = task + job_id
+            init_task['data']['task_id'] = task
+            init_task['data']['task_global_id'] = task + task_start
+            init_task['data']['nodeid'] = node
+            events.append(init_task)
+        for task in range(0, task_count / node_count):
+            exit_task = {}
+            exit_task['schema'] = 'mt-slurm'
+            exit_task['event'] = 'task_exit'
+            exit_task['context'] = 'remote'
+            exit_task['timestamp'] = int(time.time())
+            exit_task['data'] = {}
+            exit_task['data']['job_id'] = job_id
+            exit_task['data']['task_pid'] = task + job_id
+            exit_task['data']['task_id'] = task
+            exit_task['data']['task_global_id'] = task + task_start
+            exit_task['data']['nodeid'] = node
+            exit_task['data']['task_exit_status'] = 0 
+            events.append(exit_task)
+        exit_event = {}
+        exit_event['schema'] = 'mt-slurm'
+        exit_event['event'] = 'exit'
+        exit_event['context'] = 'remote'
+        exit_event['timestamp'] = int(time.time())
+        exit_event['data'] = {}
+        exit_event['data']['job_id'] = job_id
+        exit_event['nodeid'] = node
+        events.append(exit_event)
+        nodes.append(events)
+        task_start += task_count / node_count
+    return nodes
+
+def deliver_events(events):
+    for node in events:
+         node_id = node[0]['data']['nodeid'] + 1
+         cont = cluster.get_container("compute-{0}".format(node_id))
+         for event in node:
+            update_expect_file(json_path+"/event-file.json", event)
+            rc, out = cont.exec_run("ldmsd_stream_publish -h compute-{node} -x sock -p 10000"
+                              " -a munge -s test-slurm-stream -t json -f {fname}"
+                                .format(fname="/db/event-file.json",
+                                        node=node_id))
+
+
 ### job for compute-1 ###
 
 # Add job events over stream
 i = 0
-j = 0
 task_count = 8
 
-slurm_init_0['timestamp'] += 1
 data_file = "/db/Slurm_Test-data.json"
+assert_num = 1
 
-while j < 8:
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_init_0)
-    cont = cluster.get_container("compute-1")
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-    while i < task_count:
-        slurm_task_init_0['timestamp'] += 1
-        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_init_0)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file))
-        if out:
-            print(out)
-        slurm_task_exit_0['timestamp'] += 1
-        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_exit_0)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file))
-        if out:
-            print(out)
-        slurm_task_init_0['data']['task_pid'] += 1
-        slurm_task_init_0['data']['task_id'] += 1
-        slurm_task_init_0['data']['task_global_id'] += 1
-        slurm_task_exit_0['data']['task_pid'] += 1
-        slurm_task_exit_0['data']['task_id'] += 1
-        slurm_task_exit_0['data']['task_global_id'] += 1
-        i += 1
+def test_jobs(node_count, jobs):
+    global assert_num
+    for job in range(0, len(jobs)):
+        for nodeid in range(0, node_count):
+            node_id = nodeid + 1
+            cnt = 0
+            task_inits = []
+            job_inits = []
+            job_exits = []
+            events = list(jobs[job][nodeid])
+            for i in range(0, len(events)):
+                if events[i]['event'] == 'init':
+                    job_inits.append(events[i])
+                elif events[i]['event'] == 'task_init_priv':
+                    task_inits.append(events[i])
+                elif events[i]['event'] == 'exit':
+                    job_exits.append(events[i])
+            cid = nodeid+10001
 
-    slurm_exit_0['timestamp'] = slurm_init_0['timestamp'] + 3600
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_exit_0)
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-    rc, out = cont.ldms_ls("-h compute-1 -x sock -p 10000 -a munge -l")
-    cnt = 0
-    k = 0
-    tid = 1
-    for line in (out.split('\n')):
-        if cnt == 2:
-            ids = line.split()[3].split(',')
-            print(ids)
-            verify(1, int(ids[j]) == int(slurm_init_0['data']['job_id']), 'correct job_id fills next slot')
-        elif cnt == 10:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i <= j:
-                verify(2, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented')
-                i += 1
-        elif cnt == 11:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i <= j:
-                verify(3, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented')
-                i += 1
-        if cnt == 14+k:
-            i = 0
-            if k > j:
-                break
-            tids = line.split()[3].split(',')
-            while i < 8:
-                verify(3, int(tids[i]) == tid, 'compute-1 correct task pid in metric set')
-                print(str(tids[i]) + ' '+str(tid))
-                tid += 1
-                i += 1
-            k += 1
-        cnt += 1
+            cont = cluster.get_container("compute-{node_id}".format(node_id=node_id))
+            rc, out = cont.ldms_ls("-h compute-{node_id} -x sock -p 10000 -a munge -l"
+                                   .format(node_id=node_id))
+            cnt = 0
+            k = 0
+            for line in (out.split('\n')):
+                if cnt == 2:
+                    ids = line.split()[3].split(',')
+                    verify(assert_num, int(ids[job]) == int(job_inits[0]['data']['job_id']),
+                           'correct job_id fills next slot')
+                    print(ids[job])
+                    print(job_inits[0]['data']['job_id'])
+                    assert_num += 1
+                elif cnt == 10:
+                    tstamp = line.split()[3].split(',')
+                    verify(assert_num, int(tstamp[job]) == job_inits[0]['timestamp'],
+                               'with mult jobs running for Job '+str(job_inits[0]['data']['job_id']))
+                    assert_num += 1
+                elif cnt == 11:
+                    tstamp = line.split()[3].split(',')
+                    verify(assert_num, int(tstamp[job]) == job_exits[0]['timestamp'],
+                           'with mutl jobs running, for Job '+str(job_exits[0]['data']['job_id']))
+                    assert_num += 1
+                if cnt == 14+job:
+                    i = 0
+                    task_ids = line.split()[3].split(',')
+                    for i in range(len(task_inits)):
+                        verify(assert_num, int(task_ids[i]) == int(task_inits[i]['data']['task_pid']),
+                               'with mult jobs running for Job '+str(job_inits[0]['data']['job_id']))
+                        assert_num += 1
+                    break
+                cnt += 1
+
+# array to store created jobs and nested events
+jobs = []
+j = 0
+
+# add jobs to compute-1
+job_id = 12345
+while j < 4:
+    events_1_8 = create_events(2, 8, job_id)
+    jobs.append(events_1_8)
+    deliver_events(events_1_8)
+    job_id += 1
     j += 1
-    i = 0
-    slurm_init_0['timestamp'] += 1
-    slurm_init_0['data']['job_id'] += 1
-    slurm_init_0['data']['job_name'] = "compute-1-job_"+str(j)
-    slurm_exit_0['data']['job_id'] += 1
 
-    slurm_task_init_0['data']['task_id'] = 0
-    slurm_task_exit_0['data']['task_id'] = 0
-    slurm_task_init_0['data']['job_id'] += 1
-    slurm_task_exit_0['data']['job_id'] += 1
-
-print("compute-1 ldmsd_stream_publish finished")
-
-
-### compute-2 ###
-# add job events over stream
-
-slurm_init_1['timestamp'] += 1
-task_count = 16
-i = 0
-j=0
-while j < 8:
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_init_1)
-    cont = cluster.get_container("compute-2")
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-    while i < task_count:
-        slurm_task_init_1['timestamp'] += 1
-        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_init_1)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file))
-        if out:
-            print(out)
-        slurm_task_exit_1['timestamp'] += 1
-        update_expect_file(json_path+"/Slurm_Test-data.json", slurm_task_exit_1)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
-                                " -a munge -s test-slurm-stream -t json -f {fname}"
-                                .format(fname=data_file))
-        if out:
-            print(out)
-        slurm_task_init_1['data']['task_pid'] += 1
-        slurm_task_init_1['data']['task_id'] += 1
-        slurm_task_init_1['data']['task_global_id'] += 1
-        slurm_task_exit_1['data']['task_pid'] += 1
-        slurm_task_exit_1['data']['task_id'] += 1
-        slurm_task_exit_1['data']['task_global_id'] += 1
-        i += 1
-
-    slurm_exit_1['timestamp'] = slurm_init_1['timestamp'] + 3600
-    update_expect_file(json_path+"/Slurm_Test-data.json", slurm_exit_1)
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-    rc, out = cont.ldms_ls("-h compute-2 -x sock -p 10000 -a munge -l")
-    cnt = 0
-    k = 0
-    tid = 100
-    for line in (out.split('\n')):
-        if cnt == 2:
-            ids = line.split()[3].split(',')
-            print(ids)
-            verify(1, int(ids[j]) == int(slurm_init_1['data']['job_id']), 'correct job_id fills next slot')
-        elif cnt == 10:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i <= j:
-                print(tstamp)
-                verify(3, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented')
-                i += 1
-        elif cnt == 11:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i <= j:
-                verify(3, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented')
-                i += 1
-        if cnt == 14+k:
-            i = 0
-            if k > j:
-                break
-            tids = line.split()[3].split(',')
-            while i < 16:
-                verify(3, int(tids[i]) == tid, ' compute-2 correct task pid in metric set')
-                tid += 1
-                i += 1
-            k += 1
-        cnt += 1
+job_id = 12355
+j = 0
+while j < 4:
+    events_1_16 = create_events(2, 16, job_id)
+    jobs.append(events_1_16)
+    deliver_events(events_1_16)
+    job_id += 1
     j += 1
-    i = 0
-    slurm_init_1['timestamp'] += 1
-    slurm_init_1['data']['job_id'] += 1
-    slurm_init_1['data']['job_name'] = "compute-2-job_"+str(j)
-    slurm_exit_1['data']['job_id'] += 1
 
-    slurm_task_init_1['data']['task_id'] = 0
-    slurm_task_exit_1['data']['task_id'] = 0
-    slurm_task_init_1['data']['job_id'] += 1
-    slurm_task_exit_1['data']['job_id'] += 1
+test_jobs(2, jobs)
 
-print("compute-2 ldmsd_stream_publish finished")
+new_event_node1 = create_events(1, 8, 12353)
+deliver_events(new_event_node1)
+jobs = [ new_event_node1 ]
+test_jobs(1, jobs)
 
-
-# Check to ensure jobs are correctly represented with max number of jobs running
+'''
+test_results = open(json_path+"/Slurm_Test-results.txt", "w")
 for host in ['compute-1', 'compute-2']:
-    if host == "compute-1":
-        jid = 12345
-        tid = 1
-    else:
-        jid = 12355
-        tid = 100
     cont = cluster.get_container(host)
-    rc, out = cont.ldms_ls("-h {host} -p 10000 -x sock -a munge -l".format(host=host))
+    rc, out = cont.ldms_ls("-h {host} -p 10000 -a munge -l".format(host=host))
     cnt = 0
-    k = 0
-    for line in (out.split('\n')):
-        if cnt == 2:
-            i = 0
-            ids = line.split()[3].split(',')
-            while i < 8:
-                verify(4, int(ids[i]) == jid+i, 'job_ids correctly represented with max jobs')
-                i += 1
-        elif cnt == 10:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i < 8:
-                print(tstamp)
-                verify(4, int(tstamp[i]) == 1561661494+i, 'job_start correctly represented with max jobs')
-                i += 1
-        elif cnt == 11:
-            i = 0
-            tstamp = line.split()[3].split(',')
-            while i < 8:
-                verify(4, int(tstamp[i]) == 1561661494+i+3600, 'job_end correctly represented with max jobs')
-                i += 1
-        if cnt == 14+k:
-            i = 0
-            if k == 8:
-                break
-            tids = line.split()[3].split(',')
-            if host == "compute-1":
-                while i < 8:
-                    verify(4, int(tids[i]) == tid, 'compute-1 correct task pid in metric set with max jobs')
-                    tid += 1
-                    i += 1
-            else:
-                while i < 16:
-                    verify(4, int(tids[i]) == tid, 'compute-2 correct task pid in metric set with max jobs')
-                    tid += 1
-                    i += 1
-            k += 1
-        cnt += 1
-
-# Add extra job, and ensure it takes oldest job slot
-slurm_init_0['data']['job_id'] = 12353
-slurm_init_0['timestamp'] = 1561661512
-
-slurm_task_init_0['data']['job_id'] = 12353
-slurm_task_init_0['timestamp'] = slurm_init_0['timestamp']
-
-slurm_task_exit_0['data']['job_id'] = 12353
-slurm_task_exit_0['timestamp'] = slurm_task_init_0['timestamp'] + 3600
-
-slurm_exit_0['data']['job_id'] = 12353
-slurm_exit_0['timestamp'] = slurm_init_0['timestamp'] + 3600
-
-slurm_init_1['data']['job_id'] = 12363
-slurm_init_1['timestamp'] = 1561661512
-
-slurm_task_init_1['data']['job_id'] = 12363
-slurm_task_init_1['timestamp'] = slurm_init_1['timestamp']
-
-slurm_task_exit_1['data']['job_id'] = 12363
-slurm_task_exit_1['timestamp'] = slurm_task_init_1['timestamp']+3600
-
-slurm_exit_1['data']['job_id'] = 12363
-slurm_exit_1['timestamp'] = slurm_init_1['timestamp'] + 3600
-
-last_job_0 = [ slurm_init_0, slurm_task_init_0, slurm_task_exit_0, slurm_exit_0 ]
-last_job_1 = [ slurm_init_1, slurm_task_init_1, slurm_task_exit_1, slurm_exit_1 ]
-
-for event in last_job_0:
-    update_expect_file(json_path+"/Slurm_Test-data.json", event)
-    cont = cluster.get_container("compute-1")
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-1 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-
-for event in last_job_1:
-    update_expect_file(json_path+"/Slurm_Test-data.json", event)
-    cont = cluster.get_container("compute-2")
-    rc, out = cont.exec_run("ldmsd_stream_publish -h compute-2 -x sock -p 10000"
-                            " -a munge -s test-slurm-stream -t json -f {fname}"
-                            .format(fname=data_file))
-
-# check last job filled oldest slot
-cont = cluster.get_container("compute-1")
-rc, out = cont.ldms_ls("-h compute-1 -p 10000 -x sock -a munge -l")
-cnt = 0
-for line in (out.split('\n')):
-    if cnt == 2:
-        ids = line.split()[3].split(',')
-        print(ids)
-        verify(2, int(ids[0]) == 12353, 'slots full, oldest job slot selected')
-        break
-    cnt += 1
-
-# check job fills oldest slot on compute-1
-cont = cluster.get_container("compute-2")
-rc, out = cont.ldms_ls("-h compute-2 -p 10000 -x sock -a munge -l")
-cnt = 0
-for line in (out.split('\n')):
-    if cnt == 2:
-        ids = line.split()[3].split(',')
-        print(ids)
-        verify(2, int(ids[0]) == 12363, 'slots full, oldest job slot selected')
-        break
-    cnt += 1
-
-# check job fills oldest slot on compute-2
-test_results = open(json_path+"/Slurm_Test-results.txt", 'w')
-for host in [ 'compute-1', 'compute-2' ]:
-    cont = cluster.get_container(host)
-    rc, out = cont.ldms_ls("-h {host} -p 10000 -x sock -a munge -l".format(host=host))
-    cnt = 0
-    for line in (out.split('\n')):
+    for line in out.split('\n'):
         if cnt == 0:
             pass
         else:
@@ -657,8 +547,9 @@ for host in [ 'compute-1', 'compute-2' ]:
 test_results.close()
 results = open(json_path+'/Slurm_Test-results.txt').read()
 expected_data = open(json_path+'/Slurm_Test-static.txt').read()
-verify(5, (results == expected_data), 'ldms_ls == text_file')
-print('Test Finished')
+verify(156, (results == expected_data), 'ldms_ls == text_file')
+'''
+print "-- Test Finished --"
 
 test.finish()
 
