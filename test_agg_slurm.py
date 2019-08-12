@@ -48,7 +48,7 @@ ap = argparse.ArgumentParser(description =
                          "with slurm job ID verification." )
 ap.add_argument("--clustername", type = str,
                 help = "The name of the cluster. The default is "
-                "USER-test3-COMMIT_ID.")
+                "USER-test_agg_slurm-COMMIT_ID.")
 ap.add_argument("--prefix", type = str,
                 default = default_prefix,
                 help = "The OVIS installation prefix.")
@@ -73,7 +73,7 @@ PREFIX = args.prefix
 COMMIT_ID = get_ovis_commit_id(PREFIX)
 SRC = args.src
 CLUSTERNAME = args.clustername if args.clustername else \
-              "{}-test3-{:.7}".format(USER, COMMIT_ID)
+              "{}-test_agg_slurm-{:.7}".format(USER, COMMIT_ID)
 DB = args.db
 SLURM_NOTIFIER = args.slurm_notifier
 if SLURM_NOTIFIER == "__find_from_prefix__":
@@ -91,7 +91,7 @@ if SLURM_NOTIFIER == "__find_from_prefix__":
 #### spec #### -------------------------------------------------------
 spec = {
     "name" : CLUSTERNAME,
-    "description" : "{}'s test3 cluster".format(USER),
+    "description" : "{}'s test_agg_slurm cluster".format(USER),
     "type" : "NA",
     "templates" : { # generic template can apply to any object by "!extends"
         "compute-node" : {
