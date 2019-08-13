@@ -41,6 +41,86 @@ class cached_property(object):
             cache[self.name] = val = self.func(obj)
             return val
 
+_LS_L_HDR = r'(?:(?P<set_name>[^:]+): .* last update: (?P<ts>.*))'
+_LS_LV_HDR_APP = r'(?P<hdr_app>APPLICATION SET INFORMATION [-]+$)'
+_LS_LV_HDR_META = r'(?P<hdr_meta>METADATA [-]+$)'
+_LS_LV_HDR_DATA = r'(?P<hdr_data>DATA [-]+$)'
+_LS_LV_ATTR = r'(?:(?P<attr_name>[^:]+) : (?P<attr_value>.*))'
+_LS_LV_HDR_END = r'(?P<hdr_end>[-]+$)'
+_LS_L_DATA = r'(?:(?P<F>.) (?P<type>\S+)\s+(?P<metric_name>\S+)\s+' \
+             r'(?P<metric_value>.*))'
+_LS_RE = re.compile(
+            _LS_L_HDR + "|" +
+            _LS_LV_HDR_APP + "|" +
+            _LS_LV_HDR_META + "|" +
+            _LS_LV_HDR_DATA + "|" +
+            _LS_LV_ATTR + "|" +
+            _LS_LV_HDR_END + "|" +
+            _LS_L_DATA
+         )
+_TYPE_FN = {
+    "char": str,
+    "char[]": str,
+
+    "u8": int,
+    "s8": int,
+    "u16": int,
+    "s16": int,
+    "u32": long,
+    "s32": long,
+    "u64": long,
+    "s64": long,
+    "f32": float,
+    "d64": float,
+
+    "u8[]": lambda x: map(int, x.split(',')),
+    "s8[]": lambda x: map(int, x.split(',')),
+    "u16[]": lambda x: map(int, x.split(',')),
+    "s16[]": lambda x: map(int, x.split(',')),
+    "u32[]": lambda x: map(long, x.split(',')),
+    "s32[]": lambda x: map(long, x.split(',')),
+    "u64[]": lambda x: map(long, x.split(',')),
+    "s64[]": lambda x: map(long, x.split(',')),
+    "f32[]": lambda x: map(float, x.split(',')),
+    "d64[]": lambda x: map(float, x.split(',')),
+}
+
+def parse_ldms_ls(txt):
+    """Parse output of `ldms_ls -l [-v]` into list of dict (1 dict per set)"""
+    ret = list()
+    for l in txt.splitlines():
+        if not l: # empty line, end of set
+            lset = None
+            data = None
+            meta = None
+            continue
+        m = _LS_RE.match(l.strip())
+        if not m:
+            raise RuntimeError("Bad line format: {}".format(l))
+        m = m.groupdict()
+        if m["set_name"]: # new set
+            data = dict() # placeholder for metric data
+            lset = {
+                    "name" : m["set_name"],
+                    "ts" : m["ts"],
+                    "data" : data,
+                }
+            ret.append(lset)
+        elif m["hdr_app"]:
+            meta = dict()
+            lset["app_info"] = meta
+        elif m["hdr_meta"]:
+            meta = dict()
+            lset["meta_info"] = meta
+        elif m["hdr_data"]:
+            meta = dict()
+            lset["data_info"] = meta
+        elif m["attr_name"]:
+            meta[m["attr_name"]] = m["attr_value"]
+        elif m["metric_name"]: # data
+            data[m["metric_name"]] = _TYPE_FN[m["type"]](m["metric_value"])
+    return ret
+
 def env_dict(env):
     """Make env dict(NAME:VALUE) from list(NAME=VALUE) or dict(NAME:VALUE)
 
