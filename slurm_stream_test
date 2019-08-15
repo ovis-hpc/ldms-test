@@ -13,7 +13,7 @@ import logging
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, jprint, \
-                      add_common_args, get_cluster_name, get_ovis_commit_id
+                      add_common_args, process_args
 
 #if __name__ != "__main__":
 #    raise RuntimeError("This should not be imported as a module.")
@@ -37,13 +37,14 @@ ap = argparse.ArgumentParser(description =
                          "with slurm data and job slot verification." )
 add_common_args(ap)
 args = ap.parse_args()
+process_args(args)
 
 #### config variables #### ------------------------------
 USER = args.user
 PREFIX = args.prefix
-COMMIT_ID = get_ovis_commit_id(PREFIX)
+COMMIT_ID = args.commit_id
 SRC = args.src
-CLUSTERNAME = get_cluster_name(args)
+CLUSTERNAME = args.clustername
 DB = args.data_root
 
 #### spec #### -------------------------------------------------------
