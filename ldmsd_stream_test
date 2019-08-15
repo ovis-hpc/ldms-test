@@ -7,22 +7,16 @@ import pwd
 import TADA
 import time
 import json
+import logging
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, D
+from LDMS_Test import LDMSDCluster, D, \
+                      add_common_args, get_ovis_commit_id, get_cluster_name
 
-def get_ovis_commit_id(prefix):
-    """Get commit_id of the ovis installation"""
-    try:
-        path = "{}/bin/ldms-pedigree".format(prefix)
-        f = open(path)
-        for l in f.readlines():
-            if l.startswith("echo commit-id: "):
-                e, c, commit_id = l.split()
-                return commit_id
-    except:
-        pass
-    return "-"
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
 
 def update_expect_file(fname, data):
     s = json.dumps(data)
@@ -30,11 +24,9 @@ def update_expect_file(fname, data):
     f.write(s)
     f.close()
 
-USER = pwd.getpwuid(os.geteuid())[0]
-
 spec = {
     "name" : "REPLACE_ME",
-    "description" : "{}'s cluster for ldmsd_stream_test".format(USER),
+    "description" : "cluster for ldmsd_stream_test",
     "templates" : { # generic template can apply to any object by "!extends"
         "compute-node" : {
             "daemons" : [
@@ -133,7 +125,7 @@ spec = {
     "cap_add": [ "SYS_PTRACE" ],
     "image": "ovis-centos-build",
     "ovis_prefix": "REPLACE_ME",
-    "env" : { "TADA_USER": USER },
+    "env" : {  },
     "mounts": [ ],
 }
 
@@ -141,26 +133,18 @@ if __name__ == "__main__":
     if sys.flags.interactive:
         execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
     parser = argparse.ArgumentParser(description="ldmsd_stream_publish/subscribe FVT test")
-    parser.add_argument("--data_root", required=True, help="The test data root path")
-    parser.add_argument("--tada_addr",
-                        help="The test automation server host and port as host:port.",
-                        default="tada-host:9862")
-    parser.add_argument("--prefix",
-                        help="The directory where the test target is installed.",
-                        default="/opt/ovis")
-    parser.add_argument("--src", type=str,
-                        help="The OVIS source tree (for debugging).")
-
+    add_common_args(parser)
     args = parser.parse_args()
 
     COMMIT_ID = get_ovis_commit_id(args.prefix)
-    cluster_name = "{}-ldmsd_stream_test-{:.7}".format(USER, COMMIT_ID)
+    cluster_name = get_cluster_name(args)
 
     spec["ovis_prefix"] = args.prefix
     spec["name"] = cluster_name
     spec["mounts"] += [ "{}:/data:rw".format(args.data_root) ]
     if args.src:
         spec["mounts"] += [ "{0}:{0}:ro".format(args.src) ]
+    spec["env"]["TADA_USER"] = args.user
     spec["env"]["TADA_ADDR"] = args.tada_addr
 
     # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
@@ -168,7 +152,7 @@ if __name__ == "__main__":
                      test_type = "SVT",
                      test_name = "ldmsd_stream_test",
                      test_desc = "LDMSD stream system verification test",
-                     test_user = USER,
+                     test_user = args.user,
                      commit_id = COMMIT_ID,
                      tada_addr = args.tada_addr)
     test.add_assertion(0, 'ldmsd_stream_publish of JSON data to stream-sampler-1 succeeds')
