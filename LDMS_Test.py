@@ -181,6 +181,16 @@ def tada_addr(s):
     else:
         return s + ":9862" # default port
 
+def get_cluster_name(parsed_args):
+    """Derive `clustername` from the parsed CLI arguments"""
+    if parsed_args.clustername:
+        return parsed_args.clustername
+    uname = parsed_args.user
+    test = os.path.basename(sys.argv[0])
+    commit_id = get_ovis_commit_id(parsed_args.prefix)
+    parsed_args.clustername = "{}-{}-{:.7}".format(uname, test, commit_id)
+    return parsed_args.clustername
+
 def add_common_args(parser):
     """Add common arguments for test scripts"""
     _USER = pwd.getpwuid(os.geteuid())[0]
@@ -196,21 +206,21 @@ def add_common_args(parser):
             help = "The path to OVIS source tree (for gdb). " \
             "If not specified, src tree won't be mounted.")
     parser.add_argument("--data_root", "--data-root", type = str,
-            default = "{}/db".format(os.path.realpath(sys.path[0])),
-            help = "The path to host db directory." )
+            help = "The path to host db directory. The default is "
+                   "'/home/{user}/db/{clustername}'" )
     parser.add_argument("--tada_addr", "--tada-addr", type=tada_addr,
             help="The test automation server host and port as host:port.",
             default="tada-host:9862")
 
-def get_cluster_name(parsed_args):
-    """Derive `clustername` from the parsed CLI arguments"""
-    if parsed_args.clustername:
-        return parsed_args.clustername
-    uname = parsed_args.user
-    test = os.path.basename(sys.argv[0])
-    commit_id = get_ovis_commit_id(parsed_args.prefix)
-    parsed_args.clustername = "{}-{}-{:.7}".format(uname, test, commit_id)
-    return parsed_args.clustername
+def process_args(parsed_args):
+    """Further process the parsed common arguments"""
+    args = parsed_args
+    args.clustername = get_cluster_name(args)
+    if not args.data_root:
+        args.data_root = "/home/{a.user}/db/{a.clustername}".format(a = args)
+    if not os.path.exists(args.data_root):
+        os.makedirs(args.data_root)
+    args.commit_id = get_ovis_commit_id(args.prefix)
 
 DEEP_COPY_TBL = {
         dict: lambda x: { k:deep_copy(v) for k,v in x.iteritems() },
