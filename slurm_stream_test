@@ -129,7 +129,8 @@ spec = {
                         "component_id=%component_id%",
                         "stream=test-slurm-stream",
                         "instance=%hostname%/%plugin%",
-                        "producer=%hostname%"
+                        "producer=%hostname%",
+                        "task_count=16",
                     ],
                     "start" : True,
                 }
@@ -359,7 +360,7 @@ json_path = args.db
 
 ### create slurm stream data ###
 def create_events(node_count, task_count, job_id):
-    """ 
+    """
     Generate events for node_count nodes. Each node will
     have total_tasks / node_count tasks
 
@@ -370,7 +371,7 @@ def create_events(node_count, task_count, job_id):
     node_events[node][event] is  a dictionary
     """
     nodes = []
-    task_start = 0 
+    task_start = 0
     for node in range(0, node_count):
         events = []
         init_event = {}
@@ -382,8 +383,8 @@ def create_events(node_count, task_count, job_id):
         init_event['data']['job_name'] = 'test'
         init_event['data']['job_id'] = job_id
         init_event['data']['subscriber_data'] = 'test'
-        init_event['data']['uid'] = 0 
-        init_event['data']['gid'] = 0 
+        init_event['data']['uid'] = 0
+        init_event['data']['gid'] = 0
         init_event['data']['nnodes'] = node_count
         init_event['data']['nodeid'] = node
         init_event['data']['local_tasks'] = task_count / node_count
@@ -414,7 +415,7 @@ def create_events(node_count, task_count, job_id):
             exit_task['data']['task_id'] = task
             exit_task['data']['task_global_id'] = task + task_start
             exit_task['data']['nodeid'] = node
-            exit_task['data']['task_exit_status'] = 0 
+            exit_task['data']['task_exit_status'] = 0
             events.append(exit_task)
         exit_event = {}
         exit_event['schema'] = 'mt-slurm'
