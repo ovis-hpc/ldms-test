@@ -1,0 +1,35 @@
+#!/usr/bin/python
+
+import re
+import os
+import sys
+import docker
+import argparse
+
+from LDMS_Test import DockerCluster, Network
+
+parser = argparse.ArgumentParser(description = "List virtual clusters")
+parser.add_argument("--long", "-l", action = "store_true",
+                    help="Also list containers.")
+parser.add_argument("--match", "-m", type=str, default='.*',
+                    help="Regular expression for cluster name filtering")
+args = parser.parse_args()
+
+exp = re.compile(args.match)
+
+dc = docker.client.from_env()
+nets = [ Network(n) for n in dc.networks.list() ]
+nets = [ n for n in nets if n.labels and n.labels.get('DockerCluster') \
+                            and exp.match(n.name) ]
+if not nets:
+    if args.match == '.*':
+        print("-- no cluster running --")
+    else:
+        print("-- no cluster matching: `{}` --".format(args.match))
+for n in nets:
+    print(n.name)
+    if args.long:
+        print("  containers:")
+        for cont in n.containers:
+            host = cont.client.info()["Swarm"]["NodeAddr"]
+            print("    {} (on host {})".format(n.name, host))
