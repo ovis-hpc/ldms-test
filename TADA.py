@@ -93,6 +93,12 @@ class Test(object):
         s = "{t.test_suite}:{t.test_type}:{t.test_name}:{t.test_user}:" \
             "{t.commit_id}:{ts}".format(t = self, ts = int(time.time()))
         self.test_id = binascii.hexlify(hashlib.sha256(s).digest())
+        log.info("starting test `{}`".format(self.test_name))
+        log.info("  test-id: {}".format(self.test_id))
+        log.info("  test-suite: {}".format(self.test_suite))
+        log.info("  test-name: {}".format(self.test_name))
+        log.info("  test-user: {}".format(self.test_user))
+        log.info("  commit-id: {}".format(self.commit_id))
         msg = {
                 "msg-type": "test-start",
                 "test-suite": self.test_suite,
@@ -120,17 +126,24 @@ class Test(object):
         msg["assert-cond"] = cond_str
         msg["test-status"] = Test.PASSED if cond else Test.FAILED
         self._send(msg)
+        log.info("assertion {}, {}: {}" \
+                 .format(msg["assert-no"], msg["assert-desc"],
+                         msg["test-status"]))
 
     def finish(self):
         for num, msg in self.assertions.iteritems():
             if msg["test-status"] == Test.SKIPPED:
                 self._send(msg)
+                log.info("assertion {}, {}: {}" \
+                         .format(msg["assert-no"], msg["assert-desc"],
+                                 msg["test-status"]))
         msg = {
                 "msg-type": "test-finish",
                 "test-id": self.test_id,
                 "timestamp": time.time(),
               }
         self._send(msg)
+        log.info("test {} ended".format(self.test_name))
 
 class SQLModel(object):
     """SQL data model base class
