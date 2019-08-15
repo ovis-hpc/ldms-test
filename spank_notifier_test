@@ -8,15 +8,23 @@ import json
 import time
 import docker
 import argparse
+import logging
 
-from LDMS_Test import LDMSDCluster, LDMSDContainer
 import TADA
+
+from LDMS_Test import LDMSDCluster, LDMSDContainer, \
+                      add_common_args, get_cluster_name, get_ovis_commit_id
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
 
 dc = docker.from_env()
 USER = pwd.getpwuid(os.geteuid())[0]
 
 spec = {
-    "name" : USER+"-spank_notifier_test-cluster",
+    "name" : "TO-BE-REPLACED",
     "description" : "spank_notifier_test cluster",
     "type" : "NA",
     "templates" : {
@@ -76,11 +84,6 @@ spec = {
     "libdir": "/opt/ovis/lib64",
 }
 
-def verify(test, num, cond, cond_str):
-    a = test.assertions[num]
-    print(a["assert-desc"] + ": " + ("Passed" if cond else "Failed"))
-    test.assert_test(num, cond, cond_str)
-
 def make_dict_from_out(out):
     env = out.split('\n')
     d = {}
@@ -96,42 +99,31 @@ def remove_job_out(cluster):
         rc, out = cont.exec_run("rm -f /db/crash_env_{node}.out".format(node=cont.hostname))
         rc, out = cont.exec_run("rm -f /db/spank_stream_{node}.out".format(node=cont.hostname))
 
-def get_ovis_commit_id(prefix):
-    """Get commit_id of the ovis installation"""
-    try:
-        path = "{}/bin/ldms-pedigree".format(prefix)
-        f = open(path)
-        for l in f.readlines():
-            if l.startswith("echo commit-id: "):
-                e, c, commit_id = l.split()
-                return commit_id
-    except:
-        pass
-    return "-"
+def get_mount_libdir(prefix, mount_prefix):
+    if os.path.exists(prefix + "/lib64"):
+        return mount_prefix + "/lib64"
+    return mount_prefix + "/lib"
 
 if __name__ == "__main__":
     if sys.flags.interactive:
         execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
     parser = argparse.ArgumentParser(description="Run an FVT test")
-    parser.add_argument("--data_root", required=True, help="The test data root path")
-    parser.add_argument("--tada_addr",
-                        help="The test automation server host and port as host:port.",
-                        default="localhost:9862")
-    parser.add_argument("--prefix",
-                        help="The directory where libraries are installed.",
-                        default="/opt/ovis")
+    add_common_args(parser)
     parser.add_argument("--libdir",
                         help="The directory where the test target is installed.",
-                        default="/opt/ovis/lib64")
-    parser.add_argument("--home", help="Home directory for debugging.")
-    parser.add_argument("--tada-addr",
-                        help="The TADA Daemon address as a host:port string")
+                        default="__find_from_prefix__")
     args = parser.parse_args()
 
     COMMIT_ID = get_ovis_commit_id(args.prefix)
+    spec["name"] = get_cluster_name(args)
 
-    test = TADA.Test("Slurm_Plugins", "FVT", "slurm_notifier_test",
-                     commit_id = COMMIT_ID, tada_addr=args.tada_addr)
+    test = TADA.Test(test_suite = "Slurm_Plugins",
+                     test_type = "FVT",
+                     test_name = "spank_notifier_test",
+                     test_desc = "The test to verify ldmsd-stream SPANK notifier.",
+                     test_user = args.user,
+                     commit_id = COMMIT_ID,
+                     tada_addr=args.tada_addr)
     test.add_assertion(0, 'Missing stream listener on node-1 does not affect job execution')
     test.add_assertion(1, 'Missing stream listener on node-2 does not affect job execution')
     test.add_assertion(2, "first event on node-1 is 'init'")
@@ -148,12 +140,14 @@ if __name__ == "__main__":
     test.add_assertion(13, "Killing stream listener does not affect job execution on node-2")
     test.start()
 
-    print("-- Create the cluster --")
+    log.info("-- Create the cluster --")
     spec['ovis_prefix'] = args.prefix
     spec['mounts'] = [ args.data_root + ':/db:rw' ]
-    if args.home:
-        spec['mounts'].append("{home}:{home}:rw".format(home=args.home))
+    if args.src:
+        spec['mounts'].append("{src}:{src}:rw".format(src=args.src))
     # modify slurm_notifier path in spec
+    if args.libdir == "__find_from_prefix__":
+        args.libdir = get_mount_libdir(args.prefix, "/opt/ovis")
     spec["libdir"] = args.libdir
     try:
         cluster = LDMSDCluster.get(spec["name"], create=False, spec = spec)
@@ -162,7 +156,7 @@ if __name__ == "__main__":
         pass
     cluster = LDMSDCluster.get(spec["name"], create=True, spec = spec)
 
-    print("-- Start daemons --")
+    log.info("-- Start daemons --")
     cluster.start_daemons()
 
     # Test Strategy:
@@ -181,7 +175,7 @@ if __name__ == "__main__":
     #    variables match the data received on the LDMSD Stream
     #
 
-    print("-- Create the sbatch and job scripts --")
+    log.info("-- Create the sbatch and job scripts --")
     cont = cluster.get_container("node-1")
     cont.write_file('/db/show_spank_env.sh',
                     '#!/bin/bash\n'\
@@ -195,10 +189,10 @@ if __name__ == "__main__":
                     'srun bash /db/show_spank_env.sh\n')
 
     # If there is no one listening for stream events, the job still runs.
-    print("-- Submitting job with no stream listener --", end='')
+    log.info("-- Submitting job with no stream listener --")
     remove_job_out(cluster)
     jobid = cluster.sbatch("/db/spank_job.sh")
-    print("jobid = {0}".format(jobid))
+    log.info("  jobid = {0}".format(jobid))
     time.sleep(10) # enough time for the job to run
 
     # Read the environment file to confirm that the job ran
@@ -221,13 +215,13 @@ if __name__ == "__main__":
                                 "-s slurm -f /db/spank_stream_{node}.out "\
                                 "-D".format(node=cont.hostname))
         if rc != 0:
-            print(out)
+            log.info(out)
             cluster.remove()
             sys.exit(1)
 
-    print("-- Submitting job with listener --", end='')
+    log.info("-- Submitting job with listener --")
     jobid = cluster.sbatch("/db/spank_job.sh")
-    print("jobid = {0}".format(jobid))
+    log.info("  jobid = {0}".format(jobid))
     time.sleep(3) # enough time for the job to run
 
     # Read the environment file to see that it ran
@@ -296,9 +290,9 @@ if __name__ == "__main__":
 
     remove_job_out(cluster)
 
-    print("-- Submitting job that crashes listener --", end='')
+    log.info("-- Submitting job that crashes listener --")
     jobid = cluster.sbatch("/db/spank_job_2.sh")
-    print("jobid = {0}".format(jobid))
+    log.info("  jobid = {0}".format(jobid))
     time.sleep(3) # enough time for the job to run
 
     for node in [ 'node-1', 'node-2' ]:
