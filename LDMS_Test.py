@@ -13,6 +13,7 @@ import pdb
 from functools import wraps
 from StringIO import StringIO
 from distutils.version import LooseVersion
+from distutils.spawn import find_executable
 
 # `D` Debug object to store values for debugging
 class Debug(object): pass
@@ -159,6 +160,57 @@ def get_ovis_commit_id(prefix):
     except:
         pass
     return None
+
+def guess_ovis_prefix():
+    """Guess ovis prefix from the environment"""
+    sbin_ldmsd = find_executable("ldmsd")
+    if sbin_ldmsd:
+        prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+    else:
+        prefix = "/opt/ovis"
+    return prefix
+
+ADDR_RE = re.compile(r'^(?P<addr>[^:]+)(?:[:](?P<port>\d+))?$')
+def tada_addr(s):
+    m = ADDR_RE.match(s)
+    if not m:
+        raise ValueError("Bad address format")
+    m = m.groupdict()
+    if m["port"]:
+        return s # already has port specified
+    else:
+        return s + ":9862" # default port
+
+def add_common_args(parser):
+    """Add common arguments for test scripts"""
+    _USER = pwd.getpwuid(os.geteuid())[0]
+    parser.add_argument("--clustername", type = str,
+            help = "The name of the cluster. The default is "
+            "{USER}-{TEST_NAME}-{COMMIT_ID}.")
+    parser.add_argument("--user", default = _USER,
+            help = "Specify the user who run the test.")
+    parser.add_argument("--prefix", type = str,
+            default = guess_ovis_prefix(),
+            help = "The OVIS installation prefix.")
+    parser.add_argument("--src", type = str,
+            help = "The path to OVIS source tree (for gdb). " \
+            "If not specified, src tree won't be mounted.")
+    parser.add_argument("--data_root", "--data-root", type = str,
+            default = "{}/db".format(os.path.realpath(sys.path[0])),
+            help = "The path to host db directory." )
+    parser.add_argument("--tada_addr", "--tada-addr", type=tada_addr,
+            help="The test automation server host and port as host:port.",
+            default="tada-host:9862")
+
+def get_cluster_name(parsed_args):
+    """Derive `clustername` from the parsed CLI arguments"""
+    if parsed_args.clustername:
+        return parsed_args.clustername
+    uname = parsed_args.user
+    test = os.path.basename(sys.argv[0])
+    commit_id = get_ovis_commit_id(parsed_args.prefix)
+    parsed_args.clustername = "{}-{}-{:.7}".format(uname, test, commit_id)
+    return parsed_args.clustername
 
 DEEP_COPY_TBL = {
         dict: lambda x: { k:deep_copy(v) for k,v in x.iteritems() },
