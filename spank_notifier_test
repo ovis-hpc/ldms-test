@@ -13,7 +13,7 @@ import logging
 import TADA
 
 from LDMS_Test import LDMSDCluster, LDMSDContainer, \
-                      add_common_args, get_cluster_name, get_ovis_commit_id
+                      add_common_args, process_args
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -113,9 +113,10 @@ if __name__ == "__main__":
                         help="The directory where the test target is installed.",
                         default="__find_from_prefix__")
     args = parser.parse_args()
+    process_args(args)
 
-    COMMIT_ID = get_ovis_commit_id(args.prefix)
-    spec["name"] = get_cluster_name(args)
+    COMMIT_ID = args.commit_id
+    spec["name"] = args.clustername
 
     test = TADA.Test(test_suite = "Slurm_Plugins",
                      test_type = "FVT",
