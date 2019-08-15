@@ -10,8 +10,7 @@ import json
 import logging
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, D, \
-                      add_common_args, get_ovis_commit_id, get_cluster_name
+from LDMS_Test import LDMSDCluster, D, process_args, add_common_args
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -135,12 +134,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="ldmsd_stream_publish/subscribe FVT test")
     add_common_args(parser)
     args = parser.parse_args()
+    process_args(args)
 
-    COMMIT_ID = get_ovis_commit_id(args.prefix)
-    cluster_name = get_cluster_name(args)
+    clustername = args.clustername
+    COMMIT_ID = args.commit_id
 
     spec["ovis_prefix"] = args.prefix
-    spec["name"] = cluster_name
+    spec["name"] = clustername
     spec["mounts"] += [ "{}:/data:rw".format(args.data_root) ]
     if args.src:
         spec["mounts"] += [ "{0}:{0}:ro".format(args.src) ]
@@ -174,7 +174,7 @@ if __name__ == "__main__":
     test.start()
 
     # Create the containers required to ruyn the test
-    cluster = LDMSDCluster.get(cluster_name, create = True, spec = spec)
+    cluster = LDMSDCluster.get(clustername, create = True, spec = spec)
 
     # Start all the LDMS Daemons configured in each container. NB: LDMSD can also be started
     # individually with start_daemon('hostname')
