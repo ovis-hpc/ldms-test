@@ -32,4 +32,4 @@ for n in nets:
         print("  containers:")
         for cont in n.containers:
             host = cont.client.info()["Swarm"]["NodeAddr"]
-            print("    {} (on host {})".format(n.name, host))
+            print("    {} (on host {})".format(cont.name, host))
