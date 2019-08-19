@@ -11,26 +11,10 @@ import subprocess
 import TADA
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, LDMSDContainer
+from LDMS_Test import LDMSDCluster, LDMSDContainer, \
+                      jprint, add_common_args, process_args
 
 execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
-
-def jprint(obj):
-    """Pretty print JSON object"""
-    print json.dumps(obj, indent=2)
-
-def get_ovis_commit_id(prefix):
-    """Get commit_id of the ovis installation"""
-    try:
-        path = "{}/bin/ldms-pedigree".format(prefix)
-        f = open(path)
-        for l in f.readlines():
-            if l.startswith("echo commit-id: "):
-                e, c, commit_id = l.split()
-                return commit_id
-    except:
-        pass
-    return None
 
 def update_expect_file(fname, data):
     s = json.dumps(data)
@@ -38,41 +22,21 @@ def update_expect_file(fname, data):
     f.write(s)
     f.close()
 
-#### default values #### ---------------------------------------------
-sbin_ldmsd = find_executable("ldmsd")
-if sbin_ldmsd:
-    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
-else:
-    default_prefix = "/opt/nick/ovis"
-
 #### argument parsing #### -------------------------------------------
 ap = argparse.ArgumentParser(description =
                          "Run test scenario of slurm stream using ldmsd_stream_publish " \
                          "with slurm_store container data and rata verification." )
-ap.add_argument("--clustername", type = str,
-                help = "The name of the cluster. The default is "
-                "USER-slurm-test-COMMIT_ID.")
-ap.add_argument("--prefix", type = str,
-                default = default_prefix,
-                help = "The OVIS installation prefix.")
-ap.add_argument("--src", type = str,
-                help = "The path to OVIS source tree (for gdb). " \
-                       "If not specified, src tree won't be mounted.")
-ap.add_argument("--db", type = str,
-                default = "{}/db".format(os.path.realpath(sys.path[0])),
-                help = "The path to host db directory, location of Slurm_Test-static.json file." )
-ap.add_argument("--tada_addr", help="Test automation server host and port " \
-		" as host:port")
+add_common_args(ap)
 args = ap.parse_args()
+process_args(args)
 
 #### config variables #### ------------------------------
-USER = os.getlogin()
+USER = args.user
 PREFIX = args.prefix
-COMMIT_ID = get_ovis_commit_id(PREFIX)
+COMMIT_ID = args.commit_id
 SRC = args.src
-CLUSTERNAME = args.clustername if args.clustername else \
-              "{}-slurm-store-test-{:.7}".format(USER, COMMIT_ID)
-DB = args.db
+CLUSTERNAME = args.clustername
+DB = args.data_root
 
 #### spec #### -------------------------------------------------------
 spec = {
@@ -110,7 +74,8 @@ spec = {
                         "component_id=%component_id%",
                         "stream=test-slurm-stream",
                         "instance=%hostname%/%plugin%",
-                        "producer=%hostname%"
+                        "producer=%hostname%",
+                        "task_count=%task_count%",
                     ],
                     "start" : True,
                 }
@@ -129,6 +94,7 @@ spec = {
             "hostname" : "compute-1",
             "component_id" : 10001,
             "!extends" : "compute-node",
+            "task_count" : 16
         },
         {
             "hostname" : "compute-2",
@@ -525,7 +491,7 @@ def verify(num, cond, cond_str):
     print a["assert-desc"] + ": " + (cond_str+": Passed" if cond else cond_str+": Failed")
     test.assert_test(num, cond, cond_str)
 
-json_path = args.db
+json_path = args.data_root
 
 
 ### job for compute-1 ###
@@ -714,6 +680,6 @@ test.finish()
 
 cluster.remove()
 
-rm_store = subprocess.Popen(['rm', '-rf', args.db+'/slurm-test'], stdout=subprocess.PIPE)
+rm_store = subprocess.Popen(['rm', '-rf', args.data_root+'/slurm-test'], stdout=subprocess.PIPE)
 rm_store.communicate()
 print('Test Finished')
