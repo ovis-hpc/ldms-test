@@ -1,0 +1,530 @@
+#!/usr/bin/env python
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, jprint, \
+                      parse_ldms_ls, add_common_args, process_args
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description =
+                         "Run test scenario of 2 samplers -> agg-1 -> agg-2 " \
+                         "with slurm job ID verification." )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+    "component_id=%component_id%",
+    "instance=%hostname%/%plugin%",
+    "producer=%hostname%",
+]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s syspapi_test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "sampler-plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "start" : True,
+            "config" : common_plugin_config,
+        },
+        "sampler-daemon" : {
+            "type" : "ldmsd",
+            "listen_port" : 10000,
+            "listen_xprt" : "sock",
+            "listen_auth" : "none",
+        },
+    },
+    "nodes" : [
+        {
+            # for testing good cfg_file (with unsupported event)
+            "hostname" : "compute-1",
+            "component_id" : 10001,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "sampler-daemon",
+                    "samplers" : [
+                        {
+                            "plugin" : "syspapi",
+                            "!extends" : "sampler-plugin",
+                            "config" : common_plugin_config + [
+                                "cfg_file=/db/syspapi-1.json",
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            # for testing `events` attr
+            "hostname" : "compute-2",
+            "component_id" : 10002,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "sampler-daemon",
+                    "samplers" : [
+                        {
+                            "plugin" : "syspapi",
+                            "!extends" : "sampler-plugin",
+                            "config" : common_plugin_config + [
+                                "events=PAPI_TOT_CYC,PAPI_TOT_INS",
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            # for testing bad cfg_file syntax
+            "hostname" : "compute-3",
+            "component_id" : 10003,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "sampler-daemon",
+                    "samplers" : [
+                        {
+                            "plugin" : "syspapi",
+                            "!extends" : "sampler-plugin",
+                            "config" : common_plugin_config + [
+                                "cfg_file=/db/syspapi-bad.json",
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            # for testing too many metrics
+            "hostname" : "compute-4",
+            "component_id" : 10004,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "sampler-daemon",
+                    "samplers" : [
+                        {
+                            "plugin" : "syspapi",
+                            "!extends" : "sampler-plugin",
+                            "config" : common_plugin_config + [
+                                "cfg_file=/db/syspapi-many.json",
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+            ],
+        },
+    ],
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ], # for debugging
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "syspapi",
+                 test_desc = "LDMSD syspapi sampler test",
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "verify set creation by cfg_file")
+test.add_assertion(2, "verify schema name by cfg_file")
+test.add_assertion(3, "verify metrics (events) by cfg_file")
+test.add_assertion(4, "verify increment counters")
+test.add_assertion(5, "verify cfg_file syntax error report")
+test.add_assertion(6, "verify cfg_file unsupported events report")
+test.add_assertion(7, "verify cfg_file for many events")
+
+def verify(num, cond, cond_str):
+    test.assert_test(num, cond, cond_str)
+
+
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+log.info("-- Write syspapi JSON config files --")
+
+log.info("   - db/syspapi-1.json")
+SYSPAPI_1_CONFIG = {
+    "schema": "syspapi-1",
+    "events": [
+        "PAPI_TOT_CYC", # should be generally available
+        "PAPI_TOT_INS", # should be generally available
+        "PAPI_L1_DCH",  # unsupported event (PAPI derived)
+        "PAPI_L1_DCA",  # should be available for Intel & AMD
+    ]
+}
+f = open(DB + "/syspapi-1.json", "w")
+f.write(json.dumps(SYSPAPI_1_CONFIG, indent=4))
+f.close()
+
+log.info("   - db/syspapi-bad.json")
+f = open(DB + "/syspapi-bad.json", "w")
+f.write("""\
+{
+    "schema" : "syspapi-bad",
+    "events" : [
+        "PAPI_TOT_CYC",
+    ],
+}
+""")
+f.close()
+
+SYSPAPI_MANY_CONFIG = {
+    "events": [
+        "PAPI_L1_DCM",
+        "PAPI_L1_ICM",
+        "PAPI_L2_ICM",
+        "PAPI_L2_TCM",
+        "PAPI_L3_TCM",
+        "PAPI_TLB_IM",
+        "PAPI_L1_LDM",
+        "PAPI_L1_STM",
+        "PAPI_L2_STM",
+        "PAPI_STL_ICY",
+        "PAPI_BR_CN",
+        "PAPI_BR_NTK",
+        "PAPI_BR_MSP",
+        "PAPI_TOT_INS",
+        "PAPI_LD_INS",
+        "PAPI_SR_INS",
+        "PAPI_BR_INS",
+        "PAPI_TOT_CYC",
+        "PAPI_L2_DCA",
+        "PAPI_L2_DCR",
+        "PAPI_L3_DCR",
+        "PAPI_L2_DCW",
+        "PAPI_L3_DCW",
+        "PAPI_L2_ICH",
+        "PAPI_L2_ICA",
+        "PAPI_L3_ICA",
+        "PAPI_L2_ICR",
+        "PAPI_L3_ICR",
+        "PAPI_L3_TCA",
+        "PAPI_L2_TCW",
+        "PAPI_L3_TCW",
+        "PAPI_FDV_INS",
+        "PAPI_REF_CYC",
+
+        "ARITH",
+        "BACLEARS",
+        "BRANCHES",
+        "BRANCH-INSTRUCTIONS",
+        "BRANCH_INSTRUCTIONS_RETIRED",
+        "BRANCH-LOAD-MISSES",
+        "BRANCH-LOADS",
+        "BRANCH-MISSES",
+        "BR_INST_EXEC",
+        "BR_INST_RETIRED",
+        "BR_MISP_EXEC",
+        "BR_MISP_RETIRED",
+        "BUS-CYCLES",
+        "CACHE-MISSES",
+        "CACHE-REFERENCES",
+        "CONTEXT-SWITCHES",
+        "CPL_CYCLES",
+        "CPU_CLK_UNHALTED",
+        "CPU-CLOCK",
+        "CPU-CYCLES",
+        "CPU-MIGRATIONS",
+        "CS",
+        "CYCLE_ACTIVITY",
+        "CYCLES",
+        "DSB2MITE_SWITCHES",
+        "DSB_FILL",
+        "DTLB_LOAD_ACCESS",
+        "DTLB_LOAD_MISSES",
+        "DTLB-LOAD-MISSES",
+        "DTLB-LOADS",
+        "DTLB-PREFETCHES",
+        "DTLB-PREFETCH-MISSES",
+        "DTLB_STORE_MISSES",
+        "DTLB-STORE-MISSES",
+        "DTLB-STORES",
+        "FAULTS",
+        "FP_ASSIST",
+        "FP_COMP_OPS_EXE",
+        "ICACHE",
+        "IDLE-CYCLES-BACKEND",
+        "IDLE-CYCLES-FRONTEND",
+        "IDQ",
+        "IDQ_UOPS_NOT_DELIVERED",
+        "ILD_STALL",
+        "INST_RETIRED",
+        "INSTRUCTION_RETIRED",
+        "INSTRUCTIONS",
+        "INSTRUCTIONS_RETIRED",
+        "INT_MISC",
+        "ITLB",
+        "ITLB-LOAD-MISSES",
+        "ITLB-LOADS",
+        "ITLB_MISSES",
+        "L1D",
+        "L1-DCACHE-LOAD-MISSES",
+        "L1-DCACHE-LOADS",
+        "L1-DCACHE-PREFETCHES",
+        "L1-DCACHE-PREFETCH-MISSES",
+        "L1-DCACHE-STORE-MISSES",
+        "L1-DCACHE-STORES",
+        "L1D_PEND_MISS",
+        "L1-ICACHE-LOAD-MISSES",
+        "L1-ICACHE-LOADS",
+        "L1-ICACHE-PREFETCHES",
+        "L1-ICACHE-PREFETCH-MISSES",
+        "L2_L1D_WB_RQSTS",
+        "L2_LINES_IN",
+        "L2_LINES_OUT",
+        "L2_RQSTS",
+        "L2_STORE_LOCK_RQSTS",
+        "L2_TRANS",
+        "L3_LAT_CACHE",
+        "LAST_LEVEL_CACHE_MISSES",
+        "LAST_LEVEL_CACHE_REFERENCES",
+        "LD_BLOCKS",
+        "LD_BLOCKS_PARTIAL",
+        "LLC-LOAD-MISSES",
+        "LLC-LOADS",
+        "LLC_MISSES",
+        "LLC-PREFETCHES",
+        "LLC-PREFETCH-MISSES",
+        "LLC_REFERENCES",
+        "LLC-STORE-MISSES",
+        "LLC-STORES",
+        "LOAD_HIT_PRE",
+        "LOCK_CYCLES",
+        "LONGEST_LAT_CACHE",
+        "LSD",
+        "MACHINE_CLEARS",
+        "MAJOR-FAULTS",
+        "MEM_LOAD_LLC_HIT_RETIRED",
+        "MEM_LOAD_RETIRED",
+        "MEM_LOAD_UOPS_LLC_HIT_RETIRED",
+        "MEM_LOAD_UOPS_LLC_MISS_RETIRED",
+        "MEM_LOAD_UOPS_RETIRED",
+        "MEM_TRANS_RETIRED",
+        "MEM_UOP_RETIRED",
+        "MEM_UOPS_RETIRED",
+        "MIGRATIONS",
+        "MINOR-FAULTS",
+        "MISALIGN_MEM_REF",
+        "MISPREDICTED_BRANCH_RETIRED",
+        "MOVE_ELIMINATION",
+        "NODE-LOAD-MISSES",
+        "NODE-LOADS",
+        "NODE-PREFETCHES",
+        "NODE-PREFETCH-MISSES",
+        "NODE-STORE-MISSES",
+        "NODE-STORES",
+        "OFFCORE_REQUESTS",
+        "OFFCORE_REQUESTS_BUFFER",
+        "OFFCORE_REQUESTS_OUTSTANDING",
+        "OFFCORE_RESPONSE_0",
+        "OFFCORE_RESPONSE_1",
+        "OTHER_ASSISTS",
+        "PAGE-FAULTS",
+        "PAGE_WALKS",
+        "PERF_COUNT_HW_BRANCH_INSTRUCTIONS",
+        "PERF_COUNT_HW_BRANCH_MISSES",
+        "PERF_COUNT_HW_BUS_CYCLES",
+        "PERF_COUNT_HW_CACHE_BPU",
+        "PERF_COUNT_HW_CACHE_DTLB",
+        "PERF_COUNT_HW_CACHE_ITLB",
+        "PERF_COUNT_HW_CACHE_L1D",
+        "PERF_COUNT_HW_CACHE_L1I",
+        "PERF_COUNT_HW_CACHE_LL",
+        "PERF_COUNT_HW_CACHE_MISSES",
+        "PERF_COUNT_HW_CACHE_NODE",
+        "PERF_COUNT_HW_CACHE_REFERENCES",
+        "PERF_COUNT_HW_CPU_CYCLES",
+        "PERF_COUNT_HW_INSTRUCTIONS",
+        "PERF_COUNT_HW_REF_CPU_CYCLES",
+        "PERF_COUNT_HW_STALLED_CYCLES_BACKEND",
+        "PERF_COUNT_HW_STALLED_CYCLES_FRONTEND",
+        "PERF_COUNT_SW_CONTEXT_SWITCHES",
+        "PERF_COUNT_SW_CPU_CLOCK",
+        "PERF_COUNT_SW_CPU_MIGRATIONS",
+        "PERF_COUNT_SW_PAGE_FAULTS",
+        "PERF_COUNT_SW_PAGE_FAULTS_MAJ",
+        "PERF_COUNT_SW_PAGE_FAULTS_MIN",
+        "PERF_COUNT_SW_TASK_CLOCK",
+        "REF-CYCLES",
+        "RESOURCE_STALLS",
+        "ROB_MISC_EVENTS",
+        "RS_EVENTS",
+        "SIMD_FP_256",
+        "SQ_MISC",
+        "STALLED-CYCLES-BACKEND",
+        "STALLED-CYCLES-FRONTEND",
+        "TASK-CLOCK",
+        "TLB_ACCESS",
+        "TLB_FLUSH",
+        "UNHALTED_CORE_CYCLES",
+        "UNHALTED_REFERENCE_CYCLES",
+        "UOPS_DISPATCHED_PORT",
+        "UOPS_EXECUTED",
+        "UOPS_ISSUED",
+        "UOPS_RETIRED",
+    ]
+}
+f = open(DB + "/syspapi-many.json", "w")
+f.write(json.dumps(SYSPAPI_MANY_CONFIG, indent=4))
+f.close()
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+cont = cluster.get_container("headnode")
+comp1 = cluster.get_container("compute-1")
+comp2 = cluster.get_container("compute-2")
+comp3 = cluster.get_container("compute-3")
+comp4 = cluster.get_container("compute-4")
+
+log.info("-- Verifying --")
+
+####### assertion 1
+rc, out = cont.ldms_ls("-x sock -h compute-1 -p 10000 -l -v")
+sets = parse_ldms_ls(out)
+(_set, ) = sets.values()
+cond = (len(sets) == 1 and _set["name"] == "compute-1/syspapi")
+verify(1, cond, "set existed (with correct instance name)")
+
+####### assertion 2
+verify(2, _set["meta"]["schema"] == SYSPAPI_1_CONFIG["schema"],
+          "verify schema name")
+
+####### assertion 3
+rc, out = comp1.exec_run("grep -c '^processor' /proc/cpuinfo")
+NCPU = int(out)
+_expected = set(SYSPAPI_1_CONFIG["events"] +
+                ["component_id", "job_id", "app_id"])
+_metrics = set(_set["data"].keys())
+_ncpu_verified = False
+for name in SYSPAPI_1_CONFIG["events"]:
+    m = _set["data"][name]
+    if type(m) != list:
+        break
+    if len(m) != NCPU:
+        break
+else: # if `for` loop finished w/o break
+    _ncpu_verified = True
+verify(3, _metrics == _expected and _ncpu_verified, "verify events (metrics)")
+
+####### assertion 4
+time.sleep(2)
+rc, out = cont.ldms_ls("-x sock -h compute-1 -p 10000 -l")
+sets = parse_ldms_ls(out)
+(_set1, ) = sets.values()
+_inc_verified = False
+for k in SYSPAPI_1_CONFIG["events"]:
+    d0 = _set["data"][k]
+    d1 = _set1["data"][k]
+    diff = map(lambda a, b: a - b, d1, d0)
+    if diff < 0: # this is bad
+        break
+    if diff == 0: # must check if an error is reported in the log
+        rc, out = comp1.exec_run("grep {} /var/log/ldmsd.log".format(k))
+        if out.find("ERROR") < 0: # no error about event reported
+            break
+    # otherwise, it is OK
+else: # the `for` loop finished without `break`
+    _inc_verified = True
+verify(4, _inc_verified, "verify increment of supported counters")
+
+####### assertion 5
+rc, out = comp3.exec_run("grep -m 1 'JSON parse error' /var/log/ldmsd.log")
+out = out.strip()
+idx = out.find("syspapi")
+verify(5, out[idx:] == "syspapi: `/db/syspapi-bad.json` JSON parse error.",
+          "verify JSON parse error")
+
+####### assertion 6
+rc, out = comp1.exec_run("grep PAPI_L1_DCH /var/log/ldmsd.log")
+# not supported either by "no native event" or "derived event"
+_test = (out.find("Unsupported PAPI derived event") > 0) or \
+        (out.find("no native event") > 0)
+verify(6, _test, "verify unsupported event report")
+
+
+####### assertion 7
+# NOTE: still trying to create an error from too many events
+rc, out = cont.ldms_ls("-x sock -h compute-4 -p 10000 -l")
+sets = parse_ldms_ls(out)
+(_set4, ) = sets.values()
+_verified = False
+for k, v in _set4["data"].items():
+    if k in ["component_id", "job_id", "app_id"]:
+        continue
+    # all events should either reported as success or error
+    rc, out = comp4.exec_run("grep 'syspapi.* \<{}\>' /var/log/ldmsd.log".format(k))
+    if rc:
+        break # event not found
+    if reduce(lambda x,y: bool(x) or bool(y), v):
+        # contain non-zero element, must not be an error
+        m = re.match(r'.*INFO.* {} successfully added'.format(k), out)
+    else:
+        # all zeroes ... could be a success or an error
+        m = re.match(r'.*(?:ERROR|INFO).* {}'.format(k), out)
+    if not m:
+        break
+else:
+    _verified = True
+verify(7, _verified, "each event has either 'sucees' or 'failed' report")
+
+####### end
+test.finish()
+
+cluster.remove() # this destroys entire cluster
