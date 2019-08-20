@@ -42,21 +42,38 @@ class cached_property(object):
             cache[self.name] = val = self.func(obj)
             return val
 
+_META_BEGIN = r'(?P<meta_begin>Schema\s+Instance\s+Flags.*\s+Info)'
+_META_DASHES = r'(?:^(?P<meta_dashes>[ -]+)$)'
+_META_SUMMARY = '(?:'+ \
+                r'Total Sets: (?P<meta_total_sets>\d+), ' + \
+                r'Meta Data \(kB\):? (?P<meta_sz>\d+(?:\.\d+)?), ' + \
+                r'Data \(kB\):? (?P<data_sz>\d+(?:\.\d+)?), ' + \
+                r'Memory \(kB\):? (?P<mem_sz>\d+(?:\.\d+)?)' + \
+                ')'
+_META_DATA = r'(?:' + \
+             r'(?P<meta_schema>\S+)\s+' + \
+             r'(?P<meta_inst>\S+)\s+' + \
+             r'(?P<meta_flags>\S+)\s+' + \
+             r'(?P<meta_msize>\d+)\s+' + \
+             r'(?P<meta_dsize>\d+)\s+' + \
+             r'(?P<meta_uid>\d+)\s+' + \
+             r'(?P<meta_gid>\d+)\s+' + \
+             r'(?P<meta_perm>-(?:[r-][w-][x-]){3})\s+' + \
+             r'(?P<meta_update>\d+\.\d+)\s+' + \
+             r'(?P<meta_duration>\d+\.\d+)\s+' + \
+             r'(?P<meta_info>.*)' + \
+             r')'
+_META_END = r'(?:^(?P<meta_end>[=]+)$)'
 _LS_L_HDR = r'(?:(?P<set_name>[^:]+): .* last update: (?P<ts>.*))'
-_LS_LV_HDR_APP = r'(?P<hdr_app>APPLICATION SET INFORMATION [-]+$)'
-_LS_LV_HDR_META = r'(?P<hdr_meta>METADATA [-]+$)'
-_LS_LV_HDR_DATA = r'(?P<hdr_data>DATA [-]+$)'
-_LS_LV_ATTR = r'(?:(?P<attr_name>[^:]+) : (?P<attr_value>.*))'
-_LS_LV_HDR_END = r'(?P<hdr_end>[-]+$)'
 _LS_L_DATA = r'(?:(?P<F>.) (?P<type>\S+)\s+(?P<metric_name>\S+)\s+' \
              r'(?P<metric_value>.*))'
 _LS_RE = re.compile(
+            _META_BEGIN + "|" +
+            _META_DASHES + "|" +
+            _META_DATA + "|" +
+            _META_SUMMARY + "|" +
+            _META_END + "|" +
             _LS_L_HDR + "|" +
-            _LS_LV_HDR_APP + "|" +
-            _LS_LV_HDR_META + "|" +
-            _LS_LV_HDR_DATA + "|" +
-            _LS_LV_ATTR + "|" +
-            _LS_LV_HDR_END + "|" +
             _LS_L_DATA
          )
 _TYPE_FN = {
@@ -88,38 +105,72 @@ _TYPE_FN = {
 
 def parse_ldms_ls(txt):
     """Parse output of `ldms_ls -l [-v]` into list of dict (1 dict per set)"""
-    ret = list()
-    for l in txt.splitlines():
+    ret = dict()
+    lines = txt.splitlines()
+    itr = iter(lines)
+    meta_section = False
+    for l in itr:
+        l = l.strip()
         if not l: # empty line, end of set
             lset = None
             data = None
             meta = None
             continue
-        m = _LS_RE.match(l.strip())
+        m = _LS_RE.match(l)
         if not m:
             raise RuntimeError("Bad line format: {}".format(l))
         m = m.groupdict()
-        if m["set_name"]: # new set
+        if m["meta_begin"]: # start meta section
+            if meta_section:
+                raise RuntimeError("Unexpected meta info: {}".format(l))
+            meta_section = True
+            continue
+        elif m["meta_schema"]: # meta data
+            if not meta_section:
+                raise RuntimeError("Unexpected meta info: {}".format(l))
+            meta = dict( schema = m["meta_schema"],
+                         instance = m["meta_inst"],
+                         flags = m["meta_flags"],
+                         meta_sz = m["meta_msize"],
+                         data_sz = m["meta_dsize"],
+                         uid = m["meta_uid"],
+                         gid = m["meta_gid"],
+                         perm = m["meta_perm"],
+                         update = m["meta_update"],
+                         duration = m["meta_duration"],
+                         info = m["meta_info"],
+                    )
+            _set = ret.setdefault(m["meta_inst"], dict())
+            _set["meta"] = meta
+            _set["name"] = m["meta_inst"]
+        elif m["meta_total_sets"]: # the summary line
+            if not meta_section:
+                raise RuntimeError("Unexpected meta info: {}".format(l))
+            # else do nothing
+            continue
+        elif m["meta_dashes"]: # dashes
+            if not meta_section:
+                raise RuntimeError("Unexpected meta info: {}".format(l))
+            continue
+        elif m["meta_end"]: # end meta section
+            if not meta_section:
+                raise RuntimeError("Unexpected meta info: {}".format(l))
+            meta_section = False
+            continue
+        elif m["set_name"]: # new set
+            if meta_section:
+                raise RuntimeError("Unexpected data info: {}".format(l))
             data = dict() # placeholder for metric data
-            lset = {
-                    "name" : m["set_name"],
-                    "ts" : m["ts"],
-                    "data" : data,
-                }
-            ret.append(lset)
-        elif m["hdr_app"]:
-            meta = dict()
-            lset["app_info"] = meta
-        elif m["hdr_meta"]:
-            meta = dict()
-            lset["meta_info"] = meta
-        elif m["hdr_data"]:
-            meta = dict()
-            lset["data_info"] = meta
-        elif m["attr_name"]:
-            meta[m["attr_name"]] = m["attr_value"]
+            lset = ret.setdefault(m["set_name"], dict())
+            lset["name"] = m["set_name"]
+            lset["ts"] = m["ts"]
+            lset["data"] = data
         elif m["metric_name"]: # data
+            if meta_section:
+                raise RuntimeError("Unexpected data info: {}".format(l))
             data[m["metric_name"]] = _TYPE_FN[m["type"]](m["metric_value"])
+        else:
+            raise RuntimeError("Unable to process line: {}".format(l))
     return ret
 
 def env_dict(env):
