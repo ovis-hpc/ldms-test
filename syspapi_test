@@ -505,6 +505,8 @@ rc, out = cont.ldms_ls("-x sock -h compute-4 -p 10000 -l")
 sets = parse_ldms_ls(out)
 (_set4, ) = sets.values()
 _verified = False
+_succeeded = 0
+_failed = 0
 for k, v in _set4["data"].items():
     if k in ["component_id", "job_id", "app_id"]:
         continue
@@ -514,15 +516,21 @@ for k, v in _set4["data"].items():
         break # event not found
     if reduce(lambda x,y: bool(x) or bool(y), v):
         # contain non-zero element, must not be an error
-        m = re.match(r'.*INFO.* {} successfully added'.format(k), out)
+        m = re.match(r'.*(INFO).* {} successfully added'.format(k), out)
     else:
         # all zeroes ... could be a success or an error
-        m = re.match(r'.*(?:ERROR|INFO).* {}'.format(k), out)
+        m = re.match(r'.*(ERROR|INFO).* {}'.format(k), out)
     if not m:
         break
+    if m.group(1) == 'INFO':
+        _succeeded += 1
+    else:
+        _failed += 1
 else:
     _verified = True
 verify(7, _verified, "each event has either 'sucees' or 'failed' report")
+log.info(" events succeeded: {}".format(_succeeded))
+log.info(" events failed: {}".format(_failed))
 
 ####### end
 test.finish()
