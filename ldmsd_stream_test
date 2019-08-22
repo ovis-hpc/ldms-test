@@ -124,8 +124,11 @@ spec = {
     "cap_add": [ "SYS_PTRACE" ],
     "image": "ovis-centos-build",
     "ovis_prefix": "REPLACE_ME",
-    "env" : {  },
-    "mounts": [ ],
+    "env" : {
+        "LD_LIBRARY_PATH": "/opt/ovis/lib:/opt/ovis/lib64:/data/tada/lib",
+        "LDMSD_PLUGIN_LIBPATH": "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/data/tada/lib",
+    },
+    "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ],
 }
 
 if __name__ == "__main__":
@@ -175,6 +178,12 @@ if __name__ == "__main__":
 
     # Create the containers required to ruyn the test
     cluster = LDMSDCluster.get(clustername, create = True, spec = spec)
+
+    # Build libtada and libtest_stream_sampler before starting ldmsd
+    cont = cluster.get_container("agg-1")
+    rc, out = cont.exec_run("make -C /tada-src/C BUILDDIR=/data/tada/lib")
+    if rc:
+        raise RuntimeError("libtada build failed, output: {}".format(out))
 
     # Start all the LDMS Daemons configured in each container. NB: LDMSD can also be started
     # individually with start_daemon('hostname')
