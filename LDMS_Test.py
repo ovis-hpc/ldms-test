@@ -1246,7 +1246,7 @@ class LDMSDContainer(DockerClusterContainer):
                 offset = "offset={}".format(offset)
             samp_cfg = ("""
                 load name={plugin}
-                config name={plugin} {config} \
+                config name={plugin} {config}
             """ + ( "" if not samp.get("start") else \
             """
                 start name={plugin} {interval} {offset}
@@ -2013,6 +2013,39 @@ class LDMSDCluster(BaseCluster):
         """Start daemons according to spec"""
         for cont in self.containers:
             cont.start_daemons()
+
+def read_msg(_file):
+    """Read a message "\x01...\x03" from `_file` file handle"""
+    pos = _file.tell()
+    sio = StringIO()
+    c = _file.read(1)
+    if not c:
+        raise ValueError("End of file")
+    if c != "\x01":
+        _file.seek(pos)
+        raise ValueError("Not a start of message")
+    c = _file.read(1)
+    while c and c != "\x02":
+        sio.write(c)
+        c = _file.read(1)
+    if c != "\x02":
+        _file.seek(pos)
+        raise ValueError("Bad message header")
+    _type = sio.getvalue()
+    sio = StringIO() # reset sio
+    c = _file.read(1)
+    while c and c != "\x03":
+        sio.write(c)
+        c = _file.read(1)
+    if c != "\x03":
+        _file.seek(pos)
+        raise ValueError("Incomplete message")
+    text = sio.getvalue()
+    text = text.strip('\x00')
+    obj = None
+    if _type == "json":
+        obj = json.loads(text)
+    return { "type": _type, "text": text, "obj": obj }
 
 
 if __name__ == "__main__":

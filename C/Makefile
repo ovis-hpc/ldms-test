@@ -17,4 +17,4 @@ $(BUILDDIR)/libtest_stream_sampler.so: test_stream_sampler.c
 	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
 	    $^ -L$(OVIS_PREFIX)/lib -L$(BUILDDIR) -L$(OVIS_PREFIX)/lib64 \
 	    -lldmsd_stream -lovis_util -lcoll -pthread -ljson_util -ltada
-	ln -s $@ $@.0
+	ln -fs $@ $@.0

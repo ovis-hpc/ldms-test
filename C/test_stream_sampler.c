@@ -75,37 +75,10 @@
 #include "ldms/ldms.h"
 #include "ldms/ldmsd.h"
 #include "ldms/ldmsd_stream.h"
-#include "tada.h"
 
 #include "ovis-ldms-config.h" /* for OVIS_GIT_LONG */
 
 static char tada_user[64]; /* populated in get_plugin */
-
-TEST_BEGIN("LDMSD_Communications", "JSON_Stream_Test", "FVT",
-	   tada_user,
-	   OVIS_LDMS_OVIS_GIT_LONG, /* commit ID */
-	   "LDMSD stream test with JSON data format",
-	   t_1)
-TEST_ASSERTION(t_1, 0, "'schema' STRING Present")
-TEST_ASSERTION(t_1, 1, "'schema' STRING Correct")
-TEST_ASSERTION(t_1, 2, "'timestamp' INT Present")
-TEST_ASSERTION(t_1, 3, "'timestamp' INT Correct")
-TEST_ASSERTION(t_1, 4, "'data' DICT Present")
-TEST_ASSERTION(t_1, 5, "'id' INT Present")
-TEST_ASSERTION(t_1, 6, "'id' INT Value Correct")
-TEST_ASSERTION(t_1, 7, "'list' LIST Present")
-TEST_ASSERTION(t_1, 8, "'list' LIST Value Correct")
-TEST_END(t_1);
-
-TEST_BEGIN("LDMSD_Communications", "STRING_Stream_Test", "FVT",
-	   tada_user,
-	   OVIS_LDMS_OVIS_GIT_LONG, /* commit ID */
-	   "LDMSD stream test with plain text data format",
-	   t_2)
-TEST_ASSERTION(t_2, 0, "Expect file is present")
-TEST_ASSERTION(t_2, 1, "All stream data received")
-TEST_ASSERTION(t_2, 2, "Stream data is correct")
-TEST_END(t_2);
 
 static ldmsd_msg_log_f msglog;
 static char *stream;
@@ -113,8 +86,7 @@ static char *stream;
 static const char *usage(struct ldmsd_plugin *self)
 {
 	return  "config name=test_stream_sampler path=<path> port=<port_no> log=<path>\n"
-		"     stream    The stream name to subscribe to.\n"
-		"     expect    The path to a file containing the expected stream text\n";
+		"     output    The path to a file to dump stream output to.\n";
 }
 
 static ldms_set_t get_set(struct ldmsd_sampler *self)
@@ -132,7 +104,7 @@ static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 			 const char *msg, size_t msg_len,
 			 json_entity_t entity);
 
-char *expect_file_name;
+FILE *out = NULL;
 
 static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct attr_value_list *avl)
 {
@@ -146,11 +118,19 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct
 		stream = strdup("test_stream");
 	ldmsd_stream_subscribe(stream, test_stream_recv_cb, self);
 
-	value = av_value(avl, "expect");
-	if (value)
-		expect_file_name = strdup(value);
+	value = av_value(avl, "output");
+	if (!value)
+		value = "/data/test_stream_sampler.out";
+	out = fopen(value, "w");
+	if (!out) {
+		rc = errno;
+		ldmsd_log(LDMSD_LERROR, "test_stream_sampler: "
+			  "cannot open file '%s'\n", value);
+	} else {
+		rc = 0;
+		setbuf(out, NULL); /* no buffer */
+	}
 
-	rc = 0;
 	return rc;
 }
 
@@ -159,63 +139,34 @@ static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 			 const char *msg, size_t msg_len,
 			 json_entity_t entity)
 {
-	int rc;
-	json_entity_t attr, dict, data, schema, timestamp, test_list;
-	json_str_t schema_name;
-
-	if (stream_type != LDMSD_STREAM_JSON) {
-		char expect_text[512];
-		FILE *expect_file = fopen(expect_file_name, "r");
-		TEST_START(t_2);
-		if (TEST_ASSERT(t_2, 0, (expect_file != NULL))) {
-			rc = fread(expect_text, 1, sizeof(expect_text), expect_file);
-			TEST_ASSERT(t_2, 1, (rc <= msg_len));
-			TEST_ASSERT(t_2, 2, (0 == memcmp(msg, expect_text, rc)));
-		}
-		TEST_FINISH(t_2);
-		return 0;
+	int rc = 0;
+	char soh = 1; /* start of heading */
+	char stx = 2; /* start of text */
+	char etx = 3; /* end of text */
+	fwrite(&soh, 1, 1, out);
+	switch (stream_type) {
+	case LDMSD_STREAM_STRING:
+		fwrite("string", 1, 6, out);
+		break;
+	case LDMSD_STREAM_JSON:
+		fwrite("json", 1, 4, out);
+		break;
+	default:
+		fwrite("unknown", 1, 7, out);
+		break;
 	}
-	TEST_START(t_1);
-	rc = 0;
-	schema = json_attr_find(entity, "schema");
-	if (TEST_ASSERT(t_1, 0, (schema != NULL))) {
-		schema_name = json_value_str(json_attr_value(schema));
-		TEST_ASSERT(t_1, 1, (0 == strcmp(schema_name->str,"stream_test")));
-	}
-
-	timestamp = json_attr_find(entity, "timestamp");
-	if (TEST_ASSERT(t_1, 2, (timestamp != NULL)))
-		TEST_ASSERT(t_1, 3, (1559242264 == json_value_int(json_attr_value(timestamp))));
-
-	data = json_attr_find(entity, "data");
-	if (TEST_ASSERT(t_1, 4, (data != NULL))) {
-		dict = json_attr_value(data);
-		attr = json_attr_find(dict, "id");
-		if (TEST_ASSERT(t_1, 5, (attr != NULL)))
-			TEST_ASSERT(t_1, 6, (12345 == json_value_int(json_attr_value(attr))));
-
-		attr = json_attr_find(dict, "list");
-		if (TEST_ASSERT(t_1, 7, (attr != NULL))) {
-			test_list = json_attr_value(attr);
-			int i = 1;
-			int list_values_match = TADA_TRUE;
-			for (test_list = json_item_first(test_list); test_list;
-			     test_list = json_item_next(test_list)) {
-				if (json_value_int(test_list) != i) {
-					list_values_match = TADA_FALSE;
-					break;
-				}
-				i += 1;
-			}
-			TEST_ASSERT(t_1, 8, (list_values_match == TADA_TRUE));
-		}
-	}
-	TEST_FINISH(t_1);
+	fwrite(&stx, 1, 1, out);
+	fwrite(msg, 1, msg_len, out);
+	fwrite(&etx, 1, 1, out);
 	return rc;
 }
 
 static void term(struct ldmsd_plugin *self)
 {
+	if (out) {
+		fclose(out);
+		out = NULL;
+	}
 }
 
 static struct ldmsd_sampler test_stream_sampler = {

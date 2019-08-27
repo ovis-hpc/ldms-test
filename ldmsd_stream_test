@@ -10,7 +10,7 @@ import json
 import logging
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, D, process_args, add_common_args
+from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, read_msg
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -56,7 +56,7 @@ spec = {
                         "instance=%hostname%/%plugin%",
                         "producer=%hostname%",
                         "stream=test_stream",
-                        "expect=/data/Stream_Test-data.json"
+                        "output=/data/%hostname%.out"
                     ]
                 },
             ],
@@ -83,11 +83,12 @@ spec = {
         },
         {
             "hostname" : "stream-sampler-2",
-            "component_id" : 10001,
+            "component_id" : 10002,
             "!extends" : "compute-node",
         },
         {
             "hostname" : "agg-1",
+            "component_id" : 10003,
             "daemons" : [
                 {
                     "name" : "sshd",
@@ -118,6 +119,50 @@ spec = {
                 },
             ]
         },
+        {
+            "hostname" : "agg-2",
+            "component_id" : 10004,
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "listen_port" : 20000, # override
+                    "samplers" : [
+                        {
+                            "plugin" : "test_stream_sampler",
+                            "interval" : 1000000,
+                            "offset" : 0,
+                            "config" : [
+                                "component_id=%component_id%",
+                                "instance=%hostname%/%plugin%",
+                                "producer=%hostname%",
+                                "stream=test_stream",
+                                "output=/data/%hostname%.out"
+                            ]
+                        },
+                    ],
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "agg-1",
+                            "!extends" : "prdcr",
+                            "port" : 20000,
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_subscribe regex=.* stream=test_stream",
+                        "prdcr_start_regex regex=.*",
+                    ],
+                },
+            ]
+        },
     ],
 
     #"image": "ovis-centos-build:slurm",
@@ -125,11 +170,15 @@ spec = {
     "image": "ovis-centos-build",
     "ovis_prefix": "REPLACE_ME",
     "env" : {
-        "LD_LIBRARY_PATH": "/opt/ovis/lib:/opt/ovis/lib64:/data/tada/lib",
-        "LDMSD_PLUGIN_LIBPATH": "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/data/tada/lib",
+        "LD_LIBRARY_PATH": "/data/tada/lib:/opt/ovis/lib:/opt/ovis/lib64",
+        "LDMSD_PLUGIN_LIBPATH": "/data/tada/lib:/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
     },
     "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ],
 }
+
+def rm(path):
+    if os.path.exists(path):
+        os.remove(path)
 
 if __name__ == "__main__":
     if sys.flags.interactive:
@@ -150,6 +199,11 @@ if __name__ == "__main__":
     spec["env"]["TADA_USER"] = args.user
     spec["env"]["TADA_ADDR"] = args.tada_addr
 
+    # remove existing files
+    rm(args.data_root + "/stream-sampler-1.out")
+    rm(args.data_root + "/stream-sampler-2.out")
+    rm(args.data_root + "/agg-2.out")
+
     # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
     test = TADA.Test(test_suite = "LDMSD",
                      test_type = "SVT",
@@ -162,16 +216,22 @@ if __name__ == "__main__":
     test.add_assertion(1, 'ldmsd_stream_publish of STRING data to stream-sampler-1 succeeds')
     test.add_assertion(2, 'ldmsd_stream_publish to JSON data to stream-sampler-2 succeeds')
     test.add_assertion(3, 'ldmsd_stream_publish of STRING data to stream-sampler-2 succeeds')
-    test.add_assertion(4, 'Stopping the producers succeeds')
-    test.add_assertion(5, 'Restarting the producers succeeds')
-    test.add_assertion(6, 'JSON stream data resumes after producer restart on stream-sampler-1')
-    test.add_assertion(7, 'STRING stream data resumes after producer rerestart on stream-sampler-1')
-    test.add_assertion(8, 'JSON stream data resumes after producer restart on stream-sampler-2')
-    test.add_assertion(9, 'STRING stream data resumes after producer rerestart on stream-sampler-2')
-    test.add_assertion(10, 'stream-sampler-1 is not running')
-    test.add_assertion(11, 'stream-sampler-1 has restarted')
-    test.add_assertion(12, 'JSON stream data resumes after stream-sampler-1 restart')
-    test.add_assertion(13, 'STRING stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(4, 'ldmsd_stream data check on agg-2')
+
+    test.add_assertion(5, 'Stopping the producers succeeds')
+    test.add_assertion(6, 'Restarting the producers succeeds')
+
+    test.add_assertion(7, 'JSON stream data resumes after producer restart on stream-sampler-1')
+    test.add_assertion(8, 'STRING stream data resumes after producer rerestart on stream-sampler-1')
+    test.add_assertion(9, 'JSON stream data resumes after producer restart on stream-sampler-2')
+    test.add_assertion(10, 'STRING stream data resumes after producer rerestart on stream-sampler-2')
+    test.add_assertion(11, 'ldmsd_stream data resume check on agg-2')
+
+    test.add_assertion(12, 'stream-sampler-1 is not running')
+    test.add_assertion(13, 'stream-sampler-1 has restarted')
+    test.add_assertion(14, 'JSON stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(15, 'STRING stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(16, 'ldmsd_stream data check on agg-2 after stream-sampler-1 restart')
 
     # Tell the TADA infrastructure that the test is starting
     test.start()
@@ -192,6 +252,11 @@ if __name__ == "__main__":
     # Give the daemons a few seconds to start
     time.sleep(5)
 
+    # Files for data verification
+    samp1_out = open(args.data_root + "/stream-sampler-1.out")
+    samp2_out = open(args.data_root + "/stream-sampler-2.out")
+    agg2_out = open(args.data_root + "/agg-2.out")
+
     # Create the test data
     data = { "gen" : 1,
              "schema" : "stream_test",
@@ -201,108 +266,220 @@ if __name__ == "__main__":
                  "list" : [ 1, 2, 3, 4 ]
              }
          }
-
+    text_data = json.dumps(data)
     update_expect_file(args.data_root + "/Stream_Test-data.json", data)
     data_file = '/data/Stream_Test-data.json'
 
     assert_no = 0
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+        cmd = "bash -c \"" \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t json -f {fname} & " \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t string -f {fname} & " \
+              "wait" \
+              "\"".format( fname=data_file,
+                           host=host,
+                           xprt=cont.ldmsd_spec["listen_xprt"],
+                           port=cont.ldmsd_spec["listen_port"],
+                           auth=cont.ldmsd_spec["listen_auth"] )
 
-        # Test a STRING formatted stream
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t string -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+        rc, out = cont.exec_run(cmd)
+
+    # Verify samp1
+    for x in range(0, 2):
+        msg = read_msg(samp1_out)
+        if msg["type"] == "json":
+            test.assert_test(0, msg["obj"] == data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(1, msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+    # Verify samp2
+    for x in range(0, 2):
+        msg = read_msg(samp2_out)
+        if msg["type"] == "json":
+            test.assert_test(2, msg["obj"] == data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(3, msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+    # Verify agg2
+    text_count = 0
+    json_count = 0
+    _verify = True
+    _verify_msg = "agg2 stream data verification"
+    for x in range(0, 4):
+        msg = read_msg(agg2_out)
+        if msg["type"] == "string":
+            text_count += 1
+            _verify &= (msg["text"] == text_data)
+        elif msg["type"] == "json":
+            json_count += 1
+            _verify &= (msg["obj"] == data)
+        else:
+            _verify = False
+            _verify_msg = "Bad message type: {}".format(msg["type"])
+    if _verify and (text_count != 2 or json_count != 2):
+        _verify = False
+        _verify_msg = "Message mismatch"
+    test.assert_test(4, _verify, _verify_msg)
 
     agg_h = cluster.get_container('agg-1')
     rc, out = agg_h.config_ldmsd([ "prdcr_stop_regex regex=.*" ])
-    test.assert_test(assert_no, (len(out) == 0), out)
-    assert_no += 1
+    test.assert_test(5, (len(out) == 0), out)
 
     rc, out = agg_h.config_ldmsd([ "prdcr_start_regex regex=.*" ])
-    test.assert_test(assert_no, (len(out) == 0), out)
-    assert_no += 1
+    test.assert_test(6, (len(out) == 0), out)
+
+    # give them time to reconnect before publishing new data
+    time.sleep(5)
+
+    # second set of data
+    data = { "gen" : 2,
+             "schema" : "stream_test",
+             "timestamp" : 1559242274,
+             "data" : {
+                 "id" : 23456,
+                 "list" : [ 1, 2, 3, 4, 5, 6 ]
+             }
+         }
+    text_data = json.dumps(data)
+    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
 
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+        cmd = "bash -c \"" \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t json -f {fname} & " \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t string -f {fname} & " \
+              "wait" \
+              "\"".format( fname=data_file,
+                           host=host,
+                           xprt=cont.ldmsd_spec["listen_xprt"],
+                           port=cont.ldmsd_spec["listen_port"],
+                           auth=cont.ldmsd_spec["listen_auth"] )
 
-        # Test a STRING formatted stream
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t string -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+        rc, out = cont.exec_run(cmd)
+
+    # Verify samp1
+    for x in range(0, 2):
+        msg = read_msg(samp1_out)
+        if msg["type"] == "json":
+            test.assert_test(7, msg["obj"] == data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(8, msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+    # Verify samp2
+    for x in range(0, 2):
+        msg = read_msg(samp2_out)
+        if msg["type"] == "json":
+            test.assert_test(9, msg["obj"] == data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(10, msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+    # Verify agg2
+    text_count = 0
+    json_count = 0
+    _verify = True
+    _verify_msg = "agg2 stream data verification"
+    for x in range(0, 4):
+        msg = read_msg(agg2_out)
+        if msg["type"] == "string":
+            text_count += 1
+            _verify &= (msg["text"] == text_data)
+        elif msg["type"] == "json":
+            json_count += 1
+            _verify &= (msg["obj"] == data)
+        else:
+            _verify = False
+            _verify_msg = "Bad message type: {}".format(msg["type"])
+    if _verify and (text_count != 2 or json_count != 2):
+        _verify = False
+        _verify_msg = "Message mismatch"
+    test.assert_test(11, _verify, _verify_msg)
+
+    raw_input("Press ENTER to continue")
 
     cont = cluster.get_container('stream-sampler-1')
 
     cont.kill_ldmsd()
     time.sleep(1)
     running = cont.pgrepc('ldmsd')
-    test.assert_test(assert_no, (running == False), '(running == False)')
-    assert_no += 1
+    test.assert_test(12, (running == False), '(running == False)')
 
     cont.start_ldmsd()
     time.sleep(1)
     running = cont.pgrepc('ldmsd')
-    test.assert_test(assert_no, (running == True), '(running == True)')
-    assert_no += 1
+    test.assert_test(13, (running == True), '(running == True)')
+
+    time.sleep(5) # allow some time for prdcr to reconnect
+
+    # reset output stream as samp1 has restarted
+    samp1_out = open(args.data_root + "/stream-sampler-1.out")
+
+    data = { "gen" : 3,
+             "schema" : "stream_test",
+             "timestamp" : 1559250000,
+             "data" : {
+                 "id" : 78910,
+                 "list" : [ 1  ]
+             }
+         }
+    text_data = json.dumps(data)
+    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
 
     for host in [ 'stream-sampler-1' ]:
         cont = cluster.get_container(host)
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t json -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+        cmd = "bash -c \"" \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t json -f {fname} & " \
+              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t string -f {fname} & " \
+              "wait" \
+              "\"".format( fname=data_file,
+                           host=host,
+                           xprt=cont.ldmsd_spec["listen_xprt"],
+                           port=cont.ldmsd_spec["listen_port"],
+                           auth=cont.ldmsd_spec["listen_auth"] )
+        rc, out = cont.exec_run(cmd)
 
-        # Test a STRING formatted stream
-        rc, out = cont.exec_run("ldmsd_stream_publish -h {host} -x {xprt} -p {port} "
-                                " -a {auth} -s test_stream -t string -f {fname}"
-                                .format(fname=data_file,
-                                        host=host,
-                                        xprt=cont.ldmsd_spec["listen_xprt"],
-                                        port=cont.ldmsd_spec["listen_port"],
-                                        auth=cont.ldmsd_spec["listen_auth"]
-                                    ))
-        test.assert_test(assert_no, (len(out) == 0), out)
-        assert_no += 1
+    # Verify samp1
+    for x in range(0, 2):
+        msg = read_msg(samp1_out)
+        if msg["type"] == "json":
+            test.assert_test(14, msg["obj"] == data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(15, msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+    # Verify agg2
+    text_count = 0
+    json_count = 0
+    for x in range(0, 2):
+        msg = read_msg(agg2_out)
+        if msg["type"] == "string":
+            text_count += 1
+            _verify &= (msg["text"] == text_data)
+        elif msg["type"] == "json":
+            json_count += 1
+            _verify &= (msg["obj"] == data)
+        else:
+            _verify = False
+            _verify_msg = "Bad message type: {}".format(msg["type"])
+    if _verify and (text_count != 1 or json_count != 1):
+        _verify = False
+        _verify_msg = "Message mismatch"
+    test.assert_test(16, _verify, _verify_msg)
 
     test.finish()
     cluster.remove()
