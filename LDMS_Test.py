@@ -1789,6 +1789,7 @@ class LDMSDCluster(BaseCluster):
     def slurm_conf(self):
         """Content for `/etc/slurm/slurm.conf`"""
         nodes = self.spec["nodes"]
+        cpu_per_node = self.spec.get("cpu_per_node", 1)
         slurmd_nodes = []
         slurmctld_node = None
         for node in nodes:
@@ -1834,10 +1835,11 @@ class LDMSDCluster(BaseCluster):
             SlurmctldLogFile=/var/log/slurmctld.log
             SlurmdDebug=info
             SlurmdLogFile=/var/log/slurmd.log
-            NodeName={slurmd_nodes} CPUs=1 State=UNKNOWN
+            NodeName={slurmd_nodes} CPUs={cpu_per_node} State=UNKNOWN
             PartitionName=debug Nodes={slurmd_nodes} Default=YES MaxTime=INFINITE State=UP
         """.format( slurmctld_node = slurmctld_node,
-                    slurmd_nodes = slurmd_nodes )
+                    slurmd_nodes = slurmd_nodes,
+                    cpu_per_node = cpu_per_node )
         return slurmconf
 
     def start_munged(self):
