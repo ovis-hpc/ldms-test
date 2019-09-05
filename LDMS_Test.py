@@ -1793,11 +1793,19 @@ class LDMSDCluster(BaseCluster):
         return { cont.hostname : cont.check_ldmsd() \
                                         for cont in self.containers }
 
+    @cached_property
+    def slurm_version(self):
+        rc, out = self.exec_run("slurmd -V")
+        _slurm, _ver = out.split(' ')
+        ver = tuple( int(v) for v in _ver.split('.') )
+        return ver
+
     @property
     def slurm_conf(self):
         """Content for `/etc/slurm/slurm.conf`"""
         nodes = self.spec["nodes"]
         cpu_per_node = self.spec.get("cpu_per_node", 1)
+        oversubscribe = self.spec.get("oversubscribe", "NO")
         slurmd_nodes = []
         slurmctld_node = None
         for node in nodes:
@@ -1808,8 +1816,13 @@ class LDMSDCluster(BaseCluster):
             if "slurmctld" in daemons:
                 slurmctld_node = node["hostname"]
         slurmd_nodes = ",".join(slurmd_nodes)
+        # Check slurmd version
+        if self.slurm_version >= (18, 0, 0):
+            slurmctld_key = "SlurmctldHost"
+        else:
+            slurmctld_key = "ControlMachine"
         slurmconf = """
-            SlurmctldHost={slurmctld_node}
+            {slurmctld_key}={slurmctld_node}
             MpiDefault=none
             ProctrackType=proctrack/linuxproc
             ReturnToService=1
@@ -1821,7 +1834,7 @@ class LDMSDCluster(BaseCluster):
             SlurmUser=root
             StateSaveLocation=/var/spool
             SwitchType=switch/none
-            TaskPlugin=task/affinity
+            TaskPlugin=task/none
             TaskPluginParam=Sched
             InactiveLimit=0
             KillWait=30
@@ -1832,7 +1845,7 @@ class LDMSDCluster(BaseCluster):
             FastSchedule=1
             SchedulerType=sched/builtin
             SelectType=select/cons_res
-            SelectTypeParameters=CR_Core
+            SelectTypeParameters=CR_CPU
             AccountingStorageType=accounting_storage/none
             AccountingStoreJobComment=YES
             ClusterName=cluster
@@ -1844,10 +1857,13 @@ class LDMSDCluster(BaseCluster):
             SlurmdDebug=info
             SlurmdLogFile=/var/log/slurmd.log
             NodeName={slurmd_nodes} CPUs={cpu_per_node} State=UNKNOWN
-            PartitionName=debug Nodes={slurmd_nodes} Default=YES MaxTime=INFINITE State=UP
-        """.format( slurmctld_node = slurmctld_node,
+            PartitionName=debug Nodes={slurmd_nodes} OverSubscribe={oversubscribe} Default=YES MaxTime=INFINITE State=UP
+            LogTimeFormat=thread_id
+        """.format( slurmctld_key = slurmctld_key,
+                    slurmctld_node = slurmctld_node,
                     slurmd_nodes = slurmd_nodes,
-                    cpu_per_node = cpu_per_node )
+                    cpu_per_node = cpu_per_node,
+                    oversubscribe = oversubscribe )
         return slurmconf
 
     def start_munged(self):
