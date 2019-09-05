@@ -23,6 +23,10 @@ log = logging.getLogger(__name__)
 dc = docker.from_env()
 USER = pwd.getpwuid(os.geteuid())[0]
 
+CPU_PER_NODE = 8
+NUM_NODES = 4
+OVERSUBSCRIBE = "FORCE" # NO, YES, or FORCE -- see slurm cons_res_share
+
 spec = {
     "name" : "TO-BE-REPLACED",
     "description" : "spank_notifier_test cluster",
@@ -55,32 +59,32 @@ spec = {
             ],
         },
     },
-    "nodes" : [
-        {
-            "hostname" : "node-1",
-            "!extends" : "compute-node",
-        },
-        {
-            "hostname" : "node-2",
-            "!extends" : "compute-node",
-        },
-        {
-            "hostname" : "headnode",
-            "daemons" : [
-                {
-                    "name" : "sshd",
-                    "type" : "sshd",
-                },
-                {
-                    "name" : "slurmctld",
-                    "type" : "slurmctld",
-                },
-            ],
-        },
-    ],
-
+    "nodes" :
+        [
+            {
+                "hostname": "node-{}".format(i),
+                "!extends": "compute-node"
+            } for i in range(1, NUM_NODES+1)
+        ] + \
+        [
+            {
+                "hostname" : "headnode",
+                "daemons" : [
+                    {
+                        "name" : "sshd",
+                        "type" : "sshd",
+                    },
+                    {
+                        "name" : "slurmctld",
+                        "type" : "slurmctld",
+                    },
+                ],
+            },
+        ],
+    "cpu_per_node" : CPU_PER_NODE,
+    "oversubscribe" : OVERSUBSCRIBE,
     "cap_add": [ "SYS_PTRACE" ],
-    "image": "ovis-centos-build",
+    "image": "ovis-centos-build:slurm-17.02.11",
     "libdir": "/opt/ovis/lib64",
 }
 
@@ -94,15 +98,102 @@ def make_dict_from_out(out):
     return d
 
 def remove_job_out(cluster):
-    for cont in cluster.containers:
-        rc, out = cont.exec_run("rm -f /db/slurm_env_{node}.out".format(node=cont.hostname))
-        rc, out = cont.exec_run("rm -f /db/crash_env_{node}.out".format(node=cont.hostname))
-        rc, out = cont.exec_run("rm -f /db/spank_stream_{node}.out".format(node=cont.hostname))
+    cont = cluster.containers[-1]
+    rc, out = cont.exec_run("bash -c 'rm -f /db/slurm*.out'")
+    rc, out = cont.exec_run("bash -c 'rm -f /db/spank*.out'")
+    rc, out = cont.exec_run("bash -c 'rm -f /db/crash*.out'")
 
 def get_mount_libdir(prefix, mount_prefix):
     if os.path.exists(prefix + "/lib64"):
         return mount_prefix + "/lib64"
     return mount_prefix + "/lib"
+
+def submit_job(cluster, num_tasks):
+    cont = cluster.get_container("headnode")
+    cont.write_file('/db/show_spank_env.sh',
+                    '#!/bin/bash\n'\
+                    'sleep 2\n'\
+                    'env | grep SLURM > /db/slurm_env_${SLURM_JOBID}.${SLURM_PROCID}.out\n')
+    script_path = "/db/spank_job_{}.sh".format(num_tasks)
+    cont.write_file(script_path,
+                    '#!/bin/bash\n'\
+                    '#SBATCH -n {num_tasks}\n'\
+                    '#SBATCH -D /db\n'\
+                    'export SUBSCRIBER_DATA=\'{{"sub":"data"}}\'\n'\
+                    'srun bash /db/show_spank_env.sh\n'\
+                    .format(
+                        num_tasks = num_tasks,
+                    ))
+    log.info("-- Submitting job with num_tasks {} --".format(num_tasks))
+    jobid = cluster.sbatch(script_path)
+    log.info("  jobid = {0}".format(jobid))
+    return jobid
+
+
+def verify_jobinfo(cluster, test, node_events, jobinfo):
+    jobid = jobinfo["jobid"]
+    num_tasks = jobinfo["num_tasks"]
+    assert_no = jobinfo["first_assertion"]
+    subscriber_data = jobinfo["subscriber_data"]
+    # get ENVs for each task
+    envs = [ make_dict_from_out("/db/slurm_env_{}.{}.out".format(jobid, i)) \
+                                for i in range(0, num_tasks) ]
+    # filter events to only our job
+    _node_events = [ filter(lambda e: e['data']['job_id'] == jobid, _events) \
+                    for _events in node_events ]
+    _node_events = [ _events for _events in _node_events if len(_events) > 0 ]
+    if not _node_events: # no events
+        test.assert_test(assert_no, False, "No events")
+        return
+
+    # for each node, verify event order
+    for job_events in _node_events:
+        ev = job_events.pop(0)
+        if ev['event'] != 'init':
+            test.assert_test(assert_no, False, '{0} == {1}'.format(ev['event'], 'init'))
+            return
+        # check subsrciber_data
+        if ev['data']['subscriber_data'] != subscriber_data:
+            test.assert_test(assert_no + 1, False, '{0} == {1}'.format(ev['data']['subscriber_data'], subscriber_data))
+            return
+        num_tasks = ev['data']['local_tasks']
+        prev_task_event = [None] * num_tasks
+        exit_event = None
+        # tasks
+        for ev in job_events:
+            task_id = ev['data'].get('task_id') # local task_id
+            if ev['event'] == 'task_init_priv':
+                prev = prev_task_event[task_id]
+                if prev: # task_init_priv must be 1st
+                    test.assert_test(assert_no + 2, False, "Unexpexted `task_init_priv`")
+                    return
+            elif ev['event'] == 'task_exit':
+                prev = prev_task_event[task_id]
+                if not prev or prev['event'] != 'task_init_priv':
+                    test.assert_test(assert_no + 3, False, "Unexpected `task_exit`")
+                    return
+            elif ev['event'] == 'exit':
+                exit_event = ev
+            if task_id != None:
+                prev_task_event[task_id] = ev
+        for ev in prev_task_event: # all ev must be `task_exit`
+            if not ev or ev["event"] != "task_exit":
+                test.assert_test(assert_no + 3, False, "`task_exit` event missing")
+                return
+        if not exit_event:
+            test.assert_test(assert_no + 4, False, "`exit` event missing")
+            return
+        for ev in prev_task_event:
+            if ev['timestamp'] > exit_event['timestamp']:
+                test.assert_test(assert_no + 4, False,
+                                 "`exit` event precedes `task_exit`")
+                return
+    test.assert_test(assert_no,     True, "`init` verified")
+    test.assert_test(assert_no + 1, True, "`init` subscriber_data verified")
+    test.assert_test(assert_no + 2, True, "`task_init_priv` verified")
+    test.assert_test(assert_no + 3, True, "`task_exit` verified")
+    test.assert_test(assert_no + 4, True, "`exit` verified")
+
 
 if __name__ == "__main__":
     if sys.flags.interactive:
@@ -125,20 +216,45 @@ if __name__ == "__main__":
                      test_user = args.user,
                      commit_id = COMMIT_ID,
                      tada_addr=args.tada_addr)
-    test.add_assertion(0, 'Missing stream listener on node-1 does not affect job execution')
-    test.add_assertion(1, 'Missing stream listener on node-2 does not affect job execution')
-    test.add_assertion(2, "first event on node-1 is 'init'")
-    test.add_assertion(3, "'init' event on node-1 contains subscriber data")
-    test.add_assertion(4, "second event on node-1 is 'task_init_priv'")
-    test.add_assertion(5, "third event on node-1 is 'task_exit'")
-    test.add_assertion(6, "fourth event on node-1 is 'exit'")
-    test.add_assertion(7, "first event on node-2 is 'init'")
-    test.add_assertion(8, "'init' event on node-2 contains subscriber data")
-    test.add_assertion(9, "second event on node-2 is 'task_init_priv'")
-    test.add_assertion(10, "third event on node-2 is 'task_exit'")
-    test.add_assertion(11, "fourth event on node-2 is 'exit'")
-    test.add_assertion(12, "Killing stream listener does not affect job execution on node-1")
-    test.add_assertion(13, "Killing stream listener does not affect job execution on node-2")
+    test.add_assertion( 0, 'Missing stream listener on node-1 does not affect job execution')
+    test.add_assertion( 1, 'Missing stream listener on node-2 does not affect job execution')
+
+    test.add_assertion( 2, "1-task job: first event is 'init'")
+    test.add_assertion( 3, "1-task job: 'init' event contains subscriber data")
+    test.add_assertion( 4, "1-task job: second event is 'task_init_priv'")
+    test.add_assertion( 5, "1-task job: third event is 'task_exit'")
+    test.add_assertion( 6, "1-task job: fourth event is 'exit'")
+
+    test.add_assertion( 7, "2-task job: first event is 'init'")
+    test.add_assertion( 8, "2-task job: 'init' event contains subscriber data")
+    test.add_assertion( 9, "2-task job: second event is 'task_init_priv'")
+    test.add_assertion(10, "2-task job: third event is 'task_exit'")
+    test.add_assertion(11, "2-task job: fourth event is 'exit'")
+
+    test.add_assertion(12, "4-task job: first event is 'init'")
+    test.add_assertion(13, "4-task job: 'init' event contains subscriber data")
+    test.add_assertion(14, "4-task job: second event is 'task_init_priv'")
+    test.add_assertion(15, "4-task job: third event is 'task_exit'")
+    test.add_assertion(16, "4-task job: fourth event is 'exit'")
+
+    test.add_assertion(17, "8-task job: first event is 'init'")
+    test.add_assertion(18, "8-task job: 'init' event contains subscriber data")
+    test.add_assertion(19, "8-task job: second event is 'task_init_priv'")
+    test.add_assertion(20, "8-task job: third event is 'task_exit'")
+    test.add_assertion(21, "8-task job: fourth event is 'exit'")
+
+    test.add_assertion(22, "27-task job: first event is 'init'")
+    test.add_assertion(23, "27-task job: 'init' event contains subscriber data")
+    test.add_assertion(24, "27-task job: second event is 'task_init_priv'")
+    test.add_assertion(25, "27-task job: third event is 'task_exit'")
+    test.add_assertion(26, "27-task job: fourth event is 'exit'")
+
+    test.add_assertion(50, "Multi-tenant verification")
+
+    test.add_assertion(51, "Killing stream listener does not affect job execution on node-1")
+    test.add_assertion(52, "Killing stream listener does not affect job execution on node-2")
+
+    test.add_assertion(60, "Bad config does not affect jobs")
     test.start()
 
     log.info("-- Create the cluster --")
@@ -156,6 +272,48 @@ if __name__ == "__main__":
     except:
         pass
     cluster = LDMSDCluster.get(spec["name"], create=True, spec = spec)
+
+    log.info("-- Cleanup output --")
+    remove_job_out(cluster)
+
+    log.info("-- Test bad plugstack config --")
+    # manually start slurmctld + slurmd
+    cont = cluster.get_container("headnode")
+    cont.start_munged()
+    cont.prep_slurm_conf()
+    cont.exec_run("slurmctld")
+    for i in range(1, NUM_NODES + 1):
+        name = "node-{}".format(i)
+        cont = cluster.get_container(name)
+        cont.start_munged()
+        cont.prep_slurm_conf()
+        cont.write_file("/etc/slurm/plugstack.conf",
+                "required {libdir}/ovis-ldms/libslurm_notifier.so foo=bar" \
+                .format(libdir=args.libdir))
+        cont.exec_run("slurmd")
+
+    j0 = submit_job(cluster, num_tasks = 4)
+    j1 = submit_job(cluster, num_tasks = 4)
+    j2 = submit_job(cluster, num_tasks = 4)
+    j3 = submit_job(cluster, num_tasks = 4)
+    time.sleep(10)
+
+    jobs_verified = True
+    tasks = [ (j, i) for j in [j0, j1, j2, j3] for i in range(0, 4) ]
+    for j, i in tasks:
+        out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
+                             .format(jobid = j, procid=i))
+        d = make_dict_from_out(out)
+        jobid = int(d.get('SLURM_JOBID', -1))
+        taskid = int(d.get('SLURM_PROCID', -1))
+        if jobid != j or taskid != i:
+            jobs_verified = False
+            break
+    test.assert_test(60, jobs_verified, 'jobs verified')
+
+    for cont in cluster.containers:
+        cont.exec_run("pkill slurm") # this kills both slurmd and slurmctld
+
 
     log.info("-- Start daemons --")
     cluster.start_daemons()
@@ -176,39 +334,32 @@ if __name__ == "__main__":
     #    variables match the data received on the LDMSD Stream
     #
 
-    log.info("-- Create the sbatch and job scripts --")
-    cont = cluster.get_container("node-1")
-    cont.write_file('/db/show_spank_env.sh',
-                    '#!/bin/bash\n'\
-                    'env | grep SLURM > /db/slurm_env_$(hostname).out\n')
-    cont.write_file('/db/spank_job.sh',
-                    '#!/bin/bash\n'\
-                    '#SBATCH -N 2\n'\
-                    '#SBATCH --output spank_test.out\n'\
-                    '#SBATCH -D /db\n'\
-                    'export SUBSCRIBER_DATA=\'{"sub":"data"}\'\n'\
-                    'srun bash /db/show_spank_env.sh\n')
 
     # If there is no one listening for stream events, the job still runs.
     log.info("-- Submitting job with no stream listener --")
-    remove_job_out(cluster)
-    jobid = cluster.sbatch("/db/spank_job.sh")
-    log.info("  jobid = {0}".format(jobid))
-    time.sleep(10) # enough time for the job to run
+    num_tasks = 2 * CPU_PER_NODE
+    jobid = submit_job(cluster, num_tasks = num_tasks)
+    time.sleep(15) # enough time for the job to run
 
     # Read the environment file to confirm that the job ran
     assert_no = 0
-    for node in [ 'node-1', 'node-2' ]:
-        cont = cluster.get_container(node)
-        out = cont.read_file('/db/slurm_env_{node}.out'.format(node=cont.hostname))
+    cont = cluster.get_container("headnode")
+    _nodes = []
+    for procid in range(0, num_tasks): # 8 procs span 2 nodes
+        out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
+                             .format(jobid = jobid, procid=procid))
         d = make_dict_from_out(out)
-        test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
+        _nodes.append(d.get('SLURM_TOPOLOGY_ADDR'))
+
+    _node_set = set(_nodes)
+
+    for node in _node_set:
+        test.assert_test(assert_no, _nodes.count(node) == CPU_PER_NODE,
+                         'job output file created')
         assert_no += 1
 
-    # cleanup prior job's results
-    remove_job_out(cluster)
-
-    slurmd_containers = [cluster.get_container(c) for c in ["node-1","node-2"]]
+    slurmd_containers = [cluster.get_container("node-{}".format(i)) \
+                                        for i in range(1, NUM_NODES+1)]
 
     # start a stream subscriber
     for cont in slurmd_containers:
@@ -220,67 +371,76 @@ if __name__ == "__main__":
             cluster.remove()
             sys.exit(1)
 
+    time.sleep(5) # should be enough for initialization
+
     log.info("-- Submitting job with listener --")
-    jobid = cluster.sbatch("/db/spank_job.sh")
-    log.info("  jobid = {0}".format(jobid))
-    time.sleep(3) # enough time for the job to run
 
-    # Read the environment file to see that it ran
-    node_env = []
-    stream_data = []
-    for cont in slurmd_containers:
-        node_env.append(cont.read_file('/db/slurm_env_{node}.out'.format(node=cont.hostname)))
-        stream_data.append(cont.read_file('/db/spank_stream_{node}.out'.format(node=cont.hostname)))
+    ntasks = [1, 2, 4, 8, 27]
+    jobinfo_list = []
+    _first_assertion = 2
+    subscriber_data = {"sub": "data"}
+    for n in ntasks:
+        jobid = submit_job(cluster, num_tasks = n)
+        jobinfo = { "jobid": jobid, "num_tasks": n,
+                    "first_assertion": _first_assertion,
+                    "subscriber_data": subscriber_data }
+        _first_assertion += 5
+        jobinfo_list.append(jobinfo)
+    time.sleep(20) # enough time for the job to run
 
-    # Parse the files and create dictionaries
-    env_dict = []
-    for env in node_env:
-        env = env.split('\n')
-        d = {}
-        for e in env:
-            e = e.split('=')
-            if len(e) > 1:
-                d[e[0]] = e[1]
-        env_dict.append(d)
-
+    # Parse node events
     node_events = []
-    for events in stream_data:
-        events = events.split('EVENT:')
+    all_events = []
+    for cont in slurmd_containers:
+        data = cont.read_file('/db/spank_stream_{node}.out'.format(node=cont.hostname))
+        events = data.split('EVENT:')
         event_list = []
         for event in events:
             if len(event) == 0:
                 continue
-            d = json.loads(event)
+            decoder = json.JSONDecoder()
+            d, pos = decoder.raw_decode(event)
             e = d['event']
+            e['hostname'] = cont.hostname # also tag hostname in the event
             event_list.append(e)
+            all_events.append(e)
         node_events.append(event_list)
 
-    subscriber_data = {"sub": "data"}
-    for node in range(0, 2):
-        e = env_dict[node]
-        events = node_events[node]
-        test.assert_test(assert_no, events[0]['event'] == 'init',
-                         '{0} == {1}'.format(events[0]['event'], 'init'))
-        assert_no += 1
-        test.assert_test(assert_no, events[0]['data']['subscriber_data'] == subscriber_data,
-                         '{0} == {1}'.format(events[0]['data']['subscriber_data'], subscriber_data))
-        assert_no += 1
-        test.assert_test(assert_no, events[1]['event'] == 'task_init_priv',
-                         '{0} == {1}'.format(events[1]['event'], 'task_init_priv'))
-        assert_no += 1
-        test.assert_test(assert_no, events[2]['event'] == 'task_exit',
-                         '{0} == {1}'.format(events[2]['event'], 'task_exit'))
-        assert_no += 1
-        test.assert_test(assert_no, events[3]['event'] == 'exit',
-                         '{0} == {1}'.format(events[3]['event'], 'exit'))
-        assert_no += 1
+    all_events.sort(key = lambda x: x['timestamp']) # sort by timestamp
+
+    log.info("-- Verifying Events --")
+    # Verify jobs
+    for jobinfo in jobinfo_list:
+        verify_jobinfo(cluster, test, node_events, jobinfo)
+
+    # Search for multi-tenant
+    mt_found = False
+    for events in node_events:
+        if not events:
+            continue
+        hostname = events[0]['hostname']
+        jobev = {} # jobid: last_event
+        # only look for `init` and `exit`
+        for ev in events:
+            jobid = ev['data']['job_id']
+            if ev['event'] == 'init':
+                if jobev:
+                    mt_found = True
+                    log.info("job {} multi-tenant with {}" \
+                             .format(jobid, jobev.keys()))
+                jobev[jobid] = ev
+            elif ev['event'] == 'exit':
+                # remove
+                jobev.pop(jobid)
+
+    test.assert_test(50, mt_found, 'Multi-tenant jobs found')
 
     # Run a job that crashes the stream listener while the job is running
-    cont = cluster.get_container("node-1")
+    cont = cluster.get_container("headnode")
     cont.write_file('/db/crash_stream_listener.sh',
                     '#!/bin/bash\n'\
                     'pkill ldmsd_stream_subscriber\n'\
-                    'env | grep SLURM > /db/crash_env_$(hostname).out\n')
+                    'env | grep SLURM > /db/crash_env_${SLURM_JOBID}.${SLURM_PROCID}.out\n')
     cont.write_file('/db/spank_job_2.sh',
                     '#!/bin/bash\n'\
                     '#SBATCH -N 2\n'\
@@ -289,20 +449,24 @@ if __name__ == "__main__":
                     'export SUBSCRIBER_DATA=\'{"sub":"data"}\'\n'\
                     'srun bash /db/crash_stream_listener.sh\n')
 
-    remove_job_out(cluster)
-
     log.info("-- Submitting job that crashes listener --")
     jobid = cluster.sbatch("/db/spank_job_2.sh")
     log.info("  jobid = {0}".format(jobid))
-    time.sleep(3) # enough time for the job to run
+    time.sleep(10) # enough time for the job to run
 
-    for node in [ 'node-1', 'node-2' ]:
-        cont = cluster.get_container(node)
-        out = cont.read_file('/db/crash_env_{node}.out'.format(node=cont.hostname))
+    cont = cluster.get_container("headnode")
+    assert_no = 51
+    for procid in [ 0, 1 ]:
+        out = cont.read_file('/db/crash_env_{0}.{1}.out'.format(jobid, procid))
         d = make_dict_from_out(out)
         test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
         assert_no += 1
 
     test.finish()
 
+    raw_input("Press ENTER to cleanup ...")
+
+    log.info("-- Cleanup output --")
+    remove_job_out(cluster)
+    log.info("-- Removing cluster --")
     cluster.remove() # this destroys entire cluster
