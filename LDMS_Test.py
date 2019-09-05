@@ -1333,10 +1333,14 @@ class LDMSDContainer(DockerClusterContainer):
                         sio.write(" " + arg)
                     sio.write("\n")
                 self.write_file("/etc/slurm/plugstack.conf", sio.getvalue())
-            rc, out = self.exec_run(prog)
+            rc = -1
+            retry = 3
+            while rc != 0 and retry > 0:
+                retry -= 1
+                rc, out = self.exec_run(prog)
             if rc:
                 raise RuntimeError("{} failed, rc: {}, output: {}" \
-                                   .format(prog, rc, out))
+                               .format(prog, rc, out))
 
     def kill_slurm(self):
         """Kill slurmd and slurmctld"""
@@ -1360,7 +1364,11 @@ class LDMSDContainer(DockerClusterContainer):
                     sio.write(" " + arg)
                 sio.write("\n")
             self.write_file("/etc/slurm/plugstack.conf", sio.getvalue())
-        rc, out = self.exec_run(prog)
+        rc = -1
+        retry = 3
+        while rc != 0 and retry > 0:
+            retry -= 1
+            rc, out = self.exec_run(prog)
         if rc:
             raise RuntimeError("{} failed, rc: {}, output: {}" \
                                .format(prog, rc, out))
