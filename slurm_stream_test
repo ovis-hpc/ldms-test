@@ -313,7 +313,7 @@ json_path = args.data_root
 
 
 ### create slurm stream data ###
-def create_events(node_count, task_count, job_id):
+def create_events(node_count, task_count, job_id, init_time = None):
     """
     Generate events for node_count nodes. Each node will
     have total_tasks / node_count tasks
@@ -325,11 +325,14 @@ def create_events(node_count, task_count, job_id):
     node_events[node][event] is  a dictionary
     """
     nodes = []
+    if not init_time:
+        init_time = int(time.time())
+    exit_time = init_time + 5
     task_start = 0
     for node in range(0, node_count):
         events = []
         init_event = {}
-        init_event['timestamp'] = int(time.time())
+        init_event['timestamp'] = init_time
         init_event['schema'] = 'mt-slurm'
         init_event['event'] = 'init'
         init_event['context'] = 'remote'
@@ -349,7 +352,7 @@ def create_events(node_count, task_count, job_id):
             init_task['schema'] = 'mt-slurm'
             init_task['event'] = 'task_init_priv'
             init_task['context'] = 'remote'
-            init_task['timestamp'] = int(time.time())
+            init_task['timestamp'] = init_time
             init_task['data'] = {}
             init_task['data']['job_id'] = job_id
             init_task['data']['task_pid'] = task + job_id
@@ -362,7 +365,7 @@ def create_events(node_count, task_count, job_id):
             exit_task['schema'] = 'mt-slurm'
             exit_task['event'] = 'task_exit'
             exit_task['context'] = 'remote'
-            exit_task['timestamp'] = int(time.time())
+            exit_task['timestamp'] = exit_time
             exit_task['data'] = {}
             exit_task['data']['job_id'] = job_id
             exit_task['data']['task_pid'] = task + job_id
@@ -375,7 +378,7 @@ def create_events(node_count, task_count, job_id):
         exit_event['schema'] = 'mt-slurm'
         exit_event['event'] = 'exit'
         exit_event['context'] = 'remote'
-        exit_event['timestamp'] = int(time.time())
+        exit_event['timestamp'] = exit_time
         exit_event['data'] = {}
         exit_event['data']['job_id'] = job_id
         exit_event['nodeid'] = node
@@ -462,9 +465,10 @@ jobs = []
 j = 0
 
 # add jobs to compute-1
+t = int(time.time())
 job_id = 12345
 while j < 4:
-    events_1_8 = create_events(2, 8, job_id)
+    events_1_8 = create_events(2, 8, job_id, t)
     jobs.append(events_1_8)
     deliver_events(events_1_8)
     job_id += 1
@@ -473,7 +477,7 @@ while j < 4:
 job_id = 12355
 j = 0
 while j < 4:
-    events_1_16 = create_events(2, 16, job_id)
+    events_1_16 = create_events(2, 16, job_id, t)
     jobs.append(events_1_16)
     deliver_events(events_1_16)
     job_id += 1
@@ -481,7 +485,7 @@ while j < 4:
 
 test_jobs(2, jobs)
 
-new_event_node1 = create_events(1, 8, 12353)
+new_event_node1 = create_events(1, 8, 12353, t + 10)
 deliver_events(new_event_node1)
 jobs = [ new_event_node1 ]
 test_jobs(1, jobs)
