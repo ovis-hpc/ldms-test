@@ -1,0 +1,439 @@
+#!/usr/bin/python
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Multi-tenant PAPI sampler test." )
+add_common_args(ap)
+ap.add_argument("--libdir",
+                help="The directory where the test target is installed.",
+                default="__find_from_prefix__")
+args = ap.parse_args()
+process_args(args)
+if args.libdir == "__find_from_prefix__":
+    args.libdir = "/opt/ovis/lib64" if os.path.exists(args.prefix + "/lib64") \
+                                    else "/opt/ovis/lib"
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+JOB_EXPIRY = 10
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s papi_sampler_test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "munged", "type" : "munged" },
+                {
+                    "name" : "slurmd",
+                    "type" : "slurmd",
+                    "plugstack" : [
+                        {
+                            "required" : True,
+                            "path" : "%libdir%/ovis-ldms/libslurm_notifier.so",
+                            "args" : [
+                                "auth=none",
+                                "port=10000",
+                                "timeout=1",
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+                {
+                    "plugin" : "papi_sampler",
+                    "!extends" : "sampler_plugin",
+                    "config": common_plugin_config + [
+                        "job_expiry={}".format(JOB_EXPIRY),
+                    ]
+                },
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen_port" : 10000,
+            "listen_xprt" : "sock",
+            "listen_auth" : "none",
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "headnode",
+            "component_id" : 20001,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "munged", "type" : "munged" },
+                { "name" : "slurmctld", "type" : "slurmctld" },
+            ],
+        },
+    ],
+
+    "libdir": args.libdir,
+    "cpu_per_node" : 4,
+    "oversubscribe" : "FORCE",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "papi_sampler_test",
+                 test_desc = "Multi-tenant PAPI sampler test.",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(0, "ldmsd has started")
+test.add_assertion(1, "Non-papi job does not create set")
+test.add_assertion(1.1, "Non-papi job is submitted")
+test.add_assertion(1.2, "Non-papi job is running before ldms_ls")
+test.add_assertion(1.3, "Non-papi job is running after ldms_ls")
+test.add_assertion(2, "papi job creates set")
+test.add_assertion(2.1, "Events in papi job set created according to config file")
+test.add_assertion(2.2, "Schema name is set accordingly")
+test.add_assertion(2.3, "PAPI set has correct job_id")
+test.add_assertion(2.4, "PAPI set has correct task_pids")
+test.add_assertion(3, "papi job creates set")
+test.add_assertion(3.1, "Events in papi job set created according to config file")
+test.add_assertion(3.2, "Schema name is set accordingly")
+test.add_assertion(3.3, "PAPI set has correct job_id")
+test.add_assertion(3.4, "PAPI set has correct task_pids")
+
+test.add_assertion(4, "Multiple, concurrent jobs results in concurrent, multiple sets")
+test.add_assertion(5, "Event counters are incremental")
+
+test.add_assertion(6, "PAPI set persists within `job_expiry` after job exited")
+test.add_assertion(7, "PAPI set is deleted after `2.2 x job_expiry` since job exited")
+
+test.add_assertion(8, "Missing config file attribute is logged")
+test.add_assertion(9, "Bad config file is logged")
+test.add_assertion(10, "Unsupported events are logged")
+
+#### Helper functions ####
+
+def ldms_lsl(cont, opt = ""):
+    """Perform `ldms_ls -l` and parse data into Python dict"""
+    rc, out = cont.ldms_ls("-l " + opt)
+    return parse_ldms_ls(out)
+
+def submit_job(name, num_tasks, duration = 10, subscriber_data = {}):
+    global cluster
+    cont = cluster.get_container("headnode")
+    script = \
+        "#!/bin/bash\n" \
+        "#SBATCH -n {num_tasks}\n" \
+        "#SBATCH -D /db\n" \
+        "export SUBSCRIBER_DATA='{subscriber_data}'\n" \
+        "srun bash -c 'for X in {{1..{duration}}}; do echo $SLURM_PROCID: $X; sleep 1; done'\n" \
+        .format(
+            num_tasks = num_tasks,
+            duration = duration,
+            subscriber_data = json.dumps(subscriber_data),
+        )
+    fname = "/db/{}.sh".format(name)
+    cont.write_file(fname, script)
+    jobid = cluster.sbatch(fname)
+    return jobid
+
+def submit_papi_job(name, num_tasks, papi_config, duration = 10):
+    global cluster
+    conf_file = "/db/{}.papi.json".format(name)
+    cont = cluster.get_container("headnode")
+    cont.write_file(conf_file, json.dumps(papi_config))
+    subscriber_data = { "papi_sampler": {"file": conf_file} }
+    return submit_job(name, num_tasks, duration, subscriber_data)
+
+
+#### Get or create the cluster ####
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+
+#### Cleanup output files ####
+cont = cluster.get_container("headnode")
+cont.exec_run("rm -f /db/*.out")
+
+
+#### Start ####
+test.start()
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+
+cont = cluster.get_container("node-1")
+
+#### Check ldmsd is running ####
+sets = ldms_lsl(cont, "-x sock -p 10000")
+test.assert_test(0, sets.keys() == ["node-1/meminfo"], "verified")
+
+#### Non-papi job does not create set ####
+while True: # will break at the end of loop
+    jobid = submit_job("no_papi", num_tasks = 2, duration = 10)
+    test.assert_test(1.1, jobid > 0, "jobid({}) > 0".format(jobid))
+    if not jobid:
+        break
+    time.sleep(5)
+    (job, ) = cluster.squeue(jobid)
+    test.assert_test(1.2, job["STATE"] == "RUNNING", "STATE = RUNNING")
+    sets = ldms_lsl(cont, "-x sock -p 10000")
+    test.assert_test(1.3, job["STATE"] == "RUNNING", "STATE = RUNNING")
+    test.assert_test(1, sets.keys() == ["node-1/meminfo"], "verified")
+    time.sleep(8) # job should exit by now
+    break
+
+def verify_papi(jobid, papi_config, assert_no):
+    # verify: assert_no set_created
+    #         + 0.1 event metrics
+    #         + 0.2 schema name
+    #         + 0.3 job_id
+    #         + 0.4 task_pids & ranks
+    cont = cluster.get_container("node-1")
+    (job, ) = cluster.squeue(jobid)
+    sets = ldms_lsl(cont, "-x sock -p 10000 -v")
+    tmp = filter(lambda x: x["data"].get("job_id") == jobid, sets.values())
+    test.assert_test(assert_no, len(tmp) == 1, "PAPI set created")
+    if len(tmp) != 1:
+        return
+    _set = tmp[0]
+    test.assert_test(assert_no + .2,
+                     _set["meta"]["schema"] == papi_config["schema"],
+                     "schema name == {}".format(papi_config["schema"]))
+    events = set(_set["data"].keys()) \
+             - set(["component_id", "job_id", "app_id",
+                    "job_state", "job_start", "job_end",
+                    "task_count", "task_pids", "task_ranks"])
+    cfg_events = set(papi_config["events"])
+    test.assert_test(assert_no + .1, events == cfg_events,
+                     "{} == {}".format(events, cfg_events))
+    test.assert_test(assert_no + .3, jobid == _set["data"]["job_id"],
+                          "{} == {}".format(jobid, _set["data"]["job_id"]))
+    pids = _set["data"]["task_pids"]
+    cont = cluster.get_container("node-1")
+    for pid, rank in zip(_set["data"]["task_pids"], _set["data"]["task_ranks"]):
+        e = cont.proc_environ(pid)
+        _jobid = int(e.get("SLURM_JOBID", -1))
+        if _jobid != jobid:
+            test.assert_test(assert_no + .4, False,
+                             "jobid {} != {}".format(_jobid, jobid))
+            return
+        _rank =  int(e.get("SLURM_PROCID", -1))
+        if _rank != rank:
+            test.assert_test(assert_no + .4, False,
+                             "rank {} != {}".format(_rank, rank))
+            return
+    else:
+        test.assert_test(assert_no + .4, True, "jobid/ranks/pids verified")
+
+#### papi job creates set ####
+# test.add_assertion(2, "papi job creates set")
+while True: # will break at the end of loop
+    papi_config0 = { "schema": "papi0",
+                     "events": ["PAPI_TOT_INS"] }
+    jobid0 = submit_papi_job("papi0", num_tasks=2, duration=3600,
+                             papi_config = papi_config0)
+    if not jobid0:
+        break
+    time.sleep(5)
+    sets0 = ldms_lsl(cont, "-x sock -p 10000 -v")
+    verify_papi(jobid0, papi_config0, 2)
+    break
+
+#### Concurrent job ####
+# test.add_assertion(3, "papi job creates set")
+jobid1 = None
+while True: # will break at the end of loop
+    # submit + check another job first
+    papi_config1 = { "schema": "papi1",
+                     "events": ["PAPI_TOT_INS", "PAPI_BR_MSP"] }
+    jobid1 = submit_papi_job("papi1", num_tasks=2, duration=10,
+                            papi_config = papi_config1)
+    if not jobid1:
+        break
+    time.sleep(5)
+    sets1 = ldms_lsl(cont, "-x sock -p 10000 -v")
+    verify_papi(jobid1, papi_config1, 3)
+    # verify concurrency
+    _dir = dir()
+    if "sets0" not in _dir or "sets1" not in _dir:
+        break
+    keys0 = set(sets0.keys())
+    keys1 = set(sets1.keys())
+    test.assert_test(4, keys0 < keys1, "LDMS sets ({})".format(keys1))
+    break
+
+#### Incremental counters ####
+while True: # will break at the end of loop
+    _dir = dir()
+    if "sets0" not in _dir or "sets1" not in _dir:
+        break
+    (_set_t0,) = filter(lambda x: x["data"].get("job_id") == jobid0, sets0.values())
+    (_set_t1,) = filter(lambda x: x["data"].get("job_id") == jobid0, sets1.values())
+    for k in papi_config0["events"]:
+        for v0, v1 in zip(_set_t0["data"][k], _set_t1["data"][k]):
+            if v0 >= v1:
+                test.assert_test(5, False, "{} {} < {}".format(k, v0, v1))
+                break
+    else: # all good
+        test.assert_test(5, True, "increasing event metrics")
+    break
+
+#### Set persist within the expiry ####
+while True: # will break at the end
+    if not jobid1:
+        break
+    while True : # wait for jobid1 to exit
+        sq = cluster.squeue(jobid1)
+        if not sq or sq[0]['ST'] not in ['R', 'PD', 'CG']:
+            break
+        _sets = ldms_lsl(cont, "-x sock -p 10000 -v")
+        time.sleep(1)
+    # time.sleep(0.1 * JOB_EXPIRY)
+    time.sleep(0.5 * JOB_EXPIRY)
+    sets2 = ldms_lsl(cont, "-x sock -p 10000 -v")
+    (_set,) = filter(lambda x: x["data"].get("job_id") == jobid1, sets2.values())
+    test.assert_test(6, _set["data"]["job_state"] > 2, "verified")
+    break
+
+# test.add_assertion(7, "PAPI set is deleted after `2.2 x job_expiry` since job exited")
+while True:
+    if not jobid1:
+        break
+    while True : # wait for jobid1 to exit
+        sq = cluster.squeue(jobid1)
+        if not sq or sq[0]['ST'] not in ['R', 'PD', 'CG']:
+            break
+        _sets = ldms_lsl(cont, "-x sock -p 10000 -v")
+        time.sleep(1)
+    time.sleep(4 * JOB_EXPIRY)
+    sets3 = ldms_lsl(cont, "-x sock -p 10000 -v")
+    for _set in sets3.values():
+        if _set["data"].get("job_id") == jobid1:
+            test.assert_test(7, False, "{} persists".format(_set["name"]))
+            break
+    else:
+        test.assert_test(7, True, "{} deleted".format(_set["name"]))
+    break
+
+#test.add_assertion(8, "Missing config file attribute is logged")
+while True: # will break
+    cont = cluster.get_container("node-1")
+    subscriber_data = { "papi_sampler": { } }
+    jobid8 = submit_job( "missing_cfg_attr", num_tasks = 2,
+                        duration = 2, subscriber_data = subscriber_data )
+    time.sleep(2)
+    rc, out = cont.exec_run("grep 'papi_config object must contain' /var/log/ldmsd.log")
+    msg = out.split('ERROR', 1)[-1].strip()
+    test.assert_test(8, rc == 0, msg)
+    break
+
+#test.add_assertion(9, "Bad config file is logged")
+while True: # will break
+    cont = cluster.get_container("node-1")
+    cont.write_file("/db/bad.json", "bad")
+    subscriber_data = { "papi_sampler": { "file": "/db/bad.json" } }
+    jobid9 = submit_job( "bad_config", num_tasks = 2,
+                        duration = 2, subscriber_data = subscriber_data )
+    time.sleep(2)
+    rc, out = cont.exec_run("grep 'configuration file syntax error' /var/log/ldmsd.log")
+    msg = out.split('ERROR', 1)[-1].strip()
+    test.assert_test(9, rc == 0, msg)
+    break
+
+#test.add_assertion(10, "Unsupported events are logged")
+while True: # will break
+    papi_config10 = { "schema": "papi10", "events": ["FOO"] }
+    cont = cluster.get_container("node-1")
+    jobid10 = submit_papi_job("papi10", num_tasks=2, duration=2,
+                              papi_config = papi_config10)
+    time.sleep(2)
+    rc, out = cont.exec_run("grep \"PAPI error .* translating event code 'FOO'\" /var/log/ldmsd.log")
+    msg = out.split('ERROR', 1)[-1].strip()
+    test.assert_test(10, rc == 0, msg)
+    break
+
+#### Finish ####
+log.info("-- Finishing Test --")
+test.finish()
+log.info("-- Cleaning up files --")
+_list = [ "bad.json", "bad_config.sh", "missing_cfg_attr.sh", "no_papi.sh",
+          "papi0.papi.json", "papi0.sh",
+          "papi1.papi.json", "papi1.sh",
+          "papi10.papi.json", "papi10.sh",
+          "slurm-2.out",
+          "slurm-3.out",
+          "slurm-4.out",
+          "slurm-5.out",
+          "slurm-6.out",
+          "slurm-7.out",
+        ]
+_list = [ "/db/{}".format(x) for x in _list ]
+cmd = "rm -f " + (" ".join(_list))
+cluster.exec_run(cmd)
+log.info("-- Removing the virtual cluster --")
+cluster.remove()
