@@ -126,9 +126,9 @@ class Test(object):
         msg["assert-cond"] = cond_str
         msg["test-status"] = Test.PASSED if cond else Test.FAILED
         self._send(msg)
-        log.info("assertion {}, {}: {}" \
+        log.info("assertion {}, {}: {}, {}" \
                  .format(msg["assert-no"], msg["assert-desc"],
-                         msg["test-status"]))
+                         cond_str, msg["test-status"]))
 
     def finish(self):
         for num, msg in self.assertions.iteritems():
