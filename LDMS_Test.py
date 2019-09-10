@@ -634,6 +634,32 @@ class Container(object):
         erun = self.exec_run(cmd)
         return erun.output
 
+    def pipe(self, cmd, content):
+        """Pipe `content` to `cmd` executed in the container"""
+        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        sock.setblocking(True)
+        sock.send(content)
+        sock.shutdown(socket.SHUT_WR)
+        D.ret = ret = sock.recv(8192)
+        sock.close()
+        if len(ret) == 0:
+            rc = 0
+            output = ''
+        else:
+            # skip 8-byte header
+            output = ret[8:]
+            rc = bytearray(ret[0])[0]
+            if rc == 1: # OK
+                rc = 0
+        return rc, output
+
+    def proc_environ(self, pid):
+        """Returns environment (dict) of process `pid`"""
+        _env = self.read_file("/proc/{}/environ".format(pid))
+        _env = _env.split('\x00')
+        _env = dict( v.split('=', 1) for v in _env if v )
+        return _env
+
 
 class Service(object):
     """Docker Service Wrapper
