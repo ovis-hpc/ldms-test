@@ -60,8 +60,8 @@ _META_DATA = r'(?:' + \
              r'(?P<meta_gid>\d+)\s+' + \
              r'(?P<meta_perm>-(?:[r-][w-][x-]){3})\s+' + \
              r'(?P<meta_update>\d+\.\d+)\s+' + \
-             r'(?P<meta_duration>\d+\.\d+)\s+' + \
-             r'(?P<meta_info>.*)' + \
+             r'(?P<meta_duration>\d+\.\d+)' + \
+             r'(?:\s+(?P<meta_info>.*))?' + \
              r')'
 _META_END = r'(?:^(?P<meta_end>[=]+)$)'
 _LS_L_HDR = r'(?:(?P<set_name>[^:]+): .* last update: (?P<ts>.*))'
@@ -104,7 +104,30 @@ _TYPE_FN = {
 }
 
 def parse_ldms_ls(txt):
-    """Parse output of `ldms_ls -l [-v]` into list of dict (1 dict per set)"""
+    """Parse output of `ldms_ls -l [-v]` into { SET_NAME : SET_DICT } dict
+
+    Each SET_DICT is {
+        "name" : SET_NAME,
+        "ts" : UPDATE_TIMESTAMP_STR,
+        "meta" : {
+            "schema"    :  SCHEMA_NAME,
+            "instance"  :  INSTANCE_NAME,
+            "flags"     :  FLAGS,
+            "meta_sz"   :  META_SZ,
+            "data_sz"   :  DATA_SZ,
+            "uid"       :  UID,
+            "gid"       :  GID,
+            "perm"      :  PERM,
+            "update"    :  UPDATE_TIME,
+            "duration"  :  UPDATE_DURATION,
+            "info"      :  APP_INFO,
+        },
+        "data" : {
+            METRIC_NAME : METRIC_VALUE,
+            ...
+        },
+    }
+    """
     ret = dict()
     lines = txt.splitlines()
     itr = iter(lines)
