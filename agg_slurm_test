@@ -91,6 +91,10 @@ spec = {
                     "requires" : [ "munged" ],
                     "!extends" : "slurmd",
                 },
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
             ],
         },
         "slurmd" : {
@@ -187,6 +191,10 @@ spec = {
                         "updtr_start name=all"
                     ],
                 },
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
             ]
         },
         {
@@ -205,6 +213,10 @@ spec = {
                         "updtr_start name=all"
                     ],
                 },
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
             ],
         },
         {
@@ -213,6 +225,10 @@ spec = {
                 {
                     "name" : "slurmctld",
                     "type" : "slurmctld",
+                },
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
                 },
             ]
         },
