@@ -1,0 +1,330 @@
+#!/usr/bin/python
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Multi-tenant PAPI store test." )
+add_common_args(ap)
+ap.add_argument("--libdir",
+                help="The directory where the test target is installed.",
+                default="__find_from_prefix__")
+args = ap.parse_args()
+process_args(args)
+if args.libdir == "__find_from_prefix__":
+    args.libdir = "/opt/ovis/lib64" if os.path.exists(args.prefix + "/lib64") \
+                                    else "/opt/ovis/lib"
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+JOB_EXPIRY = 10
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s papi store test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "munged", "type" : "munged" },
+                {
+                    "name" : "slurmd",
+                    "type" : "slurmd",
+                    "plugstack" : [
+                        {
+                            "required" : True,
+                            "path" : "%libdir%/ovis-ldms/libslurm_notifier.so",
+                            "args" : [
+                                "auth=none",
+                                "port=10000",
+                                "timeout=1",
+                            ],
+                        },
+                    ],
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "papi_sampler",
+                    "!extends" : "sampler_plugin",
+                    "config": common_plugin_config + [
+                        "job_expiry={}".format(JOB_EXPIRY),
+                    ]
+                },
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen_port" : 10000,
+            "listen_xprt" : "sock",
+            "listen_auth" : "none",
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : 10000,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "node-2",
+            "component_id" : 10002,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "headnode",
+            "component_id" : 20001,
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "munged", "type" : "munged" },
+                { "name" : "slurmctld", "type" : "slurmctld" },
+                {
+                    "type" : "ldmsd",
+                    "listen_port" : 20000,
+                    "listen_xprt" : "sock",
+                    "listen_auth" : "none",
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "node-2",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "load name=store_papi",
+                        "config name=store_papi path=/db/sos",
+                        "prdcr_start_regex regex=.*",
+                        "strgp_add name=papi_store plugin=store_papi" \
+                                 " container=papi schema=papi",
+                        "strgp_prdcr_add name=papi_store regex=.*",
+                        "strgp_start name=papi_store",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
+            ],
+        },
+    ],
+
+    "libdir": args.libdir,
+    "cpu_per_node" : 4,
+    "oversubscribe" : "FORCE",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "papi_store_test",
+                 test_desc = "Multi-tenant PAPI store test.",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "Every job in the input data is represented in the output")
+test.add_assertion(2, "Every event in every job results in a separate row in the output")
+test.add_assertion(3, "The schema name in the output matches the event name")
+test.add_assertion(4, "Each rank in the job results in a row per event in the output")
+
+#### Get or create the cluster ####
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+#### Cleanup files ####
+cluster.exec_run("rm -rf /db/sos")
+cluster.exec_run("mkdir -p /db/sos")
+cluster.exec_run("rm -f /db/*.out")
+
+#### Start ####
+test.start()
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+
+#### Helper functions ####
+def submit_job(name, num_tasks, duration = 10, subscriber_data = {}):
+    global cluster
+    cont = cluster.get_container("headnode")
+    script = \
+        "#!/bin/bash\n" \
+        "#SBATCH -n {num_tasks}\n" \
+        "#SBATCH -D /db\n" \
+        "export SUBSCRIBER_DATA='{subscriber_data}'\n" \
+        "srun bash -c 'for X in {{1..{duration}}}; do echo $SLURM_PROCID: $X; sleep 1; done'\n" \
+        .format(
+            num_tasks = num_tasks,
+            duration = duration,
+            subscriber_data = json.dumps(subscriber_data),
+        )
+    fname = "/db/{}.sh".format(name)
+    cont.write_file(fname, script)
+    jobid = cluster.sbatch(fname)
+    return jobid
+
+def submit_papi_job(name, num_tasks, papi_config, duration = 10, **kwargs):
+    global cluster
+    conf_file = "/db/{}.papi.json".format(name)
+    cont = cluster.get_container("headnode")
+    cont.write_file(conf_file, json.dumps(papi_config))
+    subscriber_data = { "papi_sampler": {"file": conf_file} }
+    return submit_job(name, num_tasks, duration, subscriber_data)
+
+#### Define jobs ####
+events = [ "PAPI_TOT_INS", "PAPI_L1_DCM", "PAPI_L1_ICM" ]
+papi_config = { "schema": "papi", "events": events } # same for all jobs
+jobs = [
+    {
+        "name": "job{}".format(i),
+        "num_tasks": i,
+        "papi_config": papi_config,
+        "duration": 4+i,
+    } for i in [1,2,4,8]
+]
+job_index = dict() # job_id : job
+
+# Submit jobs
+for job in jobs:
+    job_id = submit_papi_job(**job)
+    job["job_id"] = job_id
+    job_index[job_id] = job
+# timed-wait for job to finished
+t0 = time.time()
+tmax = t0 + 20 #
+while time.time() < tmax:
+    sq = cluster.squeue()
+    if not sq: # queue empty
+        break
+    time.sleep(1)
+else: # loop does not break
+    log.warn("{:.3f} seconds has passed, but squeue is still not empty: {}"\
+             .format(time.time() - t0, sq))
+
+
+#### Get sos data on aggregator ####
+cont = cluster.get_container("headnode") # agg is on this node
+def get_papi_data(papi_event):
+    cmd = "sos_cmd -C /db/sos/papi -q -f json -S {} -X time_job" \
+          .format(papi_event)
+    rc, out = cont.exec_run(cmd)
+    data = json.loads(out)
+    return data
+all_data = { e: get_papi_data(e) for e in events }
+
+prev = {} # (job_id, rank, EV) : value
+
+#test.add_assertion(1, "Every job in the input data is represented in the output")
+#test.add_assertion(2, "Every event in every job results in a separate row in the output")
+#test.add_assertion(3, "The schema name in the output matches the event name")
+#test.add_assertion(4, "Each rank in the job results in a row per event in the output")
+all_job_ids = set( job_index.keys() )
+all_job_ranks = set([ (j["job_id"], r) for j in jobs for r in range(0, j["num_tasks"]) ])
+job_ranks = set()
+inc = True
+inc_msg = "verified"
+for ev in events:
+    job_ids = set()
+    ev_data = all_data.get(ev, {}).get("data")
+    if not ev_data:
+        test.assert_test(1, False, "no data for {}".format(ev))
+        break
+    for obj in ev_data:
+        job_id = obj.get("job_id")
+        rank = obj.get("rank")
+        value = obj.get(ev)
+        if job_id == None or rank == None or value == None:
+            log.warn("bad data object: {}".format(obj))
+            continue
+        job_id = int(job_id)
+        rank = int(rank)
+        value = int(value)
+        job_ids.add(job_id)
+        job_ranks.add((job_id, rank))
+        # value increment check
+        k = (job_id, rank, ev)
+        _p = prev.get(k)
+        if _p != None:
+            if value < _p: # value decreased ..
+                inc = False
+                inc_msg = "({}) {} < {}".format(k, value, _p)
+        prev[k] = value
+    if all_job_ids != job_ids:
+        test.assert_test(1, False, "{} = {}".format(all_job_ids, job_ids))
+        break
+else: # loop completed
+    test.assert_test(1, True, "{} = {}".format(all_job_ids, job_ids))
+    test.assert_test(2, True, "verified") # by above
+    test.assert_test(3, True, "verified") # by above
+    #test.add_assertion(4, "Each rank in the job results in a row per event in the output")
+    #  skip test 4 if above loop breaks
+    if all_job_ranks != job_ranks:
+        missing = all_job_ranks - job_ranks
+        excess = job_ranks - all_job_ranks
+        test.assert_test(4, False, "missing tasks {}, excess tasks {}" \
+                                   .format(missing, excess))
+    else:
+        test.assert_test(4, True, "verified")
+cluster.remove()
