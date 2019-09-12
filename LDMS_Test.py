@@ -480,7 +480,9 @@ class Spec(dict):
         lst = [dct] # list of extension
         ext = dct.get("!extends")
         while ext:
-            _temp = self.templates[ext]
+            _temp = self.templates.get(ext)
+            if _temp == None:
+                raise KeyError("`{}` template not found".format(ext))
             lst.append(_temp)
             ext = _temp.get("!extends")
         # new temporary dict
