@@ -106,6 +106,7 @@ spec = {
                     "args" : [
                         "auth=none",
                         "port=10000",
+                        "client=sock:localhost:10000:none",
                     ],
                 },
             ],
@@ -276,6 +277,16 @@ f.write("""\
 #SBATCH -D /db
 
 srun bash /db/prog.sh
+""")
+f.close()
+
+f = open(args.data_root + "/prog.sh", "w")
+f.write("""\
+#!/bin/bash
+for I in {1..60}; do
+    echo $I
+    sleep 1
+done
 """)
 f.close()
 

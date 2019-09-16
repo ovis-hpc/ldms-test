@@ -72,6 +72,7 @@ spec = {
                                 "auth=none",
                                 "port=10000",
                                 "timeout=1",
+                                "client=sock:localhost:10000:none",
                             ],
                         },
                     ],

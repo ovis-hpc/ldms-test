@@ -23,8 +23,8 @@ log = logging.getLogger(__name__)
 dc = docker.from_env()
 USER = pwd.getpwuid(os.geteuid())[0]
 
-CPU_PER_NODE = 8
-NUM_NODES = 4
+CPU_PER_NODE = 4
+NUM_NODES = 8
 OVERSUBSCRIBE = "FORCE" # NO, YES, or FORCE -- see slurm cons_res_share
 
 spec = {
@@ -54,6 +54,7 @@ spec = {
                         "auth=none",
                         "port=20000",
                         "timeout=1",
+                        "client=sock:localhost:20000:none",
                     ],
                 },
             ],
@@ -84,7 +85,7 @@ spec = {
     "cpu_per_node" : CPU_PER_NODE,
     "oversubscribe" : OVERSUBSCRIBE,
     "cap_add": [ "SYS_PTRACE" ],
-    "image": "ovis-centos-build:slurm-17.02.11",
+    "image": "ovis-centos-build",
     "libdir": "/opt/ovis/lib64",
 }
 
@@ -112,7 +113,7 @@ def submit_job(cluster, num_tasks):
     cont = cluster.get_container("headnode")
     cont.write_file('/db/show_spank_env.sh',
                     '#!/bin/bash\n'\
-                    'sleep 2\n'\
+                    'sleep 5\n'\
                     'env | grep SLURM > /db/slurm_env_${SLURM_JOBID}.${SLURM_PROCID}.out\n')
     script_path = "/db/spank_job_{}.sh".format(num_tasks)
     cont.write_file(script_path,
@@ -463,8 +464,6 @@ if __name__ == "__main__":
         assert_no += 1
 
     test.finish()
-
-    raw_input("Press ENTER to cleanup ...")
 
     log.info("-- Cleanup output --")
     remove_job_out(cluster)
