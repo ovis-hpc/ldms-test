@@ -407,8 +407,6 @@ if __name__ == "__main__":
         _verify_msg = "Message mismatch"
     test.assert_test(11, _verify, _verify_msg)
 
-    raw_input("Press ENTER to continue")
-
     cont = cluster.get_container('stream-sampler-1')
 
     cont.kill_ldmsd()
