@@ -22,6 +22,9 @@ warnings.filterwarnings('ignore') # to suppress mysql bogus warnings
                                   # in CREATE TABLE IF NOT EXISTS
 
 LOGIN = pwd.getpwuid(os.geteuid())[0]
+DEBUG = False
+
+class AssertionException(Exception): pass
 
 class Test(object):
     """TADA Test Utility
@@ -129,6 +132,8 @@ class Test(object):
         log.info("assertion {}, {}: {}, {}" \
                  .format(msg["assert-no"], msg["assert-desc"],
                          cond_str, msg["test-status"]))
+        if not cond and DEBUG:
+            raise AssertionException(self.test_desc + ", " + cond_str + ": FAILED")
 
     def finish(self):
         for num, msg in self.assertions.iteritems():

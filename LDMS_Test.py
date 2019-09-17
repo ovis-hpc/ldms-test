@@ -8,6 +8,8 @@ import socket
 import docker
 import subprocess
 
+import TADA
+
 import pdb
 
 from functools import wraps
@@ -287,6 +289,8 @@ def add_common_args(parser):
     parser.add_argument("--tada_addr", "--tada-addr", type=tada_addr,
             help="The test automation server host and port as host:port.",
             default="tada-host:9862")
+    parser.add_argument("--debug", action="store_true",
+            help="Turn on TADA.DEBUG flag.")
 
 def process_args(parsed_args):
     """Further process the parsed common arguments"""
@@ -297,6 +301,8 @@ def process_args(parsed_args):
     if not os.path.exists(args.data_root):
         os.makedirs(args.data_root)
     args.commit_id = get_ovis_commit_id(args.prefix)
+    if args.debug:
+        TADA.DEBUG = True
 
 DEEP_COPY_TBL = {
         dict: lambda x: { k:deep_copy(v) for k,v in x.iteritems() },
