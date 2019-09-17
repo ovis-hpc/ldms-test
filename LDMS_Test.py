@@ -1863,6 +1863,7 @@ class LDMSDCluster(BaseCluster):
         nodes = self.spec["nodes"]
         cpu_per_node = self.spec.get("cpu_per_node", 1)
         oversubscribe = self.spec.get("oversubscribe", "NO")
+        slurm_loglevel = self.spec.get("slurm_loglevel", "info")
         slurmd_nodes = []
         slurmctld_node = None
         for node in nodes:
@@ -1878,49 +1879,50 @@ class LDMSDCluster(BaseCluster):
             slurmctld_key = "SlurmctldHost"
         else:
             slurmctld_key = "ControlMachine"
-        slurmconf = """
-            {slurmctld_key}={slurmctld_node}
-            MpiDefault=none
-            ProctrackType=proctrack/linuxproc
-            ReturnToService=1
-            SlurmctldPidFile=/var/run/slurmctld.pid
-            SlurmctldPort=6817
-            SlurmdPidFile=/var/run/slurmd.pid
-            SlurmdPort=6818
-            SlurmdSpoolDir=/var/spool/slurmd
-            SlurmUser=root
-            StateSaveLocation=/var/spool
-            SwitchType=switch/none
-            TaskPlugin=task/none
-            TaskPluginParam=Sched
-            InactiveLimit=0
-            KillWait=30
-            MinJobAge=300
-            SlurmctldTimeout=120
-            SlurmdTimeout=300
-            Waittime=0
-            FastSchedule=1
-            SchedulerType=sched/builtin
-            SelectType=select/cons_res
-            SelectTypeParameters=CR_CPU
-            AccountingStorageType=accounting_storage/none
-            AccountingStoreJobComment=YES
-            ClusterName=cluster
-            JobCompType=jobcomp/none
-            JobAcctGatherFrequency=30
-            JobAcctGatherType=jobacct_gather/none
-            SlurmctldDebug=info
-            SlurmctldLogFile=/var/log/slurmctld.log
-            SlurmdDebug=info
-            SlurmdLogFile=/var/log/slurmd.log
-            NodeName={slurmd_nodes} CPUs={cpu_per_node} State=UNKNOWN
-            PartitionName=debug Nodes={slurmd_nodes} OverSubscribe={oversubscribe} Default=YES MaxTime=INFINITE State=UP
-            LogTimeFormat=thread_id
-        """.format( slurmctld_key = slurmctld_key,
+        slurmconf = \
+            "{slurmctld_key}={slurmctld_node}\n"\
+            "MpiDefault=none\n"\
+            "ProctrackType=proctrack/linuxproc\n"\
+            "ReturnToService=1\n"\
+            "SlurmctldPidFile=/var/run/slurmctld.pid\n"\
+            "SlurmctldPort=6817\n"\
+            "SlurmdPidFile=/var/run/slurmd.pid\n"\
+            "SlurmdPort=6818\n"\
+            "SlurmdSpoolDir=/var/spool/slurmd\n"\
+            "SlurmUser=root\n"\
+            "StateSaveLocation=/var/spool\n"\
+            "SwitchType=switch/none\n"\
+            "TaskPlugin=task/none\n"\
+            "TaskPluginParam=Sched\n"\
+            "InactiveLimit=0\n"\
+            "KillWait=30\n"\
+            "MinJobAge=300\n"\
+            "SlurmctldTimeout=120\n"\
+            "SlurmdTimeout=300\n"\
+            "Waittime=0\n"\
+            "FastSchedule=1\n"\
+            "SchedulerType=sched/builtin\n"\
+            "SelectType=select/cons_res\n"\
+            "SelectTypeParameters=CR_CPU\n"\
+            "AccountingStorageType=accounting_storage/none\n"\
+            "AccountingStoreJobComment=YES\n"\
+            "ClusterName=cluster\n"\
+            "JobCompType=jobcomp/none\n"\
+            "JobAcctGatherFrequency=30\n"\
+            "JobAcctGatherType=jobacct_gather/none\n"\
+            "SlurmctldDebug={slurm_loglevel}\n"\
+            "SlurmctldLogFile=/var/log/slurmctld.log\n"\
+            "SlurmdDebug={slurm_loglevel}\n"\
+            "SlurmdLogFile=/var/log/slurmd.log\n"\
+            "NodeName={slurmd_nodes} CPUs={cpu_per_node} State=UNKNOWN\n"\
+            "PartitionName=debug Nodes={slurmd_nodes} OverSubscribe={oversubscribe} Default=YES MaxTime=INFINITE State=UP\n"\
+            "LogTimeFormat=thread_id\n"\
+            .format( slurmctld_key = slurmctld_key,
                     slurmctld_node = slurmctld_node,
                     slurmd_nodes = slurmd_nodes,
                     cpu_per_node = cpu_per_node,
-                    oversubscribe = oversubscribe )
+                    oversubscribe = oversubscribe,
+                    slurm_loglevel = slurm_loglevel )
         return slurmconf
 
     def start_munged(self):
