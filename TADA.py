@@ -24,6 +24,15 @@ warnings.filterwarnings('ignore') # to suppress mysql bogus warnings
 LOGIN = pwd.getpwuid(os.geteuid())[0]
 DEBUG = False
 
+TERM_RESET  = '\033[0m'
+TERM_BOLD   = '\033[1m'
+TERM_RED    = '\033[31m'
+TERM_GREEN  = '\033[32m'
+TERM_YELLOW = '\033[33m'
+TERM_BLUE   = '\033[34m'
+TERM_PURPLE = '\033[35m'
+TERM_TEAL   = '\033[36m'
+
 class AssertionException(Exception): pass
 
 class Test(object):
@@ -59,9 +68,12 @@ class Test(object):
     >>>               # finally send `finish` event to `tadad`
     """ % { "LOGIN": LOGIN }
 
-    PASSED = "passed"
-    FAILED = "failed"
+    PASSED  = "passed"
+    FAILED  = "failed"
     SKIPPED = "skipped"
+    PASSED_COLOR  = TERM_BOLD + TERM_GREEN  + "passed"  + TERM_RESET
+    FAILED_COLOR  = TERM_BOLD + TERM_RED    + "failed"  + TERM_RESET
+    SKIPPED_COLOR = TERM_BOLD + TERM_YELLOW + "skipped" + TERM_RESET
 
     def __init__(self, test_suite, test_type, test_name, test_desc = None,
                  tada_addr="localhost:9862", test_user=LOGIN,
@@ -127,11 +139,17 @@ class Test(object):
     def assert_test(self, assert_no, cond, cond_str):
         msg = self.assertions[assert_no]
         msg["assert-cond"] = cond_str
+        if cond:
+            msg["test-status"] = Test.PASSED
+            status = Test.PASSED_COLOR if sys.stdout.isatty() else Test.PASSED
+        else:
+            msg["test-status"] = Test.FAILED
+            status = Test.FAILED_COLOR if sys.stdout.isatty() else Test.FAILED
         msg["test-status"] = Test.PASSED if cond else Test.FAILED
         self._send(msg)
         log.info("assertion {}, {}: {}, {}" \
                  .format(msg["assert-no"], msg["assert-desc"],
-                         cond_str, msg["test-status"]))
+                         cond_str, status))
         if not cond and DEBUG:
             raise AssertionException(self.test_desc + ", " + cond_str + ": FAILED")
 
@@ -139,9 +157,9 @@ class Test(object):
         for num, msg in self.assertions.iteritems():
             if msg["test-status"] == Test.SKIPPED:
                 self._send(msg)
+                status = Test.SKIPPED_COLOR if sys.stdout.isatty() else Test.SKIPPED
                 log.info("assertion {}, {}: {}" \
-                         .format(msg["assert-no"], msg["assert-desc"],
-                                 msg["test-status"]))
+                         .format(msg["assert-no"], msg["assert-desc"], status))
         msg = {
                 "msg-type": "test-finish",
                 "test-id": self.test_id,
