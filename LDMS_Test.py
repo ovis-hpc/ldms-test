@@ -1301,13 +1301,13 @@ class LDMSDContainer(DockerClusterContainer):
             offset = samp.get("offset", "")
             if offset != "":
                 offset = "offset={}".format(offset)
-            samp_cfg = ("""
-                load name={plugin}
-                config name={plugin} {config}
-            """ + ( "" if not samp.get("start") else \
-            """
-                start name={plugin} {interval} {offset}
-            """)
+            samp_cfg = (
+                "load name={plugin}\n" \
+                "config name={plugin} {config}\n" + \
+                (
+                    "start name={plugin} {interval} {offset}\n" \
+                            if samp.get("start") else ""
+                )
             ).format(
                 plugin = plugin, config = " ".join(samp["config"]),
                 interval = interval, offset = offset
