@@ -2099,6 +2099,9 @@ class LDMSDCluster(BaseCluster):
         for cont in self.containers:
             cont.start_daemons()
 
+    def all_exec_run(self, cmd):
+        return { c.hostname: c.exec_run(cmd) for c in self.containers }
+
 def read_msg(_file):
     """Read a message "\x01...\x03" from `_file` file handle"""
     pos = _file.tell()
