@@ -38,12 +38,16 @@ else:
 
 #### argument parsing #### -------------------------------------------
 ap = argparse.ArgumentParser(description =
-                         "Run test scenario of 2 samplers -> agg-1 -> agg-2 " \
+                         "Run test scenario of 2 samplers " \
+                         "-> 2 x agg-1 -> agg-2 " \
                          "with slurm job ID verification." )
 add_common_args(ap)
 ap.add_argument("--slurm-notifier", type = str,
                 default = "__find_from_prefix__",
                 help = "The path (in container) to slurm_notifier library." )
+ap.add_argument("--num-compute", type = int,
+                default = 2,
+                help = "Number of compute nodes.")
 args = ap.parse_args()
 process_args(args)
 
@@ -55,6 +59,7 @@ COMMIT_ID = args.commit_id
 SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
+NUM_COMPUTE = args.num_compute
 
 SLURM_NOTIFIER = args.slurm_notifier
 if SLURM_NOTIFIER == "__find_from_prefix__":
@@ -70,6 +75,11 @@ if SLURM_NOTIFIER == "__find_from_prefix__":
 
 
 #### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
 spec = {
     "name" : CLUSTERNAME,
     "description" : "{}'s test_agg_slurm cluster".format(USER),
@@ -78,22 +88,20 @@ spec = {
         "compute-node" : {
             "daemons" : [
                 {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
                     "name" : "munged",
                     "type" : "munged",
                 },
                 {
-                    "name" : "sampler-daemon",
-                    "requires" : [ "munged" ],
-                    "!extends" : "ldmsd-sampler",
-                },
-                {
                     "name" : "slurmd",
-                    "requires" : [ "munged" ],
                     "!extends" : "slurmd",
                 },
                 {
-                    "name" : "sshd",
-                    "type" : "sshd",
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
                 },
             ],
         },
@@ -114,11 +122,7 @@ spec = {
         "sampler_plugin" : {
             "interval" : 1000000,
             "offset" : 0,
-            "config" : [
-                "component_id=%component_id%",
-                "instance=%hostname%/%plugin%",
-                "producer=%hostname%",
-            ],
+            "config" : common_plugin_config,
             "start" : True,
         },
         "ldmsd-base" : {
@@ -131,22 +135,30 @@ spec = {
             "!extends" : "ldmsd-base",
             "samplers" : [
                 {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+                {
                     "plugin" : "slurm_sampler",
                     "!extends" : "sampler_plugin",
                     "start" : False, # override
                 },
                 {
-                    "plugin" : "meminfo",
+                    "plugin" : "syspapi_sampler",
                     "!extends" : "sampler_plugin",
+                    "config" : common_plugin_config + [
+                        "cfg_file=/db/syspapi.json",
+                        "cumulative=0",
+                        "auto_pause=1",
+                    ],
                 },
                 {
-                    "plugin" : "vmstat",
+                    "plugin" : "papi_sampler",
                     "!extends" : "sampler_plugin",
+                    "config" : common_plugin_config + [
+                        "job_expiry=5",
+                    ]
                 },
-                {
-                    "plugin" : "procstat",
-                    "!extends" : "sampler_plugin",
-                }
             ],
         },
         "prdcr" : {
@@ -156,67 +168,95 @@ spec = {
             "type" : "active",
             "interval" : 1000000,
         },
-    },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
     "nodes" : [
         {
-            "hostname" : "compute-1",
-            "component_id" : 10001,
+            "hostname" : "node-{}".format(i),
+            "component_id" : 10000 + i,
             "!extends" : "compute-node",
-        },
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
         {
-            "hostname" : "compute-2",
-            "component_id" : 10002,
+            "hostname" : "agg-1{}".format(j),
             "!extends" : "compute-node",
-        },
-        {
-            "hostname" : "agg-1",
             "daemons" : [
-                {
-                    "name" : "aggregator",
-                    "!extends" : "ldmsd-base",
-                    "listen_port" : 20000, # override
-                    "prdcrs" : [ # these producers will turn into `prdcr_add`
-                        {
-                            "name" : "compute-1",
-                            "!extends" : "prdcr",
-                        },
-                        {
-                            "name" : "compute-2",
-                            "!extends" : "prdcr",
-                        },
-                    ],
-                    "config" : [ # additional config applied after prdcrs
-                        "prdcr_start_regex regex=.*",
-                        "updtr_add name=all interval=1000000 offset=0",
-                        "updtr_prdcr_add name=all regex=.*",
-                        "updtr_start name=all"
-                    ],
-                },
                 {
                     "name" : "sshd",
                     "type" : "sshd",
                 },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 400000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-{}".format(i*2+j),
+                            "!extends" : "prdcr",
+                        } for i in range(0, NUM_COMPUTE / 2)
+                    ],
+                },
             ]
-        },
+        } for j in [1, 2]
+    ] + [
         {
             "hostname" : "agg-2",
             "daemons" : [
                 {
-                    "name" : "aggregator",
-                    "!extends" : "ldmsd-base",
-                    "listen_port" : 20001, # override
-                    "config" : [
-                        "prdcr_add name=agg-1 host=agg-1 port=20000 "\
-                                  "xprt=sock type=active interval=20000000",
-                        "prdcr_start_regex regex=.*",
-                        "updtr_add name=all interval=1000000 offset=0",
-                        "updtr_prdcr_add name=all regex=.*",
-                        "updtr_start name=all"
-                    ],
-                },
-                {
                     "name" : "sshd",
                     "type" : "sshd",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 800000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "agg-1{}".format(i),
+                            "!extends" : "prdcr",
+                        } for i in [1,2]
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "load name=store_sos",
+                        "config name=store_sos path=/db/sos",
+                        "load name=store_papi",
+                        "config name=store_papi path=/db/papi",
+                        "load name=store_slurm",
+                        "config name=store_slurm path=/db/slurm verbosity=1",
+
+                        "strgp_add name=papi_store plugin=store_papi" \
+                                 " container=papi schema=jobpapi",
+                        "strgp_prdcr_add name=papi_store regex=.*",
+                        "strgp_start name=papi_store",
+
+                        "strgp_add name=syspapi_store plugin=store_sos" \
+                                 " container=syspapi schema=syspapi",
+                        "strgp_prdcr_add name=syspapi_store regex=.*",
+                        "strgp_start name=syspapi_store",
+
+                        "strgp_add name=meminfo_store plugin=store_sos" \
+                                 " container=meminfo schema=meminfo",
+                        "strgp_prdcr_add name=meminfo_store regex=.*",
+                        "strgp_start name=meminfo_store",
+
+                        "strgp_add name=slurm_store plugin=store_slurm" \
+                                 " container=slurm schema=mt-slurm",
+                        "strgp_prdcr_add name=slurm_store regex=.*",
+                        "strgp_start name=slurm_store",
+
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ],
                 },
             ],
         },
@@ -224,19 +264,22 @@ spec = {
             "hostname" : "headnode",
             "daemons" : [
                 {
-                    "name" : "slurmctld",
-                    "type" : "slurmctld",
-                },
-                {
                     "name" : "sshd",
                     "type" : "sshd",
                 },
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
             ]
         },
-    ],
+    ], # nodes
 
     #"image": "ovis-centos-build:slurm",
-    "cap_add": [ "SYS_PTRACE" ],
+    "cpu_per_node": 2,
+    "slurm_loglevel" : "debug2",
+    "oversubscribe" : "FORCE",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
     "image": "ovis-centos-build",
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
@@ -256,42 +299,94 @@ test = TADA.Test(test_suite = "LDMSD",
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
 test.add_assertion(1, "ldms_ls agg-2")
-test.add_assertion(2, "slurm job_id verification in compute-1/slurm_sampler")
-test.add_assertion(3, "slurm job_id verification in compute-2/slurm_sampler")
-test.add_assertion(4, "component_id verification in compute-1/slurm_sampler")
-test.add_assertion(5, "component_id verification in compute-2/slurm_sampler")
+test.add_assertion(2, "slurm data verification")
+test.add_assertion(3, "meminfo data verification")
+test.add_assertion(4, "(SYS/JOB) PAPI data verification")
 
+#### Clean up db ####
+def cleanup_db(cluster):
+    cont = cluster.get_container("headnode")
+    LST = [ "sos", "slurm", "papi", "job.sh", "jobpapi.json",
+            "prog", "prog.c", "slurm*.out", "syspapi.json" ]
+    LST = [ "/db/{}".format(x) for x in LST ]
+    cont.exec_run("rm -rf {}".format(" ".join(LST)))
 
 #### Start! ####
 test.start()
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+cleanup_db(cluster)
 
-log.info("-- Preparing job script --")
+log.info("-- Preparing syspapi JSON file --")
+f = open(args.data_root + "/syspapi.json", "w")
+papi_json = {
+            "schema" : "syspapi",
+            "events" : [
+                "PAPI_LD_INS",
+                "PAPI_SR_INS",
+                "PAPI_TOT_CYC",
+            ]
+        }
+f.write(json.dumps(papi_json, indent=2))
+f.close()
+
+log.info("-- Preparing jobpapi JSON file --")
+f = open(args.data_root + "/jobpapi.json", "w")
+papi_json = {
+            "schema" : "jobpapi",
+            "events" : [
+                "PAPI_LD_INS",
+                "PAPI_SR_INS",
+                "PAPI_TOT_CYC",
+            ]
+        }
+f.write(json.dumps(papi_json, indent=2))
+f.close()
+
+log.info("-- Preparing job script & programs --")
+
+f = open(args.data_root + "/prog.c", "w")
+f.write("""\
+#include <stdio.h>
+#include <unistd.h>
+
+int main(int argc, char **argv)
+{
+    int n = 4096, N = 15;
+    int sum, i, j;
+    for (j = 0; j < N; j++) {
+        sum = 0;
+        for (i = 0; i < n; i++) {
+            sum += i;
+        }
+        printf("sum: %d\\n", sum);
+        sleep(1);
+    }
+    return 0;
+}
+""")
+f.close()
+
+cont = cluster.get_container("headnode")
+rc, out = cont.exec_run("gcc -o /db/prog /db/prog.c")
+assert(rc == 0)
+
 f = open(args.data_root + "/job.sh", "w")
 f.write("""\
 #!/bin/bash
 
-#SBATCH -N 2
+#SBATCH -n 2
 #SBATCH -D /db
 
-srun bash /db/prog.sh
-""")
-f.close()
-
-f = open(args.data_root + "/prog.sh", "w")
-f.write("""\
-#!/bin/bash
-for I in {1..60}; do
-    echo $I
-    sleep 1
-done
+export SUBSCRIBER_DATA='{ "papi_sampler": { "file": "/db/jobpapi.json" } }'
+srun /db/prog
 """)
 f.close()
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
+cluster.make_known_hosts()
 
 log.info("... wait a bit to make sure ldmsd's are up")
 time.sleep(5)
@@ -299,11 +394,12 @@ time.sleep(5)
 cont = cluster.get_container("headnode")
 
 log.info("-- ldms_ls to agg-2 --")
-rc, out = cont.ldms_ls("-x sock -p 20001 -h agg-2")
+rc, out = cont.ldms_ls("-x sock -p 10000 -h agg-2")
 
-expect = set([ "{}/{}".format(p, s) for p in ["compute-1", "compute-2"] \
-                                   for s in ["slurm_sampler", "vmstat",
-                                             "procstat", "meminfo"] ])
+expect = set([ "node-{}/{}".format(i, s) \
+                    for i in range(1, NUM_COMPUTE+1) \
+                    for s in ["slurm_sampler", "meminfo",
+                              "syspapi_sampler"] ])
 result = set(out.splitlines())
 
 test.assert_test(1, expect == result, "dir result verified")
@@ -313,27 +409,99 @@ for job in cluster.squeue():
     log.info("Cancelling job {}".format(job["JOBID"]))
     cluster.scancel(job["JOBID"])
 
-log.info("Submitting job ...")
-jobid = cluster.sbatch("/db/job.sh")
-time.sleep(3) # enough time to update the jobid
-log.info("jobid: {}".format(jobid))
+log.info("-- Give syspapi some time to work before submitting job --")
+time.sleep(5)
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-1/slurm_sampler")
-_set = set(map(int, re.search(r'job_id\s+(\S+)', out).group(1).split(',')))
-test.assert_test(2, jobid in _set, "job_id verified")
+log.info("-- Submitting jobs --")
+job_one = cluster.sbatch("/db/job.sh")
+log.info("job_one: {}".format(job_one))
+time.sleep(5)
+job_two = cluster.sbatch("/db/job.sh")
+log.info("job_two: {}".format(job_two))
+time.sleep(5)
+job_three = cluster.sbatch("/db/job.sh")
+log.info("job_three: {}".format(job_three))
+time.sleep(25)
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-2/slurm_sampler")
-_set = set(map(int, re.search(r'job_id\s+(\S+)', out).group(1).split(',')))
-test.assert_test(3, jobid in _set, "job_id verified")
+for C in cluster.containers:
+    C.kill_ldmsd()
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-1/slurm_sampler")
-_set = set(map(int, re.search(r'component_id\s+(\S+)', out).group(1).split(',')))
-test.assert_test(4, _set == set([10001]), "component_id == 10001")
+def sos_query(dcont, scont, schema, idx):
+    rc, out = dcont.exec_run("sos_cmd -C {} -q -S {} -X {} -f json"\
+                             .format(scont, schema, idx))
+    if rc != 0:
+        raise RuntimeError("sos_cmd error {}, out: {}".format(rc, out))
+    data = json.loads(out)
+    data = data['data']
+    for d in data:
+        d['schema'] = schema
+    return data
 
-rc, out = cluster.ldms_ls("-x sock -p 20001 -h agg-2 -l compute-2/slurm_sampler")
-_set = set(map(int, re.search(r'component_id\s+(\S+)', out).group(1).split(',')))
-test.assert_test(5, _set == set([10002]), "component_id == 10001")
+def check_timestamp(data, interval=1):
+    # separate data by components
+    comps = {}
+    for obj in data:
+        comp_id = obj["component_id"]
+        comp_data = comps.get(comp_id, [])
+        comp_data.append(obj)
+        comps.setdefault(comp_id, comp_data)
+    count = 0
+    jumps = []
+    for comp_data in comps.values():
+        comp_data.sort(key = lambda x: float(x['timestamp']))
+        itr = iter(comp_data)
+        prev = next(itr)
+        for x in itr:
+            d = float(x['timestamp']) - float(prev['timestamp'])
+            if d > 1.5 * interval:
+                count += 1
+                jumps.append((prev, x))
+            prev = x
+    return count, jumps
+
+agg2 = cluster.get_container("agg-2")
+
+slurm = sos_query(agg2, "/db/slurm/slurm", "mt-slurm", "time_job")
+papi_tot_cyc = sos_query(agg2, "/db/papi/papi", "PAPI_TOT_CYC", "time_job")
+papi_sr_ins = sos_query(agg2, "/db/papi/papi", "PAPI_SR_INS", "time_job")
+papi_ld_ins = sos_query(agg2, "/db/papi/papi", "PAPI_LD_INS", "time_job")
+syspapi = sos_query(agg2, "/db/sos/syspapi", "syspapi", "time_job_comp")
+meminfo = sos_query(agg2, "/db/sos/meminfo", "meminfo", "time_job_comp")
+
+# Slurm data check
+#test.add_assertion(2, "slurm data verification")
+slurm_expect = set([(j,r) for j in [job_one, job_two, job_three] \
+                          for r in [0,1]])
+s = set([ (int(o['job_id']), int(o['task_rank'])) for o in slurm ])
+test.assert_test(2, s == slurm_expect, "get expected data from store")
+
+# meminfo data check
+#test.add_assertion(3, "meminfo data verification")
+missing_counts, jumps = check_timestamp(meminfo)
+test.assert_test(3, len(meminfo) > 5 and missing_counts == 0, "No data missing")
+
+# papi data check
+#test.add_assertion(4, "(SYS/JOB) PAPI data verification")
+papi = syspapi + papi_ld_ins + papi_tot_cyc + papi_sr_ins
+missing_counts, jumps = check_timestamp(papi)
+for a, b in jumps:
+    # verify that each jump (missing data) is a transition between
+    # jobpapi and syspapi
+    if "syspapi" not in [a['schema'], b['schema']] or a['schema'] == b['schema']:
+        test.assert_test(4, False, "papi data missing: {}".format([a,b]))
+        break
+else: # loop does not break
+    if not papi_tot_cyc:
+        test.assert_test(4, False, "No PAPI_TOT_CYC data")
+    elif not papi_sr_ins:
+        test.assert_test(4, False, "No PAPI_SR_INS data")
+    elif not papi_ld_ins:
+        test.assert_test(4, False, "No PAPI_LD_INS data")
+    elif not syspapi:
+        test.assert_test(4, False, "No SYSPAPI data")
+    else:
+        test.assert_test(4, True, "No data missing")
 
 test.finish()
-
+cleanup_db(cluster)
 cluster.remove() # this destroys entire cluster
