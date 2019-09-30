@@ -77,7 +77,7 @@ spec = {
                     "!extends" : "sampler-daemon",
                     "samplers" : [
                         {
-                            "plugin" : "syspapi",
+                            "plugin" : "syspapi_sampler",
                             "!extends" : "sampler-plugin",
                             "config" : common_plugin_config + [
                                 "cfg_file=/db/syspapi-1.json",
@@ -98,7 +98,7 @@ spec = {
                     "!extends" : "sampler-daemon",
                     "samplers" : [
                         {
-                            "plugin" : "syspapi",
+                            "plugin" : "syspapi_sampler",
                             "!extends" : "sampler-plugin",
                             "config" : common_plugin_config + [
                                 "events=PAPI_TOT_CYC,PAPI_TOT_INS",
@@ -119,7 +119,7 @@ spec = {
                     "!extends" : "sampler-daemon",
                     "samplers" : [
                         {
-                            "plugin" : "syspapi",
+                            "plugin" : "syspapi_sampler",
                             "!extends" : "sampler-plugin",
                             "config" : common_plugin_config + [
                                 "cfg_file=/db/syspapi-bad.json",
@@ -140,7 +140,7 @@ spec = {
                     "!extends" : "sampler-daemon",
                     "samplers" : [
                         {
-                            "plugin" : "syspapi",
+                            "plugin" : "syspapi_sampler",
                             "!extends" : "sampler-plugin",
                             "config" : common_plugin_config + [
                                 "cfg_file=/db/syspapi-many.json",
@@ -439,7 +439,7 @@ log.info("-- Verifying --")
 rc, out = cont.ldms_ls("-x sock -h compute-1 -p 10000 -l -v")
 sets = parse_ldms_ls(out)
 (_set, ) = sets.values()
-cond = (len(sets) == 1 and _set["name"] == "compute-1/syspapi")
+cond = (len(sets) == 1 and _set["name"] == "compute-1/syspapi_sampler")
 verify(1, cond, "set existed (with correct instance name)")
 
 ####### assertion 2
@@ -487,8 +487,8 @@ verify(4, _inc_verified, "verify increment of supported counters")
 ####### assertion 5
 rc, out = comp3.exec_run("grep -m 1 'JSON parse error' /var/log/ldmsd.log")
 out = out.strip()
-idx = out.find("syspapi")
-verify(5, out[idx:] == "syspapi: `/db/syspapi-bad.json` JSON parse error.",
+idx = out.find("syspapi_sampler")
+verify(5, out[idx:] == "syspapi_sampler: `/db/syspapi-bad.json` JSON parse error.",
           "verify JSON parse error")
 
 ####### assertion 6
@@ -511,7 +511,7 @@ for k, v in _set4["data"].items():
     if k in ["component_id", "job_id", "app_id"]:
         continue
     # all events should either reported as success or error
-    rc, out = comp4.exec_run("grep 'syspapi.* \<{}\>' /var/log/ldmsd.log".format(k))
+    rc, out = comp4.exec_run("grep 'syspapi_sampler.* \<{}\>' /var/log/ldmsd.log".format(k))
     if rc:
         break # event not found
     if reduce(lambda x,y: bool(x) or bool(y), v):
