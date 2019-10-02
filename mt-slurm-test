@@ -611,13 +611,13 @@ for line in out.split('\n'):
 job_10000_ranks = 27
 job_10100_ranks = 64
 # Test each rank in job results in row in output
-rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_rank_time"
                         " -V task_rank -V timestamp -F job_id:eq:10000 -f csv")
 out = out.split('\n')
 print(out)
 verify(2, len(out) - 3 == job_10000_ranks, "")
 
-rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_rank_time"
                         " -V task_rank -V timestamp -F job_id:eq:10100 -f csv")
 out = out.split('\n')
 verify(3, len(out) - 3 == job_10100_ranks, "")
@@ -637,7 +637,7 @@ def test_job(node_count, job_events):
             if init_events[i]['event'] == 'task_init_priv':
                 events.append(init_events[i])
         cid = nodeid+10001
-        rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_comp_time"
+        rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_rank_time"
                                 " -V job_id -V component_id -V job_size -V task_rank "
                                 " -V task_pid -f csv -F component_id:eq:{comp_id} "
                                 " -F job_id:eq:{job_id}"
@@ -666,20 +666,19 @@ test_job(3, events_3_27)
 
 test_job(4, events_4_64)
 
-rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id -V node_count"
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X time_job -V node_count"
                         " -F node_count:unique -F job_id:eq:10000 -f csv")
 
 verify(284, int(out.split('\n')[1]) == 3, "node count 3 correct")
 
-rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id -V node_count"
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X time_job -V node_count"
                         " -F node_count:unique -F job_id:eq:10100 -f csv")
 
 verify(285, int(out.split('\n')[1]) == 4, "node count 4 correct")
 
 test.finish()
 
+cont.exec_run("rm -rf /db/slurm-test")
 cluster.remove()
 
-rm_store = subprocess.Popen(['rm', '-rf', args.data_root+'/slurm-test'], stdout=subprocess.PIPE)
-rm_store.communicate()
 print('Test Finished')
