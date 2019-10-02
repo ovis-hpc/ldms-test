@@ -318,8 +318,9 @@ log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 cleanup_db(cluster)
 
+cont = cluster.get_container("headnode")
+
 log.info("-- Preparing syspapi JSON file --")
-f = open(args.data_root + "/syspapi.json", "w")
 papi_json = {
             "schema" : "syspapi",
             "events" : [
@@ -328,11 +329,9 @@ papi_json = {
                 "PAPI_TOT_CYC",
             ]
         }
-f.write(json.dumps(papi_json, indent=2))
-f.close()
+cont.write_file("/db/syspapi.json", json.dumps(papi_json, indent=2))
 
 log.info("-- Preparing jobpapi JSON file --")
-f = open(args.data_root + "/jobpapi.json", "w")
 papi_json = {
             "schema" : "jobpapi",
             "events" : [
@@ -341,13 +340,11 @@ papi_json = {
                 "PAPI_TOT_CYC",
             ]
         }
-f.write(json.dumps(papi_json, indent=2))
-f.close()
+cont.write_file("/db/jobpapi.json", json.dumps(papi_json, indent=2))
 
 log.info("-- Preparing job script & programs --")
 
-f = open(args.data_root + "/prog.c", "w")
-f.write("""\
+code = """\
 #include <stdio.h>
 #include <unistd.h>
 
@@ -365,15 +362,13 @@ int main(int argc, char **argv)
     }
     return 0;
 }
-""")
-f.close()
+"""
+cont.write_file("/db/prog.c", code)
 
-cont = cluster.get_container("headnode")
 rc, out = cont.exec_run("gcc -o /db/prog /db/prog.c")
 assert(rc == 0)
 
-f = open(args.data_root + "/job.sh", "w")
-f.write("""\
+code = """\
 #!/bin/bash
 
 #SBATCH -n 2
@@ -381,8 +376,8 @@ f.write("""\
 
 export SUBSCRIBER_DATA='{ "papi_sampler": { "file": "/db/jobpapi.json" } }'
 srun /db/prog
-""")
-f.close()
+"""
+cont.write_file("/db/job.sh", code)
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
