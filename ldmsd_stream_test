@@ -9,6 +9,8 @@ import time
 import json
 import logging
 
+from StringIO import StringIO
+
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, read_msg
 
@@ -16,12 +18,6 @@ logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
 
 log = logging.getLogger(__name__)
-
-def update_expect_file(fname, data):
-    s = json.dumps(data)
-    f = open(fname, 'w')
-    f.write(s)
-    f.close()
 
 spec = {
     "name" : "REPLACE_ME",
@@ -252,11 +248,6 @@ if __name__ == "__main__":
     # Give the daemons a few seconds to start
     time.sleep(5)
 
-    # Files for data verification
-    samp1_out = open(args.data_root + "/stream-sampler-1.out")
-    samp2_out = open(args.data_root + "/stream-sampler-2.out")
-    agg2_out = open(args.data_root + "/agg-2.out")
-
     # Create the test data
     data = { "gen" : 1,
              "schema" : "stream_test",
@@ -267,12 +258,12 @@ if __name__ == "__main__":
              }
          }
     text_data = json.dumps(data)
-    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
     data_file = '/data/Stream_Test-data.json'
 
     assert_no = 0
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
+        cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
               "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
@@ -286,6 +277,19 @@ if __name__ == "__main__":
                            auth=cont.ldmsd_spec["listen_auth"] )
 
         rc, out = cont.exec_run(cmd)
+
+    # data verification
+    samp1 = cluster.get_container("stream-sampler-1")
+    samp2 = cluster.get_container("stream-sampler-2")
+    agg2 = cluster.get_container("agg-2")
+
+    samp1_out_txt = samp1.read_file("/data/stream-sampler-1.out")
+    samp2_out_txt = samp2.read_file("/data/stream-sampler-2.out")
+    agg2_out_txt = agg2.read_file("/data/agg-2.out")
+
+    samp1_out = StringIO(samp1_out_txt)
+    samp2_out = StringIO(samp2_out_txt)
+    agg2_out = StringIO(agg2_out_txt)
 
     # Verify samp1
     for x in range(0, 2):
@@ -348,10 +352,10 @@ if __name__ == "__main__":
              }
          }
     text_data = json.dumps(data)
-    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
 
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
+        cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
               "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
@@ -365,6 +369,18 @@ if __name__ == "__main__":
                            auth=cont.ldmsd_spec["listen_auth"] )
 
         rc, out = cont.exec_run(cmd)
+
+    samp1_out_txt2 = samp1.read_file("/data/stream-sampler-1.out")
+    samp2_out_txt2 = samp2.read_file("/data/stream-sampler-2.out")
+    agg2_out_txt2 = agg2.read_file("/data/agg-2.out")
+
+    samp1_out = StringIO(samp1_out_txt2)
+    samp2_out = StringIO(samp2_out_txt2)
+    agg2_out = StringIO(agg2_out_txt2)
+
+    samp1_out.seek(len(samp1_out_txt))
+    samp2_out.seek(len(samp2_out_txt))
+    agg2_out.seek(len(agg2_out_txt))
 
     # Verify samp1
     for x in range(0, 2):
@@ -421,9 +437,6 @@ if __name__ == "__main__":
 
     time.sleep(5) # allow some time for prdcr to reconnect
 
-    # reset output stream as samp1 has restarted
-    samp1_out = open(args.data_root + "/stream-sampler-1.out")
-
     data = { "gen" : 3,
              "schema" : "stream_test",
              "timestamp" : 1559250000,
@@ -433,10 +446,10 @@ if __name__ == "__main__":
              }
          }
     text_data = json.dumps(data)
-    update_expect_file(args.data_root + "/Stream_Test-data.json", data)
 
     for host in [ 'stream-sampler-1' ]:
         cont = cluster.get_container(host)
+        cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
               "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
@@ -449,6 +462,15 @@ if __name__ == "__main__":
                            port=cont.ldmsd_spec["listen_port"],
                            auth=cont.ldmsd_spec["listen_auth"] )
         rc, out = cont.exec_run(cmd)
+
+    # samp1 was reset
+    samp1_out_txt3 = samp1.read_file("/data/stream-sampler-1.out")
+    agg2_out_txt3 = agg2.read_file("/data/agg-2.out")
+
+    samp1_out = StringIO(samp1_out_txt3)
+    agg2_out = StringIO(agg2_out_txt3)
+
+    agg2_out.seek(len(agg2_out_txt2))
 
     # Verify samp1
     for x in range(0, 2):
@@ -480,4 +502,10 @@ if __name__ == "__main__":
     test.assert_test(16, _verify, _verify_msg)
 
     test.finish()
+    # cleanup data
+    flist = [ "agg-2.out", "stream-sampler-1.out", "stream-sampler-2.out",
+              "Stream_Test-data.json", "tada/" ]
+    flist = [ "/data/{}".format(x) for x in flist ]
+    rm = "rm -rf " + ( " ".join(flist) )
+    agg2.exec_run(rm)
     cluster.remove()
