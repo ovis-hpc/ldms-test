@@ -61,6 +61,8 @@ CLUSTERNAME = args.clustername
 DB = args.data_root
 NUM_COMPUTE = args.num_compute
 
+STORE_ROOT = "/store" # path inside container (agg-2)
+
 SLURM_NOTIFIER = args.slurm_notifier
 if SLURM_NOTIFIER == "__find_from_prefix__":
     paths = map(lambda x: "{}/{}/ovis-ldms/libslurm_notifier.so"\
@@ -226,11 +228,11 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=store_sos",
-                        "config name=store_sos path=/db/sos",
+                        "config name=store_sos path={}/sos".format(STORE_ROOT),
                         "load name=store_papi",
-                        "config name=store_papi path=/db/papi",
+                        "config name=store_papi path={}/papi".format(STORE_ROOT),
                         "load name=store_slurm",
-                        "config name=store_slurm path=/db/slurm verbosity=1",
+                        "config name=store_slurm path={}/slurm verbosity=1".format(STORE_ROOT),
 
                         "strgp_add name=papi_store plugin=store_papi" \
                                  " container=papi schema=jobpapi",
@@ -306,9 +308,9 @@ test.add_assertion(4, "(SYS/JOB) PAPI data verification")
 #### Clean up db ####
 def cleanup_db(cluster):
     cont = cluster.get_container("headnode")
-    LST = [ "sos", "slurm", "papi", "job.sh", "jobpapi.json",
-            "prog", "prog.c", "slurm*.out", "syspapi.json" ]
+    LST = [ "job.sh", "jobpapi.json", "prog", "prog.c", "slurm*.out", "syspapi.json" ]
     LST = [ "/db/{}".format(x) for x in LST ]
+    LST += [ "{}/{}".format(STORE_ROOT, x) for x in ["sos", "slurm", "papi"] ]
     cont.exec_run("rm -rf {}".format(" ".join(LST)))
 
 #### Start! ####
@@ -456,12 +458,12 @@ def check_timestamp(data, interval=1):
 
 agg2 = cluster.get_container("agg-2")
 
-slurm = sos_query(agg2, "/db/slurm/slurm", "mt-slurm", "time_job")
-papi_tot_cyc = sos_query(agg2, "/db/papi/papi", "PAPI_TOT_CYC", "time_job")
-papi_sr_ins = sos_query(agg2, "/db/papi/papi", "PAPI_SR_INS", "time_job")
-papi_ld_ins = sos_query(agg2, "/db/papi/papi", "PAPI_LD_INS", "time_job")
-syspapi = sos_query(agg2, "/db/sos/syspapi", "syspapi", "time_job_comp")
-meminfo = sos_query(agg2, "/db/sos/meminfo", "meminfo", "time_job_comp")
+slurm = sos_query(agg2, "/{}/slurm/slurm".format(STORE_ROOT), "mt-slurm", "time_job")
+papi_tot_cyc = sos_query(agg2, "/{}/papi/papi".format(STORE_ROOT), "PAPI_TOT_CYC", "time_job")
+papi_sr_ins = sos_query(agg2, "/{}/papi/papi".format(STORE_ROOT), "PAPI_SR_INS", "time_job")
+papi_ld_ins = sos_query(agg2, "/{}/papi/papi".format(STORE_ROOT), "PAPI_LD_INS", "time_job")
+syspapi = sos_query(agg2, "/{}/sos/syspapi".format(STORE_ROOT), "syspapi", "time_job_comp")
+meminfo = sos_query(agg2, "/{}/sos/meminfo".format(STORE_ROOT), "meminfo", "time_job_comp")
 
 # Slurm data check
 #test.add_assertion(2, "slurm data verification")
