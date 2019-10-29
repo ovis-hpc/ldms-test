@@ -1301,14 +1301,22 @@ class LDMSDContainer(DockerClusterContainer):
             offset = samp.get("offset", "")
             if offset != "":
                 offset = "offset={}".format(offset)
-            samp_cfg = (
-                "load name={plugin}\n" \
-                "config name={plugin} {config}\n" + \
-                (
-                    "start name={plugin} {interval} {offset}\n" \
-                            if samp.get("start") else ""
-                )
-            ).format(
+            if self.ldmsd_version >= (5,0,0):
+                samp_temp = \
+                    "load name={plugin}\n" \
+                    "config name={plugin} {config}\n"
+                if samp.get("start"):
+                    samp_temp += \
+                        "smplr_add name={plugin}_smplr instance={plugin} " \
+                        "          {interval} {offset}\n" \
+                        "smplr_start name={plugin}_smplr\n"
+            else:
+                samp_temp = \
+                    "load name={plugin}\n" \
+                    "config name={plugin} {config}\n"
+                if samp.get("start"):
+                    samp_temp += "start name={plugin} {interval} {offset}\n"
+            samp_cfg = samp_temp.format(
                 plugin = plugin, config = " ".join(samp["config"]),
                 interval = interval, offset = offset
             )
@@ -1494,6 +1502,13 @@ class LDMSDContainer(DockerClusterContainer):
             if rc == 1: # OK
                 rc = 0
         return rc, output
+
+    @cached_property
+    def ldmsd_version(self):
+        rc, out = self.exec_run("ldmsd -V")
+        _drop, _ver = out.splitlines()[0].split(': ')
+        ver = tuple( int(v) for v in _ver.split('.') )
+        return ver
 
 
 BaseCluster = DockerCluster
@@ -2063,7 +2078,10 @@ class LDMSDCluster(BaseCluster):
         for cont in self.containers:
             cont.write_file("/etc/ld.so.conf.d/ovis.conf",
                             "/opt/ovis/lib\n"
-                            "/opt/ovis/lib64\n")
+                            "/opt/ovis/lib64\n"
+                            "/opt/ovis/lib/ovis-ldms\n"
+                            "/opt/ovis/lib64/ovis-ldms\n"
+                            )
             cont.exec_run("ldconfig")
             profile = """
                 function _add() {
@@ -2079,6 +2097,8 @@ class LDMSDCluster(BaseCluster):
                 _add PATH $PREFIX/sbin
                 _add LD_LIBRARY_PATH $PREFIX/lib
                 _add LD_LIBRARY_PATH $PREFIX/lib64
+                _add LD_LIBRARY_PATH $PREFIX/lib/ovis-ldms
+                _add LD_LIBRARY_PATH $PREFIX/lib64/ovis-ldms
                 _add MANPATH $PREFIX/share/man
                 _add PYTHONPATH $PREFIX/lib/python2.7/site-packages
 
@@ -2101,6 +2121,13 @@ class LDMSDCluster(BaseCluster):
 
     def all_exec_run(self, cmd):
         return { c.hostname: c.exec_run(cmd) for c in self.containers }
+
+    @cached_property
+    def ldmsd_version(self):
+        rc, out = self.exec_run("ldmsd -V")
+        _drop, _ver = out.splitlines()[0].split(': ')
+        ver = tuple( int(v) for v in _ver.split('.') )
+        return ver
 
 def read_msg(_file):
     """Read a message "\x01...\x03" from `_file` file handle"""
