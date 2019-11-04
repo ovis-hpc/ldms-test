@@ -193,7 +193,11 @@ def parse_ldms_ls(txt):
         elif m["metric_name"]: # data
             if meta_section:
                 raise RuntimeError("Unexpected data info: {}".format(l))
-            data[m["metric_name"]] = _TYPE_FN[m["type"]](m["metric_value"])
+            if m["type"] == "char[]":
+                _val = m["metric_value"]
+            else:
+                _val = m["metric_value"].split(' ', 1)[0] # remove units
+            data[m["metric_name"]] = _TYPE_FN[m["type"]](_val)
         else:
             raise RuntimeError("Unable to process line: {}".format(l))
     return ret
