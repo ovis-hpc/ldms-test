@@ -394,5 +394,4 @@ while True:
     break
 
 test.finish()
-raw_input("Press ENTER to remove cluster ...")
 cluster.remove() # this destroys entire cluster
