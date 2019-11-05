@@ -30,7 +30,8 @@ import logging
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args, jprint, parse_ldms_ls
+                      add_common_args, jprint, parse_ldms_ls, \
+                      ldmsd_version
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -66,6 +67,9 @@ DB = args.data_root
 LDMSD_PORT = 10000
 STORE_ROOT = "/store" # path inside container (agg-2)
 
+#### check the ldmsd version first ####
+LDMSD_VERSION = ldmsd_version(PREFIX)
+
 #### spec #### -------------------------------------------------------
 common_plugin_config = [
         "component_id=%component_id%",
@@ -100,6 +104,8 @@ spec = {
             "config" : [
                 # Use test_sampler to create 3 sets (test[1-3]). Only test[1-2]
                 # are in the group `grp` initially.
+                #
+                # These are config for v5, see v4 config below.
                 "load name=test plugin=test_sampler",
                 "config name=test action=add_schema schema=test num_metrics=2 type=U64",
                 "config name=test action=add_set instance=${HOSTNAME}/test1 schema=test component_id=1",
@@ -107,6 +113,17 @@ spec = {
                 "config name=test action=add_set instance=${HOSTNAME}/test3 schema=test component_id=1",
                 "smplr_add name=smplr instance=test interval=1000000 offset=0",
                 "smplr_start name=smplr",
+                "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
+                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test1",
+                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test2",
+            ] if LDMSD_VERSION >= (5, 0, 0) else [
+                # v4 config
+                "load name=test_sampler",
+                "config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test1 schema=test component_id=1",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test2 schema=test component_id=1",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test3 schema=test component_id=1",
+                "start name=test_sampler interval=1000000 offset=0",
                 "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
                 "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test1",
                 "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test2",
