@@ -2166,6 +2166,16 @@ def read_msg(_file):
         obj = json.loads(text)
     return { "type": _type, "text": text, "obj": obj }
 
+OVIS_LDMS_VER_RE = re.compile(r'OVIS_LDMS_VERSION "(\d+).(\d+).(\d+)"')
+def ldmsd_version(prefix):
+    """Get LDMSD version from the installation prefix"""
+    _cmd = "strings {}/sbin/ldmsd | grep OVIS_LDMS_VERSION".format(prefix)
+    out = subprocess.check_output(_cmd, shell = True)
+    m = OVIS_LDMS_VER_RE.match(out)
+    if not m:
+        raise ValueError("Bad version string: {}".format(out))
+    return tuple(map(int, m.groups()))
+
 
 if __name__ == "__main__":
     execfile(os.getenv('PYTHONSTARTUP', '/dev/null'))
