@@ -167,7 +167,6 @@ test.add_assertion(3.3, "PAPI set has correct job_id")
 test.add_assertion(3.4, "PAPI set has correct task_pids")
 
 test.add_assertion(4, "Multiple, concurrent jobs results in concurrent, multiple sets")
-test.add_assertion(5, "Event counters are incremental")
 
 test.add_assertion(6, "PAPI set persists within `job_expiry` after job exited")
 test.add_assertion(7, "PAPI set is deleted after `2.2 x job_expiry` since job exited")
@@ -326,22 +325,6 @@ while True: # will break at the end of loop
     keys0 = set(sets0.keys())
     keys1 = set(sets1.keys())
     test.assert_test(4, keys0 < keys1, "LDMS sets ({})".format(keys1))
-    break
-
-#### Incremental counters ####
-while True: # will break at the end of loop
-    _dir = dir()
-    if "sets0" not in _dir or "sets1" not in _dir:
-        break
-    (_set_t0,) = filter(lambda x: x["data"].get("job_id") == jobid0, sets0.values())
-    (_set_t1,) = filter(lambda x: x["data"].get("job_id") == jobid0, sets1.values())
-    for k in papi_config0["events"]:
-        for v0, v1 in zip(_set_t0["data"][k], _set_t1["data"][k]):
-            if v0 >= v1:
-                test.assert_test(5, False, "{} {} < {}".format(k, v0, v1))
-                break
-    else: # all good
-        test.assert_test(5, True, "increasing event metrics")
     break
 
 #### Set persist within the expiry ####
