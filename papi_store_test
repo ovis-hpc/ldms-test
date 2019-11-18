@@ -13,7 +13,8 @@ import logging
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args, jprint, parse_ldms_ls
+                      add_common_args, jprint, parse_ldms_ls, \
+                      ldmsd_version
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -45,6 +46,7 @@ SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
 JOB_EXPIRY = 10
+LDMSD_VERSION = ldmsd_version(PREFIX)
 
 #### spec #### -------------------------------------------------------
 common_plugin_config = [
@@ -148,14 +150,28 @@ spec = {
                             "!extends" : "prdcr",
                         },
                     ],
-                    "config" : [ # additional config applied after prdcrs
+                    # config after prdcr_add's (generated from `prdcrs` above)
+                    "config" : [
+                        # v5 config
+                        "load name=store_papi",
+                        "config name=store_papi path=/db/sos/papi",
+                        "prdcr_start_regex regex=.*",
+                        "strgp_add name=papi_strgp container=store_papi" \
+                                 " schema=papi",
+                        "strgp_prdcr_add name=papi_strgp regex=.*",
+                        "strgp_start name=papi_strgp",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ] if LDMSD_VERSION >= (5,0,0) else [
+                        # v4 config
                         "load name=store_papi",
                         "config name=store_papi path=/db/sos",
                         "prdcr_start_regex regex=.*",
-                        "strgp_add name=papi_store plugin=store_papi" \
+                        "strgp_add name=papi_strgp plugin=store_papi" \
                                  " container=papi schema=papi",
-                        "strgp_prdcr_add name=papi_store regex=.*",
-                        "strgp_start name=papi_store",
+                        "strgp_prdcr_add name=papi_strgp regex=.*",
+                        "strgp_start name=papi_strgp",
                         "updtr_add name=all interval=1000000 offset=0",
                         "updtr_prdcr_add name=all regex=.*",
                         "updtr_start name=all"
