@@ -13,7 +13,7 @@ import logging
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args
+                      add_common_args, ldmsd_version
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -60,6 +60,7 @@ SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
 NUM_COMPUTE = args.num_compute
+LDMSD_VERSION = ldmsd_version(PREFIX)
 
 STORE_ROOT = "/store" # path inside container (agg-2)
 
@@ -226,7 +227,43 @@ spec = {
                             "!extends" : "prdcr",
                         } for i in [1,2]
                     ],
-                    "config" : [ # additional config applied after prdcrs
+                    # additional config applied after prdcrs
+                    "config" : [
+                        # -- for v5 --
+                        "load name=papi plugin=store_papi",
+                        "config name=papi path={}/papi/papi".format(STORE_ROOT),
+                        "strgp_add name=papi_store" \
+                                 " container=papi schema=jobpapi",
+                        "strgp_prdcr_add name=papi_store regex=.*",
+                        "strgp_start name=papi_store",
+
+                        "load name=syspapi plugin=store_sos",
+                        "config name=syspapi path={}/sos/syspapi".format(STORE_ROOT),
+                        "strgp_add name=syspapi_store" \
+                                 " container=syspapi schema=syspapi",
+                        "strgp_prdcr_add name=syspapi_store regex=.*",
+                        "strgp_start name=syspapi_store",
+
+                        "load name=meminfo plugin=store_sos",
+                        "config name=meminfo path={}/sos/meminfo".format(STORE_ROOT),
+                        "strgp_add name=meminfo_store" \
+                                 " container=meminfo schema=meminfo",
+                        "strgp_prdcr_add name=meminfo_store regex=.*",
+                        "strgp_start name=meminfo_store",
+
+                        "load name=slurm plugin=store_slurm",
+                        "config name=slurm path={}/slurm/slurm verbosity=1".format(STORE_ROOT),
+                        "strgp_add name=slurm_store" \
+                                 " container=slurm schema=mt-slurm",
+                        "strgp_prdcr_add name=slurm_store regex=.*",
+                        "strgp_start name=slurm_store",
+
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ] if LDMSD_VERSION >= (5, 0, 0) else [
+                        # -- for v4 --
                         "load name=store_sos",
                         "config name=store_sos path={}/sos".format(STORE_ROOT),
                         "load name=store_papi",
@@ -311,6 +348,7 @@ def cleanup_db(cluster):
     LST = [ "job.sh", "jobpapi.json", "prog", "prog.c", "slurm*.out", "syspapi.json" ]
     LST = [ "/db/{}".format(x) for x in LST ]
     LST += [ "{}/{}".format(STORE_ROOT, x) for x in ["sos", "slurm", "papi"] ]
+    cont = cluster.get_container("agg-2")
     cont.exec_run("rm -rf {}".format(" ".join(LST)))
 
 #### Start! ####
@@ -419,6 +457,8 @@ time.sleep(5)
 job_three = cluster.sbatch("/db/job.sh")
 log.info("job_three: {}".format(job_three))
 time.sleep(25)
+
+raw_input("Press ENTER to continue")
 
 for C in cluster.containers:
     C.kill_ldmsd()
