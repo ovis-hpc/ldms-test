@@ -1305,7 +1305,7 @@ class LDMSDContainer(DockerClusterContainer):
             offset = samp.get("offset", "")
             if offset != "":
                 offset = "offset={}".format(offset)
-            if self.ldmsd_version >= (5,0,0):
+            if self.ldmsd_version >= (4,100,0):
                 samp_temp = \
                     "load name={plugin}\n" \
                     "config name={plugin} {config}\n"
