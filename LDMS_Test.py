@@ -79,8 +79,8 @@ _LS_RE = re.compile(
             _LS_L_DATA
          )
 _TYPE_FN = {
-    "char": str,
-    "char[]": str,
+    "char": lambda x: str(x).strip("'"),
+    "char[]": lambda x: str(x).strip('"'),
 
     "u8": int,
     "s8": int,
@@ -127,6 +127,9 @@ def parse_ldms_ls(txt):
         "data" : {
             METRIC_NAME : METRIC_VALUE,
             ...
+        },
+        "data_type" : {
+            METRIC_NAME : METRIC_TYPE,
         },
     }
     """
@@ -186,10 +189,12 @@ def parse_ldms_ls(txt):
             if meta_section:
                 raise RuntimeError("Unexpected data info: {}".format(l))
             data = dict() # placeholder for metric data
+            data_type = dict() # placeholder for metric data type
             lset = ret.setdefault(m["set_name"], dict())
             lset["name"] = m["set_name"]
             lset["ts"] = m["ts"]
             lset["data"] = data
+            lset["data_type"] = data_type
         elif m["metric_name"]: # data
             if meta_section:
                 raise RuntimeError("Unexpected data info: {}".format(l))
@@ -197,7 +202,10 @@ def parse_ldms_ls(txt):
                 _val = m["metric_value"]
             else:
                 _val = m["metric_value"].split(' ', 1)[0] # remove units
-            data[m["metric_name"]] = _TYPE_FN[m["type"]](_val)
+            mname = m["metric_name"]
+            mtype = m["type"]
+            data[mname] = _TYPE_FN[mtype](_val)
+            data_type[mname] = mtype
         else:
             raise RuntimeError("Unable to process line: {}".format(l))
     return ret
