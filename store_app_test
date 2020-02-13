@@ -30,7 +30,7 @@ execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
 
 def dprompt(msg):
     """Show prompt if TADA.DEBUG flag (`--debug` CLI option) is set"""
-    if TADA.DEBUG:
+    if TADA.DEBUG and sys.flags.interactive:
         raw_input(msg)
 
 #### argument parsing #### -------------------------------------------

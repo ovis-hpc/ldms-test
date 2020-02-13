@@ -61,6 +61,7 @@ CLUSTERNAME = args.clustername
 DB = args.data_root
 NUM_COMPUTE = args.num_compute
 LDMSD_VERSION = ldmsd_version(PREFIX)
+DEBUG = args.debug
 
 STORE_ROOT = "/store" # path inside container (agg-2)
 
@@ -262,7 +263,7 @@ spec = {
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
                         "updtr_start name=all",
-                    ] if LDMSD_VERSION >= (5, 0, 0) else [
+                    ] if LDMSD_VERSION >= (4, 100, 0) else [
                         # -- for v4 --
                         "load name=store_sos",
                         "config name=store_sos path={}/sos".format(STORE_ROOT),
@@ -458,7 +459,8 @@ job_three = cluster.sbatch("/db/job.sh")
 log.info("job_three: {}".format(job_three))
 time.sleep(25)
 
-raw_input("Press ENTER to continue")
+if DEBUG and sys.flags.interactive:
+    raw_input("Press ENTER to continue")
 
 for C in cluster.containers:
     C.kill_ldmsd()

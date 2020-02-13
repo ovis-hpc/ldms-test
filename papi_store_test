@@ -163,7 +163,7 @@ spec = {
                         "updtr_add name=all interval=1000000 offset=0",
                         "updtr_prdcr_add name=all regex=.*",
                         "updtr_start name=all"
-                    ] if LDMSD_VERSION >= (5,0,0) else [
+                    ] if LDMSD_VERSION >= (4,100,0) else [
                         # v4 config
                         "load name=store_papi",
                         "config name=store_papi path=/db/sos",

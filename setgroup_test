@@ -116,7 +116,7 @@ spec = {
                 "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
                 "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test1",
                 "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test2",
-            ] if LDMSD_VERSION >= (5, 0, 0) else [
+            ] if LDMSD_VERSION >= (4, 100, 0) else [
                 # v4 config
                 "load name=test_sampler",
                 "config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64",
