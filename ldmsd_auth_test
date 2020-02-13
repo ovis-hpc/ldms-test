@@ -1,0 +1,418 @@
+#!/usr/bin/env python
+
+# SYNOPSIS: 2-level of aggregation with multiple authentication domain
+#
+# Scheme:
+# - [ node-01, node-03, agg-11 ] serve dom1
+# - [ node-02, node-04, agg-12 ] serve dom2
+# - agg-2 serves dom3 and dom4 but has access to dom1 and dom2
+#   - agg-2 demonstrates multiple auth domain accesss (active side) and multiple
+#     auth domain serving (passive side).
+# - headnode is in dom4
+# - node-* each contains:
+#   - meminfo: visible to all
+#   - vmstat: visibble to only root
+#
+# Tests:
+# 1) root@agg-2(dom3) ldms_ls to agg-2 shall see all sets (`node-*/meminfo` and
+#    `node-*/vmstat`).
+# 2) user@agg-2(dom3) ldms_ls to agg-2 shall see only `node-*/meminfo`.
+# 3) root@headnode(dom4) ldms_ls to agg-2 shall see all sets.
+# 4) user@headnode(dom4) ldms_ls to agg-2 shall see only `node-*/meminfo`.
+# 5) root@headnode(dom4) ldms_ls to agg-11 shall get conn rejected.
+
+import os
+import re
+import pdb
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Multiple auth domain tests with "\
+                                           "4 samplers -> 2 x agg-1 -> agg-2" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+NUM_COMPUTE = 4
+LDMSD_PORT = 10000
+STORE_ROOT = "/store" # path inside container (agg-2)
+
+#### spec helpers #### ------------------------------------------------------
+def dom_name(num):
+    return "dom{}".format(num)
+
+def dom_sock(num):
+    return "/munge/{}/sock".format(dom_name(num))
+
+def dom_key(num):
+    return str(num)*4096
+
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged_%dom_name%", # with custom dom on compute
+                    "type" : "munged",
+                    "dom"  : "%dom_name%",
+                    "key"  : "%dom_key%",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "auth" : [
+                {
+                    "name" : "%dom_name%",
+                    "plugin" : "munge",
+                    "socket" : "%dom_sock%",
+                },
+            ],
+            "listen" : [
+                {
+                    "xprt" : "sock",
+                    "port" : 10000,
+                    "auth" : "%dom_name%",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+                {
+                    "plugin" : "vmstat",
+                    "!extends" : "sampler_plugin",
+                    "config" : common_plugin_config + [
+                        "perm=0700"
+                    ],
+                },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-{}".format(i),
+            "component_id" : i,
+            "dom_name" : dom_name(1+(i+1)%2),
+            "dom_key"  : dom_key(1+(i+1)%2),
+            "dom_sock" : dom_sock(1+(i+1)%2),
+            "!extends" : "compute-node",
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
+        {
+            "hostname" : "agg-1{}".format(j),
+            "!extends" : "compute-node",
+            "daemons" : [ # override
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "dom"  : dom_name(j),
+                    "key"  : dom_key(j),
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "auth" : [
+                        {
+                            "name" : dom_name(j),
+                            "plugin" : "munge",
+                            "socket" : dom_sock(j),
+                        }
+                    ],
+                    "listen" : [
+                        {
+                            "xprt" : "sock",
+                            "port" : 10000,
+                            "auth" : dom_name(j),
+                        },
+                    ],
+                    "offset" : 400000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-{}".format(i*2+j),
+                            "!extends" : "prdcr",
+                            "auth" : dom_name(j)
+                        } for i in range(0, NUM_COMPUTE / 2)
+                    ],
+                },
+            ]
+        } for j in [1, 2]
+    ] + [
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "munged{}".format(i),
+                    "type" : "munged",
+                    "dom"  : dom_name(i),
+                    "key"  : dom_key(i),
+                } for i in [1, 2, 3, 4]
+            ] + [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-aggregator",
+                    "auth" : [
+                        {
+                            "name" : dom_name(i),
+                            "plugin" : "munge",
+                            "socket" : dom_sock(i),
+                        } for i in [1,2,3,4]
+                    ],
+                    "listen" : [
+                        {
+                            "xprt" : "sock",
+                            "port" : 10000 + i-3,
+                            "auth" : dom_name(i),
+                        } for i in [3,4]
+                    ],
+                    "offset" : 800000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "agg-1{}".format(i),
+                            "!extends" : "prdcr",
+                            "auth" : dom_name(i),
+                        } for i in [1,2]
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "munged{}".format(i),
+                    "type" : "munged",
+                    "dom"  : dom_name(4),
+                    "key"  : dom_key(4),
+                }
+            ] + [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_auth_test",
+                 test_desc = "Test LDMSD with multiple authentication domains",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "root@agg-2(dom3) ldms_ls to agg-2:10000")
+test.add_assertion(2, "user@agg-2(dom3) ldms_ls to agg-2:10000")
+test.add_assertion(3, "root@headnode(dom4) ldms_ls to agg-2:10001")
+test.add_assertion(4, "user@headnode(dom4) ldms_ls to agg-2:10001")
+test.add_assertion(5, "root@headnode(dom4) ldms_ls to agg-11:10000")
+
+#### Helper Functions ####
+def ldms_ls(cont, host = None, port = LDMSD_PORT, l = False, auth = None,
+            auth_args=None, user="root"):
+    try:
+        args = "-l -v" if l else ""
+        _host = "-h {}".format(host) if host else ""
+        if auth:
+            _auth = "-a {}".format(auth)
+            if auth_args:
+                _auth += "".join([" -A {}={}".format(k, v) \
+                                        for k,v in auth_args.items()])
+        else:
+            _auth = ""
+        rc, out = cont.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     {_host} " \
+                                    "     {_auth} " \
+                                    "2>/dev/null'" \
+                                    .format(_host=_host, _auth=_auth,
+                                            port=port, args=args),
+                                user=user)
+
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        raise
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg11 = cluster.get_container("agg-11")
+agg12 = cluster.get_container("agg-12")
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+node3 = cluster.get_container("node-3")
+node4 = cluster.get_container("node-4")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+#test.add_assertion(1, "root@agg-2(dom3) ldms_ls to agg-2:10000")
+sets = ldms_ls(agg2, port=10000, auth="munge",
+               auth_args={"socket": dom_sock(3)}, user="root")
+sets = set(sets)
+expect = set(["node-{}/{}".format(i, name) \
+                    for i in [1,2,3,4] \
+                    for name in ["vmstat", "meminfo"]])
+if sets == expect:
+    test.assert_test(1, True, "see all sets")
+else:
+    test.assert_test(1, False, "result({}) != expect({})".format(sets, expect))
+
+#test.add_assertion(2, "user@agg-2(dom3) ldms_ls to agg-2:10000")
+sets = ldms_ls(agg2, port=10000, auth="munge",
+               auth_args={"socket": dom_sock(3)}, user="munge")
+sets = set(sets)
+expect = set(["node-{}/{}".format(i, name) \
+                    for i in [1,2,3,4] \
+                    for name in ["meminfo"]])
+if sets == expect:
+    test.assert_test(2, True, "see only meminfo")
+else:
+    test.assert_test(2, False, "result({}) != expect({})".format(sets, expect))
+
+#test.add_assertion(3, "root@headnode(dom4) ldms_ls to agg-2:10001")
+sets = ldms_ls(headnode, host="agg-2", port=10001, auth="munge",
+               auth_args={"socket": dom_sock(4)}, user="root")
+sets = set(sets)
+expect = set(["node-{}/{}".format(i, name) \
+                    for i in [1,2,3,4] \
+                    for name in ["vmstat", "meminfo"]])
+if sets == expect:
+    test.assert_test(3, True, "see all sets")
+else:
+    test.assert_test(3, False, "result({}) != expect({})".format(sets, expect))
+
+#test.add_assertion(4, "user@headnode(dom4) ldms_ls to agg-2:10001")
+sets = ldms_ls(headnode, host="agg-2", port=10001, auth="munge",
+               auth_args={"socket": dom_sock(4)}, user="munge")
+sets = set(sets)
+expect = set(["node-{}/{}".format(i, name) \
+                    for i in [1,2,3,4] \
+                    for name in ["meminfo"]])
+if sets == expect:
+    test.assert_test(4, True, "see all sets")
+else:
+    test.assert_test(4, False, "result({}) != expect({})".format(sets, expect))
+
+
+#test.add_assertion(5, "root@headnode(dom4) ldms_ls to agg-11:10000")
+out = ldms_ls(headnode, host="agg-11", port=10000, auth="munge",
+               auth_args={"socket": dom_sock(4)}, user="munge")
+expect = [ 'Connection failed/rejected.' ]
+if out == expect:
+    test.assert_test(5, True, "connection rejected")
+else:
+    test.assert_test(5, False, "unexpected result: {}".format(out))
+
+test.finish()
+cluster.remove() # this destroys entire cluster

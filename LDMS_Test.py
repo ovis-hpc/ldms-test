@@ -634,10 +634,10 @@ class Container(object):
         """
         return self.attrs["Config"]["Env"]
 
-    def write_file(self, path, content):
+    def write_file(self, path, content, user = None):
         """Write `content` to `path` in the container"""
         cmd = "/bin/bash -c 'cat - >{} && echo -n true'".format(path)
-        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        rc, sock = self.exec_run(cmd, stdin=True, socket=True, user = user)
         sock.setblocking(True)
         sock.send(content)
         sock.shutdown(socket.SHUT_WR)
@@ -651,8 +651,24 @@ class Container(object):
     def read_file(self, path):
         """Read file specified by `path` from the container"""
         cmd = "cat {}".format(path)
-        erun = self.exec_run(cmd)
-        return erun.output
+        rc, output = self.exec_run(cmd)
+        if rc:
+            raise RuntimeError("Error {} {}".format(rc, out))
+        return output
+
+    def chmod(self, mode, path):
+        """chmod `mode` `path`"""
+        cmd = "chmod {} {}".format(oct(mode), path)
+        rc, output = self.exec_run(cmd)
+        if rc:
+            raise RuntimeError("Error {} {}".format(rc, out))
+
+    def chown(self, owner, path):
+        """chown `owner` `path`"""
+        cmd = "chown {} {}".format(owner, path)
+        rc, output = self.exec_run(cmd)
+        if rc:
+            raise RuntimeError("Error {} {}".format(rc, out))
 
     def pipe(self, cmd, content):
         """Pipe `content` to `cmd` executed in the container"""
@@ -1236,6 +1252,7 @@ class LDMSDContainer(DockerClusterContainer):
             "slurmd": self.start_slurmd,
             "slurmctld": self.start_slurmctld,
         }
+        self.munged = dict()
 
     def pgrep(self, *args):
         """Return (rc, output) of `pgrep *args`"""
@@ -1251,7 +1268,7 @@ class LDMSDContainer(DockerClusterContainer):
         rc, out = self.exec_run("pgrep -c ldmsd")
         return rc == 0
 
-    def start_ldmsd(self, spec_override = {}):
+    def start_ldmsd(self, spec_override = {}, **kwargs):
         """Start ldmsd in the container"""
         if self.check_ldmsd():
             return # already running
@@ -1303,8 +1320,22 @@ class LDMSDContainer(DockerClusterContainer):
 
     def get_ldmsd_config(self, spec):
         """Generate ldmsd config `str` from given spec"""
-        # process `samplers`
         sio = StringIO()
+        # process `auth`
+        for auth in spec.get("auth", []):
+            _a = auth.copy() # shallow copy
+            cfgcmd = "auth_add name={}".format(_a.pop("name")) \
+                     +"".join([" {}={}".format(k, v) for k,v in _a.items()])\
+                     +"\n"
+            sio.write(cfgcmd)
+        # process `listen`
+        for listen in spec.get("listen", []):
+            _l = listen.copy() # shallow copy
+            cfgcmd = "listen " \
+                     +"".join([" {}={}".format(k, v) for k,v in _l.items()])\
+                     +"\n"
+            sio.write(cfgcmd)
+        # process `samplers`
         for samp in spec.get("samplers", []):
             plugin = samp["plugin"]
             interval = samp.get("interval", 2000000)
@@ -1359,9 +1390,17 @@ class LDMSDContainer(DockerClusterContainer):
 
     def get_ldmsd_cmd(self, spec):
         """Get ldmsd command line according to spec"""
-        cmd = "ldmsd -x {listen_xprt}:{listen_port} -a {listen_auth}" \
+        if "listen_xprt" in spec and "listen_port" in spec:
+            XPRT_OPT = "-x {listen_xprt}:{listen_port}".format(**spec)
+        else:
+            XPRT_OPT = ""
+        if "listen_auth" in spec:
+            AUTH_OPT = "-a {listen_auth}".format(**spec)
+        else:
+            AUTH_OPT = ""
+        cmd = "ldmsd {XPRT_OPT} {AUTH_OPT}" \
               "      -c {config_file} -l {log_file} -v {log_level}" \
-              .format(**spec)
+              .format(XPRT_OPT=XPRT_OPT, AUTH_OPT=AUTH_OPT, **spec)
         return cmd
 
     def ldms_ls(self, *args):
@@ -1369,19 +1408,35 @@ class LDMSDContainer(DockerClusterContainer):
         cmd = "ldms_ls " + (" ".join(args))
         return self.exec_run(cmd)
 
-    def start_munged(self):
-        """Start Munge Daemon"""
-        rc, out = self.pgrep("-c munged")
-        if rc == 0: # already running
-            return
-        rc, out = self.exec_run("munged", user="munge")
-        if rc:
-            raise RuntimeError("munged failed to start, rc: {}, output: {}" \
-                                                    .format(rc, out))
+    def get_munged(self, dom = None):
+        """Get the munged handle"""
+        return self.munged.get(dom)
 
-    def kill_munged(self):
+    def set_munged(self, dom, m):
+        self.munged[dom] = m
+
+    def start_munged(self, name = None, dom = None, key = None, **kwargs):
+        """Start Munge Daemon"""
+        m = self.get_munged(dom)
+        if not m:
+            for d in self.spec["daemons"]:
+                if name == d.get("name"):
+                    break
+                if not name and dom == d.get("dom"):
+                    break
+            else: # not found
+                d = dict(dom = dom, key = key)
+            key = key if key else d.get("key")
+            dom = dom if dom else d.get("dom")
+            m = Munged(self, dom, key)
+            self.set_munged(dom, m)
+        m.start()
+
+    def kill_munged(self, dom = None):
         """Kill munged"""
-        self.exec_run("pkill munged")
+        m = self.get_munged(dom)
+        if m:
+            m.kill()
 
     def prep_slurm_conf(self):
         """Prepare slurm configurations"""
@@ -1425,6 +1480,7 @@ class LDMSDContainer(DockerClusterContainer):
 
     def _start_slurmx(self, prog):
         """(private) Start slurmd or slurmctld"""
+        # get default munge spec
         self.start_munged() # slurm depends on munged
         if self.pgrepc(prog) > 0:
             return # already running
@@ -1450,15 +1506,15 @@ class LDMSDContainer(DockerClusterContainer):
             raise RuntimeError("{} failed, rc: {}, output: {}" \
                                .format(prog, rc, out))
 
-    def start_slurmd(self):
+    def start_slurmd(self, **kwargs):
         """Start slurmd"""
         self._start_slurmx("slurmd")
 
-    def start_slurmctld(self):
+    def start_slurmctld(self, **kwargs):
         """Start slurmctld"""
         self._start_slurmx("slurmctld")
 
-    def start_sshd(self):
+    def start_sshd(self, **kwargs):
         """Start sshd"""
         rc, out = self.pgrep("-c -x sshd")
         if rc == 0: # already running
@@ -1475,7 +1531,7 @@ class LDMSDContainer(DockerClusterContainer):
             fn = self.DAEMON_TBL.get(tp)
             if not fn:
                 raise RuntimeError("Unsupported daemon type:{}".format(tp))
-            fn()
+            fn(**daemon)
 
     def config_ldmsd(self, cmds):
         if not self.pgrepc('ldmsd'):
@@ -1952,10 +2008,10 @@ class LDMSDCluster(BaseCluster):
                     slurm_loglevel = slurm_loglevel )
         return slurmconf
 
-    def start_munged(self):
+    def start_munged(self, **kwargs):
         """Start Munge Daemon"""
         for cont in self.containers:
-            cont.start_munged()
+            cont.start_munged(**kwargs)
 
     def start_slurm(self):
         """Start slurmd in all sampler nodes, and slurmctld on svc node"""
@@ -2196,6 +2252,90 @@ def ldmsd_version(prefix):
             raise ValueError("Cannot determine ldmsd version")
     return tuple(map(int, m.groups()))
 
+
+class Munged(object):
+    """Munged(cont)
+    Munged(cont, dom = "DOM_NAME", key = "KEY")
+
+    A munged handler in a docker container `cont`. If `dom` is not given, use
+    the default file locations. If `key` is not given, use the existing key.
+
+    If `dom` is given, all of the files will be put under `/munge/DOM_NAME`.
+    This is so that we can run multiple `munged` to serve multiple
+    authentication domain.
+
+    Examples:
+    >>> m0 = Munged(cont) # default domain, use existing key
+    >>> m1 = Munged(cont, dom = "dom1", key = 'x'*1024) # custom domain
+    ... # using /munge/dom1 directory
+    """
+    def __init__(self, cont, dom = None, key = None):
+        self.cont = cont
+        self.dom = dom
+        self.key = key
+        if dom:
+            self.key_file = "/munge/{}/key".format(dom)
+            self.pid_file = "/munge/{}/pid".format(dom)
+            self.sock_file = "/munge/{}/sock".format(dom)
+        else:
+            self.key_file = "/etc/munge/munge.key"
+            self.pid_file = "/run/munge/munged.pid"
+            self.sock_file = "/run/munge/munge.socket.2"
+
+    def _prep_dom(self):
+        cont = self.cont
+        _dir = "/munge/{}".format(self.dom) if self.dom else "/run/munge"
+        rc, out = cont.exec_run("mkdir -p {}".format(_dir))
+        if rc:
+            raise RuntimeError("Cannot create directory '{}', rc: {}, out: {}"\
+                               .format(_dir, rc, out))
+        self.cont.chown("munge:munge", _dir)
+
+    def _prep_key_file(self):
+        _key = self.key
+        if not _key: # key not given
+            rc, out = self.cont.exec_run("ls {}".format(self.key_file))
+            if rc == 0: # file existed, and no key given .. use existing key
+                return
+            _key = "0"*4096 # use default key if key_file not existed
+        self.cont.write_file(self.key_file, _key, user = "munge")
+        self.cont.chmod(0600, self.key_file)
+
+    def get_pid(self):
+        """PID of the running munged, `None` if it is not running"""
+        rc, out = self.cont.exec_run("cat {}".format(self.pid_file))
+        if rc:
+            return None
+        return int(out)
+
+    def is_running(self):
+        """Returns `True` if munged is running"""
+        pid = self.get_pid()
+        if not pid:
+            return False
+        rc, out = self.cont.exec_run("ps -p {}".format(pid))
+        return rc == 0
+
+    def start(self):
+        """Start the daemon"""
+        if self.is_running():
+            return # do nothing
+        self._prep_dom()
+        self._prep_key_file()
+        cmd = "munged"
+        if self.dom:
+            cmd += " -S {sock} --pid-file {pid} --key-file {key}"\
+                   .format( sock = self.sock_file, pid = self.pid_file,
+                            key = self.key_file )
+        rc, out = self.cont.exec_run(cmd, user = "munge")
+        if rc:
+            raise RuntimeError("`{}` error, rc: {}, out: {}"\
+                               .format(cmd, rc, out))
+
+    def kill(self):
+        """Kill the daemon"""
+        pid = self.get_pid()
+        self.cont.exec_run("kill {}".format(pid))
 
 
 if __name__ == "__main__":
