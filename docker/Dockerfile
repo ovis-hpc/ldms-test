@@ -17,10 +17,11 @@ yum -y upgrade ; \
 yum -y reinstall $(rpm -qa) ; \
 yum -y install man ; \
 yum -y install epel-release ; \
-yum -y install munge which openssh-server gdb gdb-gdbserver iproute \
-               openssl openssl-devel vim munge-devel readline-devel \
+yum -y install which openssh-server gdb gdb-gdbserver iproute \
+               openssl openssl-devel vim readline-devel \
 	       perl-ExtUtils-MakeMaker pam-devel mariadb-devel libcurl-devel \
 	       python-devel papi-devel libpfm-devel tmux \
+	       bzip2-devel \
 	       ; \
 yum -y group install "Development Tools" ; \
 yum clean all ; \
@@ -32,18 +33,30 @@ curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py \
 yes | pip install Cython ; \
 yes | pip install numpy ; \
 cd /etc/ssh ; \
+echo "---- Generate sshd keys ----" ; \
 yes "" | ssh-keygen -t rsa -f ssh_host_rsa_key ; \
 yes "" | ssh-keygen -t ecdsa -f ssh_host_ecdsa_key ; \
 yes "" | ssh-keygen -t ed25519 -f ssh_host_ed25519_key ; \
+echo "---- Build and install munge-0.5.14 ----" ; \
+cd /root ; \
+curl -LO https://github.com/dun/munge/releases/download/munge-0.5.14/munge-0.5.14.tar.xz ; \
+curl -LO https://github.com/dun/munge/releases/download/munge-0.5.14/munge-0.5.14.tar.xz.asc ; \
+curl -LO https://github.com/dun.gpg ; \
+rpmbuild -ta munge-0.5.14.tar.xz ; \
+cd /root/rpmbuild/RPMS/x86_64 ; \
+yum -y install munge-*.rpm ; \
+rm -rf /root/rpmbuild/BUILD/munge-0.5.14 ; \
+echo "---- Generate munge key ----" ; \
 dd if=/dev/zero of=/etc/munge/munge.key bs=4096 count=1 \
     && chmod 600 /etc/munge/munge.key \
     && chown munge:munge /etc/munge/munge.key ; \
+echo "---- Build and install slurm ----" ; \
 cd /root ; \
 curl -O https://download.schedmd.com/slurm/slurm-17.02.11.tar.bz2 ; \
 rpmbuild -ta slurm-17.02.11.tar.bz2 ; \
 cd /root/rpmbuild/RPMS/x86_64 ; \
-yum -y install *.rpm ; \
-cd /root ; \
+yum -y install slurm-*.rpm ; \
+rm -rf /root/rpmbuild/BUILD/slurm-17.02.11 ; \
 yum clean all ; \
 '
 
