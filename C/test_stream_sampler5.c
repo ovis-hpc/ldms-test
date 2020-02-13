@@ -150,6 +150,15 @@ int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 	return 0;
 }
 
+const char *
+json_attr_find_str(json_entity_t json, const char *key)
+{
+	json_entity_t val = json_value_find(json, (void*)key);
+	if (!val || val->type != JSON_STRING_VALUE)
+		return NULL;
+	return json_value_str(val)->str;
+}
+
 static
 int tss_config(ldmsd_plugin_inst_t pi, json_entity_t json,
 				      char *ebuf, int ebufsz)
