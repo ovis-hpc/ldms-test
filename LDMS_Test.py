@@ -1889,7 +1889,7 @@ class LDMSDCluster(BaseCluster):
                         "/sbin",
                     ]),
                 "LD_LIBRARY_PATH" : "/opt/ovis/lib:/opt/ovis/lib64",
-                "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
+                "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
                 "LDMSD_PLUGIN_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
                 "PYTHONPATH" : "/opt/ovis/lib/python2.7/site-packages:" \
                                "/opt/ovis/lib64/python2.7/site-packages"
@@ -2170,7 +2170,9 @@ class LDMSDCluster(BaseCluster):
                 _add MANPATH $PREFIX/share/man
                 _add PYTHONPATH $PREFIX/lib/python2.7/site-packages
 
-                export ZAP_LIBPATH=$PREFIX/lib/ovis-lib
+                export ZAP_LIBPATH=$PREFIX/lib/ovis-ldms
+                _add ZAP_LIBPATH $PREFIX/lib64/ovis-ldms
+                _add ZAP_LIBPATH $PREFIX/lib/ovis-lib
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-lib
                 export LDMSD_PLUGIN_LIBPATH=$PREFIX/lib/ovis-ldms
                 _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib64/ovis-ldms
