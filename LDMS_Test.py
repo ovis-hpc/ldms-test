@@ -2143,6 +2143,8 @@ class LDMSDCluster(BaseCluster):
         LD_LIBRARY_PATH. The /etc/profile.d/ovis.sh is for ssh session's
         convenience (making ldms binaries available for SSH session).
         """
+        allhosts = set([ c.hostname for c in self.containers ])
+        allhosts_txt = ' '.join(allhosts)
         for cont in self.containers:
             cont.write_file("/etc/ld.so.conf.d/ovis.conf",
                             "/opt/ovis/lib\n"
@@ -2178,6 +2180,18 @@ class LDMSDCluster(BaseCluster):
                 _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib64/ovis-ldms
             """
             cont.write_file("/etc/profile.d/ovis.sh", profile)
+            otherhosts = allhosts - set([cont.hostname])
+            otherhosts_txt = ' '.join(otherhosts)
+            pssh_profile = """
+                export ALLHOSTS='{allhosts_txt}'
+                export OTHERHOSTS='{otherhosts_txt}'
+                alias pssh.others='pssh -H "${{OTHERHOSTS}}"'
+                alias pscp.others='pscp.pssh -H "${{OTHERHOSTS}}"'
+            """.format(
+                    allhosts_txt = allhosts_txt,
+                    otherhosts_txt = otherhosts_txt,
+                )
+            cont.write_file("/etc/profile.d/pssh.sh", pssh_profile)
 
     def pgrepc(self, prog):
         """Perform `cont.pgrepc(prog)` for cont in self.containers"""
