@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # This is a script to feed several tests to tadad
 
 import os
@@ -6,7 +6,7 @@ import sys
 from TADA import Test
 
 if sys.flags.interactive:
-    execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+    exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 t = Test(test_suite="LDMSD",
          test_type="Test", test_name="TestTADA",

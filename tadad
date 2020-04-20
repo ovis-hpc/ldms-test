@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 import argparse
 import logging
 import socket
@@ -6,7 +6,6 @@ import json
 import datetime as dt
 import sys
 import os
-import ConfigParser
 import binascii
 import hashlib
 
@@ -98,7 +97,7 @@ def db_test_finish(obj, result):
 
 if __name__ == "__main__":
     if sys.flags.interactive:
-        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
     FORMAT_CONS = '%(asctime)s %(name)-12s %(levelname)8s\t%(message)s'
     logging.basicConfig(level=logging.DEBUG, format=FORMAT_CONS)
@@ -148,8 +147,8 @@ if __name__ == "__main__":
     else:
         config = None
     if config:
-        import ConfigParser
-        cp = ConfigParser.SafeConfigParser()
+        import configparser
+        cp = configparser.SafeConfigParser()
         cp.read(config)
         conf = dict(cp.items("tada"))
         parser.set_defaults(**conf)

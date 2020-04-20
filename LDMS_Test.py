@@ -13,9 +13,11 @@ import TADA
 import pdb
 
 from functools import wraps
-from StringIO import StringIO
+from io import StringIO
 from distutils.version import LooseVersion
 from distutils.spawn import find_executable
+
+from functools import reduce
 
 # `D` Debug object to store values for debugging
 class Debug(object): pass
@@ -32,7 +34,7 @@ class cached_property(object):
     """
     def __init__(self, func):
         self.func = func
-        self.name = func.func_name
+        self.name = func.__name__
 
     def __get__(self, obj, _type):
         cache = getattr(obj, "__cache__", dict())
@@ -86,23 +88,23 @@ _TYPE_FN = {
     "s8": int,
     "u16": int,
     "s16": int,
-    "u32": long,
-    "s32": long,
-    "u64": long,
-    "s64": long,
+    "u32": int,
+    "s32": int,
+    "u64": int,
+    "s64": int,
     "f32": float,
     "d64": float,
 
-    "u8[]": lambda x: map(int, x.split(',')),
-    "s8[]": lambda x: map(int, x.split(',')),
-    "u16[]": lambda x: map(int, x.split(',')),
-    "s16[]": lambda x: map(int, x.split(',')),
-    "u32[]": lambda x: map(long, x.split(',')),
-    "s32[]": lambda x: map(long, x.split(',')),
-    "u64[]": lambda x: map(long, x.split(',')),
-    "s64[]": lambda x: map(long, x.split(',')),
-    "f32[]": lambda x: map(float, x.split(',')),
-    "d64[]": lambda x: map(float, x.split(',')),
+    "u8[]": lambda x: list(map(int, x.split(','))),
+    "s8[]": lambda x: list(map(int, x.split(','))),
+    "u16[]": lambda x: list(map(int, x.split(','))),
+    "s16[]": lambda x: list(map(int, x.split(','))),
+    "u32[]": lambda x: list(map(int, x.split(','))),
+    "s32[]": lambda x: list(map(int, x.split(','))),
+    "u64[]": lambda x: list(map(int, x.split(','))),
+    "s64[]": lambda x: list(map(int, x.split(','))),
+    "f32[]": lambda x: list(map(float, x.split(','))),
+    "d64[]": lambda x: list(map(float, x.split(','))),
 }
 
 def parse_ldms_ls(txt):
@@ -247,7 +249,7 @@ def get_ovis_commit_id(prefix):
                 return commit_id
     except:
         pass
-    return None
+    return "NONE"
 
 def guess_ovis_prefix():
     """Guess ovis prefix from the environment"""
@@ -317,13 +319,11 @@ def process_args(parsed_args):
         TADA.DEBUG = True
 
 DEEP_COPY_TBL = {
-        dict: lambda x: { k:deep_copy(v) for k,v in x.iteritems() },
+        dict: lambda x: { k:deep_copy(v) for k,v in x.items() },
         list: lambda x: [ deep_copy(v) for v in x ],
         int: lambda x: x,
-        long: lambda x: x,
         float: lambda x: x,
         str: lambda x: x,
-        unicode: lambda x: x,
         bool: lambda x: x,
     }
 
@@ -432,7 +432,7 @@ class Spec(dict):
     """
     MAX_DEPTH = 64
     VAR_RE = re.compile(r'%([^%]+)%')
-    PRIMITIVES = set([long, int, float, bool, str, unicode])
+    PRIMITIVES = set([int, float, bool, str])
 
     def __init__(self, spec):
         _dict = deep_copy(spec)
@@ -442,10 +442,8 @@ class Spec(dict):
             dict: self._subst_dict,
             list: self._subst_list,
             str: self._subst_str,
-            unicode: self._subst_str,
             int: self._subst_scalar,
             float: self._subst_scalar,
-            long: self._subst_scalar,
             bool: self._subst_scalar,
         }
         self.EXPAND_TBL = {
@@ -453,9 +451,7 @@ class Spec(dict):
             list: self._expand_list,
             int: self._expand_scalar,
             float: self._expand_scalar,
-            long: self._expand_scalar,
             str: self._expand_scalar,
-            unicode: self._expand_scalar,
             bool: self._expand_scalar,
         }
         self._start_expand()
@@ -463,16 +459,16 @@ class Spec(dict):
 
     def _start_expand(self):
         """(private) starting point of template expansion"""
-        for k,v in self.iteritems():
+        for k,v in self.items():
             if k == "templates":
                 continue # skip the templates
             self[k] = self._expand(v, 0)
 
     def _start_subst(self):
         """(private) starting point of %VAR% substitute"""
-        self.VAR = { k:v for k,v in self.iteritems() \
+        self.VAR = { k:v for k,v in self.items() \
                          if type(v) in self.PRIMITIVES }
-        for k,v in self.iteritems():
+        for k,v in self.items():
             if k == "templates":
                 continue
             self[k] = self._subst(v)
@@ -510,7 +506,7 @@ class Spec(dict):
             d = lst.pop()
             tmp.update(d)
         tmp.pop("!extends", None) # remove the "!extends" keyword
-        return { k: self._expand(v, lvl+1) for k,v in tmp.iteritems() }
+        return { k: self._expand(v, lvl+1) for k,v in tmp.items() }
 
     def _subst(self, obj):
         """(private) substitute %VAR% """
@@ -530,10 +526,10 @@ class Spec(dict):
         _save = self.VAR
         # new VAR dict
         var = dict(self.VAR)
-        var.update( { k:v for k,v in dct.iteritems() \
+        var.update( { k:v for k,v in dct.items() \
                           if type(v) in self.PRIMITIVES } )
         self.VAR = var
-        _ret = { k: self._subst(v) for k,v in dct.iteritems() }
+        _ret = { k: self._subst(v) for k,v in dct.items() }
         # recover
         self.VAR = _save
         return _ret
@@ -603,7 +599,10 @@ class Container(object):
 
     def exec_run(self, *args, **kwargs):
         self.wait_running()
-        return self.obj.exec_run(*args, **kwargs)
+        (rc, out) = self.obj.exec_run(*args, **kwargs)
+        if type(out) == bytes:
+            return (rc, out.decode())
+        return (rc, out)
 
     def remove(self, **kwargs):
         self.obj.remove(**kwargs)
@@ -619,7 +618,7 @@ class Container(object):
     def interfaces(self):
         """Return a list() of (network_name, IP_address) of the container."""
         return [ (k, v['IPAddress']) for k, v in \
-                 self.attrs['NetworkSettings']['Networks'].iteritems() ]
+                 self.attrs['NetworkSettings']['Networks'].items() ]
 
     @property
     def hostname(self):
@@ -638,12 +637,15 @@ class Container(object):
         """Write `content` to `path` in the container"""
         cmd = "/bin/bash -c 'cat - >{} && echo -n true'".format(path)
         rc, sock = self.exec_run(cmd, stdin=True, socket=True, user = user)
+        sock = sock._sock # get the raw socket
         sock.setblocking(True)
+        if type(content) == str:
+            content = content.encode()
         sock.send(content)
         sock.shutdown(socket.SHUT_WR)
         D.ret = ret = sock.recv(8192)
         # skip 8-byte header
-        ret = ret[8:]
+        ret = ret[8:].decode()
         sock.close()
         if ret != "true":
             raise RuntimeError(ret)
@@ -653,27 +655,30 @@ class Container(object):
         cmd = "cat {}".format(path)
         rc, output = self.exec_run(cmd)
         if rc:
-            raise RuntimeError("Error {} {}".format(rc, out))
+            raise RuntimeError("Error {} {}".format(rc, output))
         return output
 
     def chmod(self, mode, path):
         """chmod `mode` `path`"""
-        cmd = "chmod {} {}".format(oct(mode), path)
+        cmd = "chmod {:o} {}".format(int(mode), path)
         rc, output = self.exec_run(cmd)
         if rc:
-            raise RuntimeError("Error {} {}".format(rc, out))
+            raise RuntimeError("Error {} {}".format(rc, output))
 
     def chown(self, owner, path):
         """chown `owner` `path`"""
         cmd = "chown {} {}".format(owner, path)
         rc, output = self.exec_run(cmd)
         if rc:
-            raise RuntimeError("Error {} {}".format(rc, out))
+            raise RuntimeError("Error {} {}".format(rc, output))
 
     def pipe(self, cmd, content):
         """Pipe `content` to `cmd` executed in the container"""
         rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        sock = sock._sock
         sock.setblocking(True)
+        if type(content) == str:
+            content = content.encode()
         sock.send(content)
         sock.shutdown(socket.SHUT_WR)
         D.ret = ret = sock.recv(8192)
@@ -683,8 +688,8 @@ class Container(object):
             output = ''
         else:
             # skip 8-byte header
-            output = ret[8:]
-            rc = bytearray(ret[0])[0]
+            output = ret[8:].decode()
+            rc = ret[0]
             if rc == 1: # OK
                 rc = 0
         return rc, output
@@ -786,7 +791,7 @@ class Service(object):
         for cont in self.containers:
             name = cont.attrs["Config"]["Hostname"]
             networks = cont.attrs["NetworkSettings"]["Networks"]
-            for net_name, net in networks.iteritems():
+            for net_name, net in networks.items():
                 addr = net["IPAddress"]
                 sio.write("{} {}".format(addr, name))
                 alist = node_aliases.get(name, [])
@@ -851,7 +856,7 @@ class Network(object):
             obj = client.networks.create(name=name, driver=driver,
                                      scope=scope, attachable=attachable,
                                      labels = labels)
-        except docker.errors.APIError, e:
+        except docker.errors.APIError as e:
             if e.status_code != 409: # other error, just raise it
                 raise
             msg = e.explanation + ". This could be an artifact from previous " \
@@ -1174,7 +1179,7 @@ class DockerCluster(object):
             for cont in cont_list:
                 k = cont.attrs['Config']['Hostname']
                 cont_dict[k] = cont
-            for k, v in self.node_aliases.iteritems():
+            for k, v in self.node_aliases.items():
                 cont = cont_dict[k]
                 if type(v) == str:
                     v = [ v ]
@@ -1371,7 +1376,7 @@ class LDMSDContainer(DockerClusterContainer):
         for prdcr in spec.get("prdcrs", []):
             prdcr = deep_copy(prdcr)
             prdcr_add = "prdcr_add name={}".format(prdcr.pop("name"))
-            for k, v in prdcr.iteritems():
+            for k, v in prdcr.items():
                 prdcr_add += " {}={}".format(k, v)
             sio.write(prdcr_add)
             sio.write("\n")
@@ -1557,16 +1562,17 @@ class LDMSDContainer(DockerClusterContainer):
                   )
         D.cmd = cmd
         rc, sock = self.exec_run(cmd, stdin=True, socket=True)
+        sock = sock._sock
         sock.setblocking(True)
-        sock.send(sio.getvalue())
+        sock.send(sio.getvalue().encode())
         sock.shutdown(socket.SHUT_WR)
         D.ret = ret = sock.recv(8192)
         if len(ret) == 0:
             rc = 0
             output = ''
         else:
-            output = ret[8:]
-            rc = bytearray(ret[0])[0]
+            output = ret[8:].decode()
+            rc = ret[0]
             if rc == 1: # OK
                 rc = 0
         return rc, output
@@ -1891,8 +1897,8 @@ class LDMSDCluster(BaseCluster):
                 "LD_LIBRARY_PATH" : "/opt/ovis/lib:/opt/ovis/lib64",
                 "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
                 "LDMSD_PLUGIN_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
-                "PYTHONPATH" : "/opt/ovis/lib/python2.7/site-packages:" \
-                               "/opt/ovis/lib64/python2.7/site-packages"
+                "PYTHONPATH" : "/opt/ovis/lib/python3.6/site-packages:" \
+                               "/opt/ovis/lib64/python3.6/site-packages"
             }
         env.update(env_dict(spec.get("env", {})))
         kwargs = dict(
@@ -2170,7 +2176,7 @@ class LDMSDCluster(BaseCluster):
                 _add LD_LIBRARY_PATH $PREFIX/lib/ovis-ldms
                 _add LD_LIBRARY_PATH $PREFIX/lib64/ovis-ldms
                 _add MANPATH $PREFIX/share/man
-                _add PYTHONPATH $PREFIX/lib/python2.7/site-packages
+                _add PYTHONPATH $PREFIX/lib/python3.6/site-packages
 
                 export ZAP_LIBPATH=$PREFIX/lib/ovis-ldms
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-ldms
@@ -2252,7 +2258,7 @@ def ldmsd_version(prefix):
     """Get LDMSD version from the installation prefix"""
     try:
         _cmd = "strings {}/sbin/ldmsd | grep 'LDMSD_VERSION '".format(prefix)
-        out = subprocess.check_output(_cmd, shell = True)
+        out = subprocess.check_output(_cmd, shell = True).decode()
     except:
         out = ""
     m = LDMSD_STR_VER_RE.match(out)
@@ -2260,7 +2266,7 @@ def ldmsd_version(prefix):
         # try `ldmsd -V`
         try:
             _cmd = "{}/sbin/ldmsd -V | grep 'LDMSD Version: '".format(prefix)
-            out = subprocess.check_output(_cmd, shell = True)
+            out = subprocess.check_output(_cmd, shell = True).decode()
         except:
             out = ""
         m = LDMSD_EXE_VER_RE.match(out)
@@ -2315,7 +2321,7 @@ class Munged(object):
                 return
             _key = "0"*4096 # use default key if key_file not existed
         self.cont.write_file(self.key_file, _key, user = "munge")
-        self.cont.chmod(0600, self.key_file)
+        self.cont.chmod(0o600, self.key_file)
 
     def get_pid(self):
         """PID of the running munged, `None` if it is not running"""
@@ -2355,4 +2361,4 @@ class Munged(object):
 
 
 if __name__ == "__main__":
-    execfile(os.getenv('PYTHONSTARTUP', '/dev/null'))
+    exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())

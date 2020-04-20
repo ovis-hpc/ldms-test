@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import sys
@@ -9,7 +9,7 @@ from LDMS_Test import DockerCluster
 if __name__ != "__main__":
     raise RuntimeError("This is not a module.")
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 SCRIPTDIR = os.path.realpath(sys.path[0])
 USER = pwd.getpwuid(os.geteuid())[0]
@@ -30,23 +30,23 @@ args = ap.parse_args()
 if not os.path.exists(args.nfsdir):
     os.makedirs(args.nfsdir)
 
-print "-- Getting/Creating a cluster --"
+print("-- Getting/Creating a cluster --")
 mounts = ["{}:/nfsdir:rw".format(args.nfsdir)]
 cluster = DockerCluster.get(args.name, create = True, nodes = 1,
                             mounts = mounts, image = args.image)
 
 [cont] = cluster.containers
 
-print "-- Test writing files --"
+print("-- Test writing files --")
 
 #  utility to test writing files
 def test_write_read(cont, path, txt):
     sz = len(txt)
-    print " test writing", sz, "B, path:", path, "...",
+    print(" test writing", sz, "B, path:", path, "...", end='')
     cont.write_file(path, txt)
     rtxt = cont.read_file(path)
     assert(txt == rtxt)
-    print "OK"
+    print("OK")
 
 # Simple short write
 test_write_read(cont, "/tmp/file0", "Short Write")
@@ -65,24 +65,24 @@ test_write_read(cont, "/nfsdir/file1", "0"*4096)
 test_write_read(cont, "/nfsdir/file2", "0"*(1024*1024))
 
 # Test error handling
-print "-- Test write error handling --"
+print("-- Test write error handling --")
 
-print " parent directory does not exist ...",
+print(" parent directory does not exist ...", end='')
 try:
     cont.write_file("/path/not/exist", "bla")
-except RuntimeError, e:
+except RuntimeError as e:
     # expecting "No such file or directory"
-    if not e.message.endswith("No such file or directory\n"):
+    if not str(e).endswith("No such file or directory\n"):
         raise
-    print "OK"
+    print("OK")
 
-print " parent directory is a file ...",
+print(" parent directory is a file ...", end='')
 try:
     cont.write_file("/tmp/file0/bla", "bla")
-except RuntimeError, e:
-    if not e.message.endswith("Not a directory\n"):
+except RuntimeError as e:
+    if not str(e).endswith("Not a directory\n"):
         raise
-    print "OK"
+    print("OK")
 
-print "-- Removing the cluster --"
+print("-- Removing the cluster --")
 cluster.remove()

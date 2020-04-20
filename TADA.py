@@ -14,7 +14,7 @@ import inspect
 import importlib
 import logging
 
-from StringIO import StringIO
+from io import StringIO
 
 log = logging.getLogger(__name__)
 
@@ -99,15 +99,18 @@ class Test(object):
 
     def _send(self, msg):
         msg["test-id"] = self.test_id
-        if type(msg) != str:
-            msg = json.dumps(msg)
-        self.sock_fd.sendto(msg.encode('utf-8'),
-                            (self.tada_host, self.tada_port))
+        if type(msg) == bytes:
+            pass # send as-is
+        elif type(msg) == str:
+            msg = msg.encode()
+        else:
+            msg = json.dumps(msg).encode()
+        self.sock_fd.sendto(msg, (self.tada_host, self.tada_port))
 
     def start(self):
         s = "{t.test_suite}:{t.test_type}:{t.test_name}:{t.test_user}:" \
             "{t.commit_id}:{ts}".format(t = self, ts = int(time.time()))
-        self.test_id = binascii.hexlify(hashlib.sha256(s).digest())
+        self.test_id = binascii.hexlify(hashlib.sha256(s.encode()).digest()).decode()
         log.info("starting test `{}`".format(self.test_name))
         log.info("  test-id: {}".format(self.test_id))
         log.info("  test-suite: {}".format(self.test_suite))
@@ -154,7 +157,7 @@ class Test(object):
             raise AssertionException(self.test_desc + ", " + cond_str + ": FAILED")
 
     def finish(self):
-        for num, msg in self.assertions.iteritems():
+        for num, msg in self.assertions.items():
             if msg["test-status"] == Test.SKIPPED:
                 self._send(msg)
                 status = Test.SKIPPED_COLOR if sys.stdout.isatty() else Test.SKIPPED
@@ -255,7 +258,7 @@ class SQLModel(object):
             sql = "SELECT * FROM {} where {}".format(cls.__table__, cond)
         else:
             sql = "SELECT * FROM {}".format(cls.__table__)
-        cur.execute(sql, map(str, kwargs.values()))
+        cur.execute(sql, tuple(map(str, kwargs.values())))
         lst = cur.fetchall()
         return [ cls(_conn, data) for data in lst ]
 
@@ -303,7 +306,7 @@ class SQLModel(object):
                 )
         cur = _conn.cursor()
         # use parameterized sql execution
-        cur.execute(sql, map(str, vals))
+        cur.execute(sql, tuple(map(str, vals)))
         _conn.commit()
         return cls.get(_conn, **_id)
 
@@ -311,10 +314,35 @@ class SQLModel(object):
         for k in self.__colnames__:
             a0 = getattr(self, k)
             a1 = getattr(other, k)
-            c = cmp(a0, a1)
-            if c:
-                return c
+            if a0 is None:
+                if a1 is None:
+                    continue
+                return -1
+            if a1 is None:
+                return 1
+            if a0 < a1:
+                return -1
+            if a0 > a1:
+                return 1
         return 0
+
+    def __eq__(self, other):
+        return self.__cmp__(other) == 0
+
+    def __ne__(self, other):
+        return self.__cmp__(other) != 0
+
+    def __lt__(self, other):
+        return self.__cmp__(other) < 0
+
+    def __le__(self, other):
+        return self.__cmp__(other) <= 0
+
+    def __gt__(self, other):
+        return self.__cmp__(other) > 0
+
+    def __ge__(self, other):
+        return self.__cmp__(other) >= 0
 
     @classmethod
     def __id_from_data(cls, data):
@@ -335,7 +363,7 @@ class SQLModel(object):
         cond = " and ".join( "{}={}".format(k, self._qparam) \
                                             for k in self._obj_id.keys() )
         sql = "SELECT * FROM {} where {}".format(self.__table__, cond)
-        cur.execute(sql, map(str, self._obj_id.values()))
+        cur.execute(sql, tuple(map(str, self._obj_id.values())))
         return cur.fetchone()
 
     def reload(self):
@@ -364,8 +392,8 @@ class SQLModel(object):
                                             for k in self._obj_id.keys() )
         sql = "UPDATE {} SET {} WHERE {}".format(self.__table__, update, cond)
         cur = self._conn.cursor()
-        params = vals.values() + self._obj_id.values()
-        cur.execute(sql, map(str, params))
+        params = tuple(vals.values()) + tuple(self._obj_id.values())
+        cur.execute(sql, tuple(map(str, params)))
         self._conn.commit()
 
     def __str__(self):
@@ -387,7 +415,7 @@ class SQLModel(object):
                                         for k in self._obj_id.keys() )
         sql = "DELETE FROM {} WHERE {}".format(self.__table__, cond)
         cur = self._conn.cursor()
-        cur.execute(sql, map(str, self._obj_id.values()))
+        cur.execute(sql, tuple(map(str, self._obj_id.values())))
         self._conn.commit()
 
     def __getitem__(self, key):
@@ -489,7 +517,7 @@ def mysql_connect(db_mod, db_host="localhost", db_port=None, db_user=None,
              .format(db_loc(db_host, db_port)))
     _kwargs = dict(host=db_host, port=db_port, user=db_user,
                           passwd=db_password, db = db_database)
-    _kwargs = { k:v for k,v in _kwargs.iteritems() if v != None }
+    _kwargs = { k:v for k,v in _kwargs.items() if v != None }
     return db_mod.connect(**_kwargs)
 
 DB_CONN_TBL = {
@@ -601,4 +629,4 @@ class TADA_DB(object):
 
 
 if __name__ == "__main__":
-    execfile(os.getenv('PYTHONSTARTUP', '/dev/null'))
+    exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())

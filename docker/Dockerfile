@@ -20,18 +20,13 @@ yum -y install epel-release ; \
 yum -y install which openssh-server gdb gdb-gdbserver iproute \
                openssl openssl-devel vim readline-devel \
 	       perl-ExtUtils-MakeMaker pam-devel mariadb-devel libcurl-devel \
-	       python-devel papi-devel libpfm-devel tmux \
+	       python3-devel papi-devel libpfm-devel tmux \
 	       bzip2-devel \
 	       ; \
 yum -y group install "Development Tools" ; \
 yum clean all ; \
 yes "" | ssh-keygen ; \
 cat /root/.ssh/id*.pub > /root/.ssh/authorized_keys ; \
-curl https://bootstrap.pypa.io/get-pip.py -o get-pip.py \
-	 && python get-pip.py \
-	 && rm -f get-pip.py ; \
-yes | pip install Cython ; \
-yes | pip install numpy ; \
 cd /etc/ssh ; \
 echo "---- Generate sshd keys ----" ; \
 yes "" | ssh-keygen -t rsa -f ssh_host_rsa_key ; \
@@ -58,6 +53,11 @@ cd /root/rpmbuild/RPMS/x86_64 ; \
 yum -y install slurm-*.rpm ; \
 rm -rf /root/rpmbuild/BUILD/slurm-17.02.11 ; \
 yum clean all ; \
+'
+
+RUN /bin/bash -c '\
+yes | pip3 install Cython ; \
+yes | pip3 install numpy ; \
 '
 
 RUN /bin/echo >/etc/tmux.conf -e "\

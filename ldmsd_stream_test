@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from __future__ import print_function
 import argparse
 import os
@@ -9,7 +9,7 @@ import time
 import json
 import logging
 
-from StringIO import StringIO
+from io import StringIO
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, read_msg
@@ -178,7 +178,7 @@ def rm(path):
 
 if __name__ == "__main__":
     if sys.flags.interactive:
-        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
     parser = argparse.ArgumentParser(description="ldmsd_stream_publish/subscribe FVT test")
     add_common_args(parser)
     args = parser.parse_args()

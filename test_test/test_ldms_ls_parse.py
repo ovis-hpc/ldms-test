@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import sys
@@ -125,7 +125,16 @@ syspapi_expect = {
     ]
   },
   "name": "compute-1/syspapi",
-  "ts": "Tue Aug 20 19:07:03 2019 +0000 [1436us]"
+  "ts": "Tue Aug 20 19:07:03 2019 +0000 [1436us]",
+  "data_type": {
+    "component_id": "u64",
+    "job_id": "u64",
+    "app_id": "u64",
+    "PAPI_TOT_CYC": "u64[]",
+    "PAPI_TOT_INS": "u64[]",
+    "PAPI_L1_DCH": "u64[]",
+    "PAPI_L1_DCA": "u64[]",
+  }
 }
 
 assert(syspapi == syspapi_expect)
@@ -195,6 +204,56 @@ meminfo_expect = {
     "Shmem": 140044
   },
   "name": "compute-1/meminfo",
-  "ts": "Tue Aug 20 19:07:03 2019 +0000 [1611us]"
+  "ts": "Tue Aug 20 19:07:03 2019 +0000 [1611us]",
+  "data_type": {
+    "WritebackTmp": "u64",
+    "SwapTotal": "u64",
+    "Active(anon)": "u64",
+    "SwapFree": "u64",
+    "DirectMap4k": "u64",
+    "app_id": "u64",
+    "KernelStack": "u64",
+    "MemFree": "u64",
+    "HugePages_Rsvd": "u64",
+    "Committed_AS": "u64",
+    "Active(file)": "u64",
+    "NFS_Unstable": "u64",
+    "VmallocChunk": "u64",
+    "CmaFree": "u64",
+    "Writeback": "u64",
+    "Inactive(file)": "u64",
+    "MemTotal": "u64",
+    "job_id": "u64",
+    "VmallocUsed": "u64",
+    "HugePages_Free": "u64",
+    "AnonHugePages": "u64",
+    "AnonPages": "u64",
+    "Active": "u64",
+    "Inactive(anon)": "u64",
+    "CommitLimit": "u64",
+    "Hugepagesize": "u64",
+    "Cached": "u64",
+    "SwapCached": "u64",
+    "VmallocTotal": "u64",
+    "CmaTotal": "u64",
+    "component_id": "u64",
+    "Dirty": "u64",
+    "Mapped": "u64",
+    "SUnreclaim": "u64",
+    "Unevictable": "u64",
+    "SReclaimable": "u64",
+    "MemAvailable": "u64",
+    "Slab": "u64",
+    "DirectMap2M": "u64",
+    "HugePages_Surp": "u64",
+    "Bounce": "u64",
+    "Inactive": "u64",
+    "PageTables": "u64",
+    "HardwareCorrupted": "u64",
+    "HugePages_Total": "u64",
+    "Mlocked": "u64",
+    "Buffers": "u64",
+    "Shmem": "u64",
+  }
 }
 assert(meminfo == meminfo_expect)

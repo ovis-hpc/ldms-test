@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import sys
@@ -19,7 +19,7 @@ class bcolors:
 
 if __name__ == "__main__":
     if sys.flags.interactive:
-        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
     # program argparse
     parser = argparse.ArgumentParser()
@@ -79,8 +79,8 @@ if __name__ == "__main__":
     else:
         config = None
     if config:
-        import ConfigParser
-        cp = ConfigParser.SafeConfigParser()
+        import configparser
+        cp = configparser.SafeConfigParser()
         cp.read(config)
         conf = dict(cp.items("tada"))
         parser.set_defaults(**conf)
@@ -94,7 +94,7 @@ if __name__ == "__main__":
         db.purgeOldTests()
         sys.exit(0)
 
-    fltr = { k: v  for k,v in args.__dict__.iteritems() \
+    fltr = { k: v  for k,v in args.__dict__.items() \
                        if k in FILTERS and v != None }
     objs = db.findTests(latest = args.latest, **fltr)
     for o in objs:

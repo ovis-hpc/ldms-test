@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 from __future__ import print_function
 import os
 import re
@@ -140,7 +140,7 @@ def verify_jobinfo(cluster, test, node_events, jobinfo):
     envs = [ make_dict_from_out("/db/slurm_env_{}.{}.out".format(jobid, i)) \
                                 for i in range(0, num_tasks) ]
     # filter events to only our job
-    _node_events = [ filter(lambda e: e['data']['job_id'] == jobid, _events) \
+    _node_events = [ list(filter(lambda e: e['data']['job_id'] == jobid, _events)) \
                     for _events in node_events ]
     _node_events = [ _events for _events in _node_events if len(_events) > 0 ]
     if not _node_events: # no events
@@ -198,7 +198,7 @@ def verify_jobinfo(cluster, test, node_events, jobinfo):
 
 if __name__ == "__main__":
     if sys.flags.interactive:
-        execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
     parser = argparse.ArgumentParser(description="Run an FVT test")
     add_common_args(parser)
     parser.add_argument("--libdir",

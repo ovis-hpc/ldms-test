@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import sys
@@ -30,7 +30,7 @@ def obj_iter(itr):
         b = itr.next()
 
 print('[')
-names = [ a.name() for a in schema ]
+names = [ a.name().decode() for a in schema ]
 first = True
 for obj in obj_iter(itr):
     values = map(lambda v: v.tolist() if type(v) == numpy.ndarray else v, obj)

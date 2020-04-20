@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import re
@@ -10,6 +10,8 @@ import docker
 import argparse
 import TADA
 import logging
+
+from functools import reduce
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, jprint, \
@@ -23,7 +25,7 @@ logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
 
 log = logging.getLogger(__name__)
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 #### argument parsing #### -------------------------------------------
 ap = argparse.ArgumentParser(description =
@@ -473,8 +475,10 @@ for k in SYSPAPI_1_CONFIG["events"]:
     d0 = _set["data"][k]
     d1 = _set1["data"][k]
     diff = map(lambda a, b: a - b, d1, d0)
-    if diff < 0: # this is bad
-        break
+    reduce(lambda a,b: a or (b < 0), diff, False)
+    for d in diff:
+        if d < 0: # this is bad
+            break
     if diff == 0: # must check if an error is reported in the log
         rc, out = comp1.exec_run("grep {} /var/log/ldmsd.log".format(k))
         if out.find("ERROR") < 0: # no error about event reported

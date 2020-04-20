@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import pdb
@@ -29,7 +29,7 @@ if __name__ != "__main__":
 # The objects are recursively extended first, and the substitution is processed
 # in those objects afterward.
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 spec = {
     "XPRT": "sock",

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import re
@@ -23,7 +23,7 @@ logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
 
 log = logging.getLogger(__name__)
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 def update_expect_file(fname, data):
     s = json.dumps(data)
@@ -344,10 +344,10 @@ def create_events(node_count, task_count, job_id, init_time = None):
         init_event['data']['gid'] = 0
         init_event['data']['nnodes'] = node_count
         init_event['data']['nodeid'] = node
-        init_event['data']['local_tasks'] = task_count / node_count
+        init_event['data']['local_tasks'] = int(task_count / node_count)
         init_event['data']['total_tasks'] = task_count
         events.append(init_event)
-        for task in range(0, task_count / node_count):
+        for task in range(0, int(task_count / node_count)):
             init_task = {}
             init_task['schema'] = 'mt-slurm'
             init_task['event'] = 'task_init_priv'
@@ -360,7 +360,7 @@ def create_events(node_count, task_count, job_id, init_time = None):
             init_task['data']['task_global_id'] = task + task_start
             init_task['data']['nodeid'] = node
             events.append(init_task)
-        for task in range(0, task_count / node_count):
+        for task in range(0, int(task_count / node_count)):
             exit_task = {}
             exit_task['schema'] = 'mt-slurm'
             exit_task['event'] = 'task_exit'
@@ -384,10 +384,11 @@ def create_events(node_count, task_count, job_id, init_time = None):
         exit_event['nodeid'] = node
         events.append(exit_event)
         nodes.append(events)
-        task_start += task_count / node_count
+        task_start += int(task_count / node_count)
     return nodes
 
 def deliver_events(events):
+    print("Delivering events...")
     for node in events:
          node_id = node[0]['data']['nodeid'] + 1
          cont = cluster.get_container("compute-{0}".format(node_id))

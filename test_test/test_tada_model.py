@@ -1,11 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import sys
 import sqlite3
 from TADA import TADA_DB, TADATestModel
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 conn = sqlite3.connect("tada_db.sqlite")
 # d = TADATestModel(conn, [ "two" ])
 
@@ -14,31 +14,31 @@ db = TADA_DB(db_driver = "sqlite", db_path = "tada_db.sqlite")
 db.drop_tables()
 db.init_tables()
 
-one = TADATestModel.create(conn, ["one", "suite", "NA", "test one", "root", "abcde", 10, 20])
+one = TADATestModel.create(conn, ["one", "suite", "NA", "test one", "root", "abcde", "description", 10, 20])
 two = db.createTest(test_id = "two", test_type = "NA")
 three = db.getTest(test_id = "three", test_type = "NA")
 #o = TADATestModel.get(conn, test_id = "one")
 o = db.getTest(test_id = "one")
 assert(o == one)
 
-o.add_assertion(1, "assertion 1.1", "True==True", "passed")
-o.add_assertion(2, "assertion 1.2", "Frue==True", "failed")
+def add_assertion(test, assert_id, desc, cond, result):
+    a = test.getAssertion(assert_id)
+    a.assert_desc = desc
+    a.assert_result = result
+    a.assert_cond = cond
 
-two.add_assertion(1, "assertion 2.1", "0==0", "passed")
-two.add_assertion(2, "assertion 2.2", "1==0", "failed")
+add_assertion(o, 1, "assertion 1.1", "True==True", "passed")
+add_assertion(o, 2, "assertion 1.2", "Frue==True", "failed")
 
-# try adding existing assertion
-try:
-    two.add_assertion(2, "assertion 2.2", "1==0", "failed")
-except sqlite3.IntegrityError, e:
-    print "OK"
+add_assertion(two, 1, "assertion 2.1", "0==0", "passed")
+add_assertion(two, 2, "assertion 2.2", "1==0", "failed")
 
-print one
-print two
+print(one)
+print(two)
 for a in one.assertions:
-    print a
+    print(a)
 for a in two.assertions:
-    print a
+    print(a)
 
 # test commit() and reload()
 o.test_type = "TYPE_ONE"
@@ -47,11 +47,11 @@ one.reload()
 assert(one.test_type == "TYPE_ONE")
 
 # test `find`
-objs = db.findTest()
+objs = db.findTests()
 assert(set(objs) == set([one, two, three]))
 
-objs = db.findTest(test_id = "two")
+objs = db.findTests(test_id = "two")
 assert(objs == [ two ])
 
-objs = db.findTest(test_type = "NA")
+objs = db.findTests(test_type = "NA")
 assert(set(objs) == set([two, three]))

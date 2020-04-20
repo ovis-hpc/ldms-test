@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 # Test --debug CLI option
 import os
 import sys
@@ -31,7 +31,7 @@ test.start()
 if args.debug:
     try:
         test.assert_test(1, False, "False")
-    except TADA.AssertionException, e:
+    except TADA.AssertionException as e:
         log.info("Caught expected TADA.AssertionException")
         pass
     else:

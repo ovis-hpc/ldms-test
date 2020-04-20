@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import re
@@ -26,12 +26,12 @@ logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
 
 log = logging.getLogger(__name__)
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 def dprompt(msg):
     """Show prompt if TADA.DEBUG flag (`--debug` CLI option) is set"""
     if TADA.DEBUG and sys.flags.interactive:
-        raw_input(msg)
+        input(msg)
 
 #### argument parsing #### -------------------------------------------
 ap = argparse.ArgumentParser(description = "store_app test." )
@@ -176,7 +176,7 @@ spec = {
                         {
                             "name" : "node-{}".format(i*2+j),
                             "!extends" : "prdcr",
-                        } for i in range(0, NUM_COMPUTE / 2)
+                        } for i in range(0, int(NUM_COMPUTE / 2))
                     ],
                 },
             ]
@@ -270,7 +270,7 @@ def cleanup_db(cluster):
 def metric_value_wrap(value):
     if type(value) == list:
         return tuple(value)
-    if type(value) in (str, unicode):
+    if type(value) == str:
         return value.split('\x00', 1)[0] # strip null bytes
     return value
 
@@ -397,7 +397,7 @@ class LDMS_LS_Thread(Thread):
             if type(val) == list:
                 val = tuple(val)
             if vtype == 'char':
-                val = bytearray(val)[0] # convert to int -- a work around b/c
+                val = val.encode()[0]   # convert to int -- a work around b/c
                                         # sos does not have CHAR type
             ent = (ts, comp_id, job_id, rank, val)
             _ret.append(ent)

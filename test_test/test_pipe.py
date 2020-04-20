@@ -1,11 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/python3
 
 import os
 import sys
 
 from LDMS_Test import DockerCluster
 
-execfile(os.getenv("PYTHONSTARTUP", "/dev/null"))
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 cluster = DockerCluster.get(
             name = "test_pipe",
@@ -22,6 +22,6 @@ rc, out = cont.pipe("cat", text)
 
 op = "==" if text == out else "!="
 msg = "{} {} {}".format(text, op, out)
-print msg
+print(msg)
 assert(text == out)
 cluster.remove()
