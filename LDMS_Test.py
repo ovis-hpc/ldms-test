@@ -305,6 +305,13 @@ def add_common_args(parser):
             default="tada-host:9862")
     parser.add_argument("--debug", action="store_true",
             help="Turn on TADA.DEBUG flag.")
+    parser.add_argument("--mount", action="append",
+            metavar = "SRC:DST[:MODE]", default = [],
+            help="Add additional mount point to the container. "
+                 "SRC is the path on the host. DST is the path in the "
+                 "container. MODE can be `ro` or `rw`. If MODE is not given, "
+                 "the default is `rw`. Example: --mount /mnt/abc:/home:ro."
+        )
 
 def process_args(parsed_args):
     """Further process the parsed common arguments"""

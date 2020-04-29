@@ -260,7 +260,7 @@ if __name__ == "__main__":
 
     log.info("-- Create the cluster --")
     spec['ovis_prefix'] = args.prefix
-    spec['mounts'] = [ args.data_root + ':/db:rw' ]
+    spec['mounts'] = [ args.data_root + ':/db:rw' ] + args.mount
     if args.src:
         spec['mounts'].append("{src}:{src}:rw".format(src=args.src))
     # modify slurm_notifier path in spec

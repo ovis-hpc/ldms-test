@@ -169,7 +169,7 @@ spec = {
         "LD_LIBRARY_PATH": "/data/tada/lib:/opt/ovis/lib:/opt/ovis/lib64",
         "LDMSD_PLUGIN_LIBPATH": "/data/tada/lib:/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
     },
-    "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ],
+    "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ] + args.mount,
 }
 
 def rm(path):
