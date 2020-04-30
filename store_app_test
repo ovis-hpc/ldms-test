@@ -213,6 +213,19 @@ spec = {
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
                         "updtr_start name=all",
+                    ] if LDMSD_VERSION >= (4, 100, 0) else [
+                        # -- for v4 --
+                        "load name=store_app",
+                        "config name=store_app path={}".format(STORE_ROOT),
+                        "strgp_add name=app_strgp plugin=store_app" \
+                                 " container=store_app schema=app_sampler",
+                        "strgp_prdcr_add name=app_strgp regex=.*",
+                        "strgp_start name=app_strgp",
+
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
                     ],
                 },
             ],
@@ -436,10 +449,12 @@ log.info("Verifying data ...")
 for mname in thr.get_metric_names():
     sdata = set(sos_query(agg2, "/store/store_app", mname, "time_job"))
     ldata = set(thr.get_records(mname))
-    if ldata != sdata:
-        test.assert_test(1, False, "{} != {}".format(ldata, sdata))
+    if not sdata:
+        test.assert_test(1, False, "store data empty for '{}'".format(mname))
+    if ldata < sdata:
+        test.assert_test(1, False, "{} < {}".format(ldata, sdata))
 else:
-    test.assert_test(1, True, "ldms_ls data == sos data")
+    test.assert_test(1, True, "sos data is not empty and sos data < ldms_ls data")
 
 dprompt("Press ENTER to REMOVE the cluster, or Ctrl-C to debug")
 cluster.remove()
