@@ -169,7 +169,7 @@ spec = {
         "LD_LIBRARY_PATH": "/data/tada/lib:/opt/ovis/lib:/opt/ovis/lib64",
         "LDMSD_PLUGIN_LIBPATH": "/data/tada/lib:/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
     },
-    "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ] + args.mount,
+    "mounts": [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ],
 }
 
 def rm(path):
@@ -190,6 +190,7 @@ if __name__ == "__main__":
     spec["ovis_prefix"] = args.prefix
     spec["name"] = clustername
     spec["mounts"] += [ "{}:/data:rw".format(args.data_root) ]
+    spec["mounts"] += args.mount
     if args.src:
         spec["mounts"] += [ "{0}:{0}:ro".format(args.src) ]
     spec["env"]["TADA_USER"] = args.user
