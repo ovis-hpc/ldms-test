@@ -30,8 +30,16 @@ $(BUILDDIR)/libtada.so: tada.c tada.h
 	gcc -o $@ -fPIC -shared $^ -ldl -pthread -lcrypto
 
 $(BUILDDIR)/libtest_stream_sampler.so: $(TEST_STREAM_SAMPLER_SRC)
+ifeq ($(VMIN), 4.100.0)
 	mkdir -p $(BUILDDIR)
 	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
 	    $^ -L$(OVIS_PREFIX)/lib -L$(BUILDDIR) -L$(OVIS_PREFIX)/lib64 \
 	    -lldmsd_stream -lovis_util -lcoll -pthread -ljson_util -ltada
 	ln -fs $@ $@.0
+else
+	mkdir -p $(BUILDDIR)
+	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
+	    $^ -L$(OVIS_PREFIX)/lib -L$(BUILDDIR) -L$(OVIS_PREFIX)/lib64 \
+	    -lldmsd_stream -lovis_util -lcoll -pthread -lovis_json -ltada
+	ln -fs $@ $@.0
+endif
