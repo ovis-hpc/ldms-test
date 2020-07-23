@@ -59,7 +59,7 @@ _META_SUMMARY = '(?:'+ \
 _META_DATA = r'(?:' + \
              r'(?P<meta_schema>\S+)\s+' + \
              r'(?P<meta_inst>\S+)\s+' + \
-             r'(?P<meta_flags>\S+)\s+' + \
+             r'(?P<meta_flags>\D+)\s+' + \
              r'(?P<meta_msize>\d+)\s+' + \
              r'(?P<meta_dsize>\d+)\s+' + \
              r'(?P<meta_uid>\d+)\s+' + \
