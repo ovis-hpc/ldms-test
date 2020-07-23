@@ -20,7 +20,7 @@ yum -y install epel-release ; \
 yum -y install which openssh-server gdb gdb-gdbserver iproute \
                openssl openssl-devel vim readline-devel \
 	       perl-ExtUtils-MakeMaker pam-devel mariadb-devel libcurl-devel \
-	       python3-devel papi-devel libpfm-devel tmux \
+	       python3-devel python2-devel python2-pip papi-devel libpfm-devel tmux \
 	       bzip2-devel \
 	       ; \
 yum -y group install "Development Tools" ; \
@@ -58,6 +58,11 @@ yum clean all ; \
 RUN /bin/bash -c '\
 yes | pip3 install Cython ; \
 yes | pip3 install numpy ; \
+'
+
+RUN /bin/bash -c '\
+yes | pip install --upgrade pip ; \
+yes | pip install numpy ; \
 '
 
 RUN /bin/echo >/etc/tmux.conf -e "\
