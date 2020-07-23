@@ -1588,7 +1588,10 @@ class LDMSDContainer(DockerClusterContainer):
     def ldmsd_version(self):
         rc, out = self.exec_run("ldmsd -V")
         _drop, _ver = out.splitlines()[0].split(': ')
-        ver = tuple( int(v) for v in _ver.split('.') )
+        m = re.match(r'(\d+)\.(\d+)\.(\d+)', _ver)
+        if not m:
+            raise ValueError("Bad ldmsd version format: {}".format(_ver))
+        ver = tuple(map(int, m.groups()))
         return ver
 
 
