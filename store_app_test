@@ -56,6 +56,8 @@ NUM_COMPUTE = args.num_compute
 LDMSD_VERSION = ldmsd_version(PREFIX)
 SCRIPT_DIR = os.path.realpath(sys.path[0])
 
+CONT_PYTHON = "/usr/bin/python3" if LDMSD_VERSION >= (4, 100, 0) else "/usr/bin/python2"
+
 STORE_ROOT = "/store" # path inside container (agg-2)
 
 SLURM_NOTIFIER = args.slurm_notifier
@@ -288,8 +290,10 @@ def metric_value_wrap(value):
     return value
 
 def sos_query(dcont, sos_cont, sos_schema, sos_index):
-    rc, out = dcont.exec_run("/db/sos_query.py -C {} -S {} -X {}"\
-                             .format(sos_cont, sos_schema, sos_index))
+    global CONT_PYTHON
+    rc, out = dcont.exec_run("{} /db/sos_query.py -C {} -S {} -X {}"\
+                             .format(CONT_PYTHON, sos_cont,
+                                     sos_schema, sos_index))
     if rc != 0:
         raise RuntimeError("sos_query error {}, out: {}".format(rc, out))
     data = json.loads(out)
