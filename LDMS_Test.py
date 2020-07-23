@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import pwd
+import glob
 import time
 import json
 import socket
@@ -1880,8 +1881,16 @@ class LDMSDCluster(BaseCluster):
         nodes = spec["nodes"]
         mounts = []
         prefix = spec.get("ovis_prefix")
+        _PYTHONPATH = None
         if prefix:
             mounts += ["{}:/opt/ovis:ro".format(prefix)]
+            # handling python path
+            pp = glob.glob(prefix+'/lib*/python*/site-packages')
+            pp = [ p.replace(prefix, '/opt/ovis', 1) for p in pp ]
+            _PYTHONPATH = ':'.join(pp)
+        if not _PYTHONPATH:
+            _PYTHONPATH = "/opt/ovis/lib/python3.6/site-packages:" \
+                          "/opt/ovis/lib64/python3.6/site-packages"
         mounts += spec.get("mounts", [])
         cap_add = spec.get("cap_add", [])
         cap_drop = spec.get("cap_drop", [])
@@ -1907,8 +1916,7 @@ class LDMSDCluster(BaseCluster):
                 "LD_LIBRARY_PATH" : "/opt/ovis/lib:/opt/ovis/lib64",
                 "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
                 "LDMSD_PLUGIN_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
-                "PYTHONPATH" : "/opt/ovis/lib/python3.6/site-packages:" \
-                               "/opt/ovis/lib64/python3.6/site-packages"
+                "PYTHONPATH" : _PYTHONPATH
             }
         env.update(env_dict(spec.get("env", {})))
         kwargs = dict(
@@ -2186,7 +2194,7 @@ class LDMSDCluster(BaseCluster):
                 _add LD_LIBRARY_PATH $PREFIX/lib/ovis-ldms
                 _add LD_LIBRARY_PATH $PREFIX/lib64/ovis-ldms
                 _add MANPATH $PREFIX/share/man
-                _add PYTHONPATH $PREFIX/lib/python3.6/site-packages
+                _add PYTHONPATH $(echo $PREFIX/lib/python*/site-packages)
 
                 export ZAP_LIBPATH=$PREFIX/lib/ovis-ldms
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-ldms
