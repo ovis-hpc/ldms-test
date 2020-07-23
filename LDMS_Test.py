@@ -346,6 +346,16 @@ def deep_copy(obj):
         raise TypeError("Unsupported type: {.__name__}".format(t))
     return f(obj)
 
+def debug_prompt(prompt = "Press ENTER to continue or Ctrl-C to debug"):
+    """Display a given prompt if DEBUG mode and interactive flag are on"""
+    if sys.flags.interactive and TADA.DEBUG:
+        if sys.version_info.major == 3: # python3
+            return input(prompt)
+        elif sys.version_info.major == 2: # python2
+            return raw_input(prompt)
+        else:
+            raise RuntimeError("Unknown python version: {}" \
+                               .format(sys.version_info.major))
 
 class Spec(dict):
     """Spec object -- handling spec object extension and substitution
