@@ -4,8 +4,8 @@
 # ------------------------
 # Cluster:
 #   - 'node-1' run sampler daemon with 3 sets (from test_sampler) and 1 setgroup
-#     - setgroup: node-1/grp initially contains node-1/test1 and node-1/test2
-#     - node-1/test3 does not belong to a group to verify group member
+#     - setgroup: node-1/grp initially contains node-1/test_1 and node-1/test_2
+#     - node-1/test_0 does not belong to a group to verify group member
 #       correctness.
 #   - 'agg-1' aggregates from `node-1`
 #   - 'agg-2' aggregates from 'agg-1'
@@ -13,8 +13,8 @@
 #     well).
 #
 # Generally, this test verify grp members on agg-2 and check whether the members
-# got updated properly. Then, node-1/test2 is removed from node-1/grp. The test
-# checks whether agg-1 and agg-2 got the update. Next, node-1/test2 is re-added
+# got updated properly. Then, node-1/test_2 is removed from node-1/grp. The test
+# checks whether agg-1 and agg-2 got the update. Next, node-1/test_2 is re-added
 # into node-1/grp, and agg-1 + agg-2 is tested to see if they see the update.
 
 import os
@@ -31,7 +31,7 @@ import logging
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, \
-                      ldmsd_version
+                      ldmsd_version, debug_prompt
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -95,9 +95,12 @@ spec = {
         },
         "ldmsd-base" : {
             "type" : "ldmsd",
-            "listen_port" : LDMSD_PORT,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+            #"listen_port" : LDMSD_PORT,
+            #"listen_xprt" : "sock",
+            #"listen_auth" : "none",
         },
         "ldmsd-sampler" : {
             "!extends" : "ldmsd-base",
@@ -107,26 +110,23 @@ spec = {
                 #
                 # These are config for v5, see v4 config below.
                 "load name=test plugin=test_sampler",
-                "config name=test action=add_schema schema=test num_metrics=2 type=U64",
-                "config name=test action=add_set instance=${HOSTNAME}/test1 schema=test component_id=1",
-                "config name=test action=add_set instance=${HOSTNAME}/test2 schema=test component_id=1",
-                "config name=test action=add_set instance=${HOSTNAME}/test3 schema=test component_id=1",
+                "config name=test action=default schema=test_sampler base=%hostname%/test num_sets=3",
                 "smplr_add name=smplr instance=test interval=1000000 offset=0",
                 "smplr_start name=smplr",
-                "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
-                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test1",
-                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test2",
+                "setgroup_add name=%hostname%/grp interval=1000000 offset=0",
+                "setgroup_ins name=%hostname%/grp instance=%hostname%/test_1",
+                "setgroup_ins name=%hostname%/grp instance=%hostname%/test_2",
             ] if LDMSD_VERSION >= (4, 100, 0) else [
                 # v4 config
                 "load name=test_sampler",
                 "config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test1 schema=test component_id=1",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test2 schema=test component_id=1",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test3 schema=test component_id=1",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_0 schema=test component_id=1",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_1 schema=test component_id=1",
+                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_2 schema=test component_id=1",
                 "start name=test_sampler interval=1000000 offset=0",
                 "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
-                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test1",
-                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test2",
+                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test_1",
+                "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test_2",
             ]
         },
         "prdcr" : {
@@ -221,12 +221,12 @@ test = TADA.Test(test_suite = "LDMSD",
                  tada_addr = args.tada_addr)
 test.add_assertion(1, "ldms_ls grp on agg-2")
 test.add_assertion(2, "members on agg-2 are being updated")
-test.add_assertion(3, "test2 is removed fom grp on sampler")
-test.add_assertion(4, "test2 is removed from grp on agg-1")
-test.add_assertion(5, "test2 is removed from grp on agg-2")
-test.add_assertion(6, "test3 is added to grp on sampler")
-test.add_assertion(7, "test3 is added to grp on agg-1")
-test.add_assertion(8, "test3 is added to grp on agg-2")
+test.add_assertion(3, "test_2 is removed fom grp on sampler")
+test.add_assertion(4, "test_2 is removed from grp on agg-1")
+test.add_assertion(5, "test_2 is removed from grp on agg-2")
+test.add_assertion(6, "test_2 is added back to grp on sampler")
+test.add_assertion(7, "test_2 is added back to grp on agg-1")
+test.add_assertion(8, "test_2 is added back to grp on agg-2")
 
 #### Helper Functions ####
 def ldms_ls(host, port = LDMSD_PORT, l = False, sets=[]):
@@ -244,6 +244,8 @@ def ldms_ls(host, port = LDMSD_PORT, l = False, sets=[]):
         else:
             return out.splitlines()
     except:
+        if TADA.DEBUG:
+            raise
         return None
 
 #### Start! ####
@@ -264,10 +266,12 @@ cluster.make_known_hosts()
 log.info("... wait a bit to make sure ldmsd's are up")
 time.sleep(5)
 
+debug_prompt()
+
 #test.add_assertion(1, "ldms_ls grp on agg-2")
 log.info("-- ldms_ls to agg-2 --")
 result = set(ldms_ls("agg-2"))
-expect = set([ "node-1/{}".format(s) for s in ["test1", "test2", "grp"] ])
+expect = set([ "node-1/{}".format(s) for s in ["test_1", "test_2", "grp"] ])
 test.assert_test(1, expect == result, "dir result verified")
 
 
@@ -277,8 +281,8 @@ time.sleep(2)
 sets1 = ldms_ls("agg-2", l=True)
 
 while True:
-    k0 = set(sets0.keys())
-    k1 = set(sets1.keys())
+    k0 = set(sets0.keys()) - set(['node-1/grp'])
+    k1 = set(sets1.keys()) - set(['node-1/grp'])
     if k0 != k1:
         test.assert_test(2, False, "Invalid before-after comparison: "
                                    "key0: {}, key1: {}".format(k0, k1))
@@ -305,65 +309,95 @@ while True:
         test.assert_test(2, True, "data verified")
     break
 
+debug_prompt()
+
 while True:
-    #test.add_assertion(3, "test2 is removed fom grp on sampler")
-    #test.add_assertion(4, "test2 is removed from grp on agg-1")
-    #test.add_assertion(5, "test2 is removed from grp on agg-2")
-    log.info("-- Removing test2 from grp --")
-    rc, out = node1.config_ldmsd([
-                    "setgroup_rm name=node-1/grp instance=node-1/test2"
+    #test.add_assertion(3, "test_2 is removed fom grp on sampler")
+    #test.add_assertion(4, "test_2 is removed from grp on agg-1")
+    #test.add_assertion(5, "test_2 is removed from grp on agg-2")
+    log.info("-- Removing test_2 from grp --")
+    if LDMSD_VERSION >= (4, 100, 0):
+        obj = {
+                "request": "update",
+                "id": 1,
+                "schema": "setgrp",
+                "spec": {
+                    "node-1/grp": {
+                        "members": [ "node-1/test_1" ],
+                    },
+                },
+              }
+        txt = "json " + json.dumps(obj)
+        rc, out = node1.config_ldmsd([txt])
+    else:
+        rc, out = node1.config_ldmsd([
+                    "setgroup_rm name=node-1/grp instance=node-1/test_2"
               ])
     if rc:
         log.warn("setgroup_rm erorr, rc: {}".format(rc))
         break
-    expect = set(["node-1/grp", "node-1/test1"])
-    sets = set(ldms_ls("node-1", sets=["node-1/grp"]))
+    expect = set(["node-1/grp", "node-1/test_1"])
+    sets = set(ldms_ls("node-1", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(3, False, "expect {}, got {}".format(expect, sets))
         break
     test.assert_test(3, True, "expect {}, got {}".format(expect, sets))
-    time.sleep(2) # give it some time for agg-1 to get the update
+    time.sleep(4) # give it some time for agg-1 to get the update
     # agg-1
-    sets = set(ldms_ls("agg-1", sets=["node-1/grp"]))
+    sets = set(ldms_ls("agg-1", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(4, False, "expect {}, got {}".format(expect, sets))
         break
     test.assert_test(4, True, "expect {}, got {}".format(expect, sets))
-    time.sleep(2) # give it some time for agg-2 to get the update
+    time.sleep(4) # give it some time for agg-2 to get the update
     # agg-2
-    sets = set(ldms_ls("agg-2", sets=["node-1/grp"]))
+    sets = set(ldms_ls("agg-2", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(5, False, "expect {}, got {}".format(expect, sets))
         break
     test.assert_test(5, True, "expect {}, got {}".format(expect, sets))
-    time.sleep(2) # give it some time for agg-2 to get the update
+    time.sleep(4) # give it some time for agg-2 to get the update
 
-    #test.add_assertion(6, "test3 is added to grp on sampler")
-    #test.add_assertion(7, "test3 is added to grp on agg-1")
-    #test.add_assertion(8, "test3 is added to grp on agg-2")
-    log.info("-- Adding test2 back into grp --")
-    rc, out = node1.config_ldmsd([
-                    "setgroup_ins name=node-1/grp instance=node-1/test2"
+    #test.add_assertion(6, "test_2 is added to grp on sampler")
+    #test.add_assertion(7, "test_2 is added to grp on agg-1")
+    #test.add_assertion(8, "test_2 is added to grp on agg-2")
+    log.info("-- Adding test_2 back into grp --")
+    if LDMSD_VERSION >= (4, 100, 0):
+        obj = {
+                "request": "update",
+                "id": 2,
+                "schema": "setgrp",
+                "spec": {
+                    "node-1/grp": {
+                        "members": [ "node-1/test_1", "node-1/test_2" ],
+                    },
+                },
+              }
+        txt = "json " + json.dumps(obj)
+        rc, out = node1.config_ldmsd([txt])
+    else:
+        rc, out = node1.config_ldmsd([
+                    "setgroup_ins name=node-1/grp instance=node-1/test_2"
               ])
     if rc:
         log.warn("setgroup_rm erorr, rc: {}".format(rc))
         break
-    expect = set(["node-1/grp", "node-1/test1", "node-1/test2"])
-    sets = set(ldms_ls("node-1", sets=["node-1/grp"]))
+    expect = set(["node-1/grp", "node-1/test_1", "node-1/test_2"])
+    sets = set(ldms_ls("node-1", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(6, False, "expect {}, got {}".format(expect, sets))
         break
     test.assert_test(6, True, "expect {}, got {}".format(expect, sets))
-    time.sleep(2) # give it some time for agg-1 to get the update
+    time.sleep(4) # give it some time for agg-1 to get the update
     # agg-1
-    sets = set(ldms_ls("agg-1", sets=["node-1/grp"]))
+    sets = set(ldms_ls("agg-1", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(7, False, "expect {}, got {}".format(expect, sets))
         break
     test.assert_test(7, True, "expect {}, got {}".format(expect, sets))
     time.sleep(2) # give it some time for agg-2 to get the update
     # agg-2
-    sets = set(ldms_ls("agg-2", sets=["node-1/grp"]))
+    sets = set(ldms_ls("agg-2", l=True, sets=["node-1/grp"]))
     if sets != expect:
         test.assert_test(8, False, "expect {}, got {}".format(expect, sets))
         break
