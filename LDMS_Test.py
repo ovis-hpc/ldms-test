@@ -1629,6 +1629,15 @@ class LDMSDContainer(DockerClusterContainer):
         for _cmd in cmds:
             sio.write(_cmd)
             sio.write('\n')
+        _listen = spec.get("listen")
+        if _listen:
+            _xprt = _listen[0].get("xprt", "sock")
+            _port = _listen[0].get("port", 10000)
+            _auth = _listen[0].get("auth", "none")
+        else:
+            _xprt = spec["listen_xprt"]
+            _port = spec["listen_port"]
+            _auth = spec["listen_auth"]
         cmd = 'bash -c \'ldmsd_controller --host {host} ' \
               '--xprt {xprt} ' \
               '--port {port} ' \
@@ -1636,9 +1645,9 @@ class LDMSDContainer(DockerClusterContainer):
               ' && true \' ' \
                   .format(
                       host=self.hostname,
-                      xprt=spec["listen_xprt"],
-                      port=spec["listen_port"],
-                      auth=spec["listen_auth"],
+                      xprt=_xprt,
+                      port=_port,
+                      auth=_auth,
                   )
         D.cmd = cmd
         rc, sock = self.exec_run(cmd, stdin=True, socket=True)
