@@ -90,9 +90,12 @@ spec = {
         },
         "ldmsd-base" : {
             "type" : "ldmsd",
-            "listen_port" : LDMSD_PORT,
-            "listen_xprt" : "sock",
-            "listen_auth" : "none",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+            #"listen_port" : LDMSD_PORT,
+            #"listen_xprt" : "sock",
+            #"listen_auth" : "none",
         },
         "ldmsd-sampler" : {
             "!extends" : "ldmsd-base",
