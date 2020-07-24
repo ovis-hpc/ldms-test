@@ -610,17 +610,11 @@ deliver_events(events_4_64)
 cont = cluster.get_container('agg-1')
 
 # Test all jobs in input are present in output
-rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X job_id"
-                        " -V job_id -F job_id:unique -f csv")
+rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X time_job"
+                        " -V job_id -f csv")
 
-cnt = 0
-for line in out.split('\n'):
-    if cnt < 1 or cnt > 2:
-        cnt += 1
-        continue
-
-    verify(1, int(line) == job_list[cnt-1], "")
-    cnt += 1
+out_sets = set(map(lambda x: int(x), filter(lambda x: x.isdigit(), out.split('\n'))))
+verify(1, out_sets == set(job_list), "")
 
 job_10000_ranks = 27
 job_10100_ranks = 64
