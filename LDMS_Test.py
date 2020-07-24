@@ -81,29 +81,31 @@ _LS_RE = re.compile(
             _LS_L_HDR + "|" +
             _LS_L_DATA
          )
+def int0(s):
+    return int(s, base=0)
 _TYPE_FN = {
     "char": lambda x: str(x).strip("'"),
     "char[]": lambda x: str(x).strip('"'),
 
-    "u8": int,
-    "s8": int,
-    "u16": int,
-    "s16": int,
-    "u32": int,
-    "s32": int,
-    "u64": int,
-    "s64": int,
+    "u8": int0,
+    "s8": int0,
+    "u16": int0,
+    "s16": int0,
+    "u32": int0,
+    "s32": int0,
+    "u64": int0,
+    "s64": int0,
     "f32": float,
     "d64": float,
 
-    "u8[]": lambda x: list(map(int, x.split(','))),
-    "s8[]": lambda x: list(map(int, x.split(','))),
-    "u16[]": lambda x: list(map(int, x.split(','))),
-    "s16[]": lambda x: list(map(int, x.split(','))),
-    "u32[]": lambda x: list(map(int, x.split(','))),
-    "s32[]": lambda x: list(map(int, x.split(','))),
-    "u64[]": lambda x: list(map(int, x.split(','))),
-    "s64[]": lambda x: list(map(int, x.split(','))),
+    "u8[]": lambda x: list(map(int0, x.split(','))),
+    "s8[]": lambda x: list(map(int0, x.split(','))),
+    "u16[]": lambda x: list(map(int0, x.split(','))),
+    "s16[]": lambda x: list(map(int0, x.split(','))),
+    "u32[]": lambda x: list(map(int0, x.split(','))),
+    "s32[]": lambda x: list(map(int0, x.split(','))),
+    "u64[]": lambda x: list(map(int0, x.split(','))),
+    "s64[]": lambda x: list(map(int0, x.split(','))),
     "f32[]": lambda x: list(map(float, x.split(','))),
     "d64[]": lambda x: list(map(float, x.split(','))),
 }
