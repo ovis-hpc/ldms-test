@@ -1,0 +1,217 @@
+#!/usr/bin/python3
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Global(object): pass
+G = Global()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+log = logging.getLogger(__name__)
+
+parser = argparse.ArgumentParser(description = "Manage LDMSCON2020 cluster")
+parser.add_argument("--name", type=str, default="ldmscon2020",
+                    help="The name of the cluster.")
+parser.add_argument("-n", "--nodes", type=int, default=8,
+                    help="The number of compute nodes (default: 8).")
+parser.add_argument("-u", "--users", type=int, default=8,
+                    help="The number of users (default: 8).")
+parser.add_argument("--home", type=str,
+                    help="A directory in the host to use for cluster /home. "
+                    "If the containers may spread across multiple hosts, this "
+                    "location should be in NFS that is accessible from all "
+                    "hosts with the same path.")
+parser.add_argument("--mount", action="append",
+                    metavar = "SRC:DST[:MODE]", default = [],
+                    help="Add additional mount point to the container. "
+                    "SRC is the path on the host. DST is the path in the "
+                    "container. MODE can be `ro` or `rw`. If MODE is not given, "
+                    "the default is `rw`. Example: --mount /mnt/abc:/home:ro.")
+parser.add_argument("op", metavar="OPERATION", nargs="?", type=str,
+                    choices=[ "create", "delete", "status" ],
+                    default="status",
+                    help="create|delete|status (default: status)")
+args = parser.parse_args()
+
+G.NAME = args.name
+G.NUM_NODES = args.nodes
+G.NUM_USERS = args.users
+G.OP = args.op
+G.MOUNTS = args.mount
+G.HOME = os.path.realpath(args.home) if args.home else None
+
+USER = lambda i: "user-{}".format(i)
+
+G.spec = {
+    "name" : G.NAME,
+    "description" : "LDMSCON2020 Cluster",
+    "type" : "Demo",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                },
+                {
+                    "name" : "slurmd",
+                    "!extends" : "slurmd",
+                },
+            ],
+        },
+        "slurmd" : {
+            "type" : "slurmd",
+            "plugstack" : [
+                {
+                    "required" : True,
+                    "path" : "/opt/ovis/lib/ovis-ldms/libslurm_notifier.so",
+                    "args" : [
+                        "auth=none",
+                        "port=10000",
+                        "client=sock:localhost:411:none",
+                    ],
+                },
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-{}".format(i),
+            "component_id" : i,
+            "!extends" : "compute-node",
+        } for i in range(1, G.NUM_NODES+1)
+    ] + [
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld",
+                },
+            ]
+        },
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ldmscon2020",
+    "env" : { "FOO": "BAR" },
+    "mounts" :
+        G.MOUNTS +
+        [ "{}:/home:rw".format(G.HOME) ] if G.HOME else [],
+}
+
+def do_status():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+    else:
+        log.info("{} cluster is running with:".format(G.spec["name"]))
+        log.info("  - {} nodes and a headnode" \
+                 .format(len(cluster.containers)-1))
+
+def add_users():
+    global G
+    cluster = G.cluster
+    headnode = cluster.get_container("headnode")
+    for i in range(1, G.NUM_USERS+1):
+        user = USER(i)
+        cluster.all_exec_run("useradd {}".format(user))
+
+def make_ssh_keys():
+    global G
+    cluster = G.cluster
+    headnode = cluster.get_container("headnode")
+    for i in range(1, G.NUM_USERS+1):
+        user = USER(i)
+        ssh_dir = "/home/{}/.ssh".format(user)
+        headnode.exec_run("mkdir -p "+ssh_dir, user=user)
+        headnode.exec_run("rm -f id_rsa id_rsa.pub", workdir=ssh_dir, user=user)
+        headnode.exec_run("ssh-keygen -q -N '' -f {}/id_rsa".format(ssh_dir),
+                          user=user)
+        id_rsa = headnode.read_file(ssh_dir+"/id_rsa")
+        id_rsa_pub = headnode.read_file(ssh_dir+"/id_rsa.pub")
+        headnode.write_file(ssh_dir+"/authorized_keys", id_rsa_pub, user=user)
+        # copy known_hosts from root
+        known_hosts = headnode.read_file("/root/.ssh/known_hosts")
+        headnode.write_file(ssh_dir+"/known_hosts", known_hosts, user=user)
+        if G.HOME:
+            continue # using shared /home
+        for cont in cluster.containers:
+            cont.exec_run("mkdir -p "+ssh_dir, user=user)
+            cont.write_file(ssh_dir+"/id_rsa", id_rsa, user=user)
+            cont.exec_run("chmod 600 {}/id_rsa".format(ssh_dir), user=user)
+            cont.write_file(ssh_dir+"/id_rsa.pub", id_rsa_pub, user=user)
+            cont.write_file(ssh_dir+"/authorized_keys", id_rsa_pub, user=user)
+            cont.write_file(ssh_dir+"/known_hosts", known_hosts, user=user)
+
+def do_create():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        pass
+    else:
+        log.error("Cluster {} already existed with {} compute nodes"\
+                  .format(G.NAME, len(cluster.containers)-1))
+        return
+    log.info("Creating cluster {} with {} compute nodes ..."\
+             .format(G.NAME, G.NUM_NODES))
+    G.cluster = cluster = LDMSDCluster.get(G.NAME, create = True, spec = G.spec)
+    log.info("Starting daemons ...")
+    cluster.start_daemons()
+    cluster.make_known_hosts()
+    log.info("Adding users ...")
+    add_users()
+    log.info("Making SSH keys ...")
+    make_ssh_keys()
+    log.info("DONE")
+
+def do_delete():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.error("{} cluster not found".format(G.NAME))
+    else:
+        log.info("Removing cluster {}".format(G.NAME))
+        cluster.remove()
+
+def do_unknown_op():
+    global G, log
+    log.error("Unknown operation: {}".format(G.OP))
+
+OP_TBL = {
+        "status" : do_status,
+        "create" : do_create,
+        "delete" : do_delete,
+    }
+
+op = OP_TBL.get(G.OP, do_unknown_op)
+op()
