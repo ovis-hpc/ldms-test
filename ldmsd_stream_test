@@ -266,9 +266,9 @@ if __name__ == "__main__":
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t string -f {fname} & " \
               "wait" \
               "\"".format( fname=data_file,
@@ -358,9 +358,9 @@ if __name__ == "__main__":
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t string -f {fname} & " \
               "wait" \
               "\"".format( fname=data_file,
@@ -452,9 +452,9 @@ if __name__ == "__main__":
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
         cmd = "bash -c \"" \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t json -f {fname} & " \
-              "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
               " -s test_stream -t string -f {fname} & " \
               "wait" \
               "\"".format( fname=data_file,
