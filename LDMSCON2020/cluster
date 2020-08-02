@@ -193,7 +193,7 @@ def add_users():
         else:
             script = """
                 useradd {u.username} 2>&1
-                echo {u.password} | passwd {u.username} --stdin
+                echo '{u.password}' | passwd {u.username} --stdin
                 mkdir -p /home/{u.username}/.ssh
                 cd /home/{u.username}/.ssh
                 test -f id_rsa || ssh-keygen -q -N '' -f id_rsa
@@ -315,21 +315,21 @@ def do_check_recover():
         return
     need_recover = 0
     for cont in cluster.containers:
-        if not cont.is_running():
+        if not cont.obj or cont.obj.status != 'running':
             need_recover = 1
             break
-        rc, out = cont.exec_run('pgrep -c sshd')
-        if rc:
-            need_recover = 1
-            break
-        rc, out = cont.exec_run('pgrep -c munged')
-        if rc:
-            need_recover = 1
-            break
-        rc, out = cont.exec_run('pgrep -c slurm')
-        if rc:
-            need_recover = 1
-            break
+        _top = cont.obj.top() 
+        _procs = set([ ent[-1].split('/')[-1] \
+                    for ent in _top.get('Processes', []) ])
+        if cont.hostname == 'headnode':
+            _set = set(['sshd', 'munged', 'slurmctld'])
+        else:
+            _set = set(['sshd', 'munged', 'slurmd'])
+        if _set <= _procs:
+            continue # OK -- all running
+        # otherwise, need recovery
+        need_recover = 1
+        break
     if need_recover:
         do_recover()
     else:
