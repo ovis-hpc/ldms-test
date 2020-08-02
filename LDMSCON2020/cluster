@@ -61,9 +61,10 @@ parser.add_argument("--timezone", metavar = "TIMEZONE",
 parser.add_argument("op", metavar="OPERATION", nargs="?", type=str,
                     choices=[ "create", "delete", "status",
                               "add-users", "verify-addr", "start-services",
-                              "recover"],
+                              "recover", "check-recover"],
                     default="status",
-                    help="create|delete|status|add-users|verify-addr|recover (default: status)")
+                    help="create|delete|status|recover|check-recover "
+                    "(default: status)")
 args = parser.parse_args()
 
 G.NAME = args.name
@@ -138,6 +139,10 @@ G.spec = {
                 {
                     "name" : "sshd",
                     "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
                 },
                 {
                     "name" : "slurmctld",
@@ -281,14 +286,6 @@ def do_recover():
     except docker.errors.NotFound as e:
         log.info("{} cluster is not running".format(G.spec["name"]))
         return
-    if False:
-        our_conts = []
-        clients = get_docker_clients()
-        for cl in clients:
-            conts = cl.containers.list(all=True)
-            for cont in conts:
-                if cont.attrs['NetworkSettings']['Networks'].get('ldmscon2020'):
-                    our_conts.append(cont)
     log.info("Starting containers")
     for cont in cluster.containers:
         log.info("  starting {}".format(cont.name))
@@ -308,6 +305,37 @@ def do_recover():
     cluster.start_daemons()
     log.info("Done")
 
+def do_check_recover():
+    """Check, then recover if needed"""
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+        return
+    need_recover = 0
+    for cont in cluster.containers:
+        if not cont.is_running():
+            need_recover = 1
+            break
+        rc, out = cont.exec_run('pgrep -c sshd')
+        if rc:
+            need_recover = 1
+            break
+        rc, out = cont.exec_run('pgrep -c munged')
+        if rc:
+            need_recover = 1
+            break
+        rc, out = cont.exec_run('pgrep -c slurm')
+        if rc:
+            need_recover = 1
+            break
+    if need_recover:
+        do_recover()
+    else:
+        log.info("cluster is running")
+
+
 def do_unknown_op():
     global G, log
     log.error("Unknown operation: {}".format(G.OP))
@@ -320,6 +348,7 @@ OP_TBL = {
         "verify-addr" : do_verify_addr,
         "start-services" : do_start_services,
         "recover" : do_recover,
+        "check-recover" : do_check_recover,
     }
 
 op = OP_TBL.get(G.OP, do_unknown_op)
