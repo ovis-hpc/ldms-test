@@ -2,6 +2,7 @@
 
 import os
 import re
+import csv
 import pwd
 import sys
 import json
@@ -11,15 +12,20 @@ import argparse
 import TADA
 import logging
 
+from collections import namedtuple
+
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args, jprint, parse_ldms_ls
+                      add_common_args, jprint, parse_ldms_ls, \
+                      get_docker_clients
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
 
 class Global(object): pass
 G = Global()
+
+User = namedtuple("User", [ "email", "username", "password" ])
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -28,10 +34,12 @@ log = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description = "Manage LDMSCON2020 cluster")
 parser.add_argument("--name", type=str, default="ldmscon2020",
                     help="The name of the cluster.")
-parser.add_argument("-n", "--nodes", type=int, default=8,
-                    help="The number of compute nodes (default: 8).")
-parser.add_argument("-u", "--users", type=int, default=8,
-                    help="The number of users (default: 8).")
+parser.add_argument("-n", "--nodes", type=int, default=2,
+                    help="The number of compute nodes (default: 2).")
+parser.add_argument("-u", "--user-file", type=open,
+                    help="User file (default: None). The file is a CSV "
+                    "containing a table of user information. The table has "
+                    "exactly 3 columns: email,username,password.")
 parser.add_argument("--home", type=str,
                     help="A directory in the host to use for cluster /home. "
                     "If the containers may spread across multiple hosts, this "
@@ -43,20 +51,38 @@ parser.add_argument("--mount", action="append",
                     "SRC is the path on the host. DST is the path in the "
                     "container. MODE can be `ro` or `rw`. If MODE is not given, "
                     "the default is `rw`. Example: --mount /mnt/abc:/home:ro.")
+parser.add_argument("--ssh-bind-addr", metavar = "IP_ADDR",
+                    help="Bind the given IP_ADDR:22<-->headnode:22 "
+                    "(default: None -- no binding)")
+parser.add_argument("--timezone", metavar = "TIMEZONE",
+                    default="America/Chicago",
+                    help="Time zone (default: America/Chicago)")
+
 parser.add_argument("op", metavar="OPERATION", nargs="?", type=str,
-                    choices=[ "create", "delete", "status" ],
+                    choices=[ "create", "delete", "status",
+                              "add-users", "verify-addr", "start-services",
+                              "recover"],
                     default="status",
-                    help="create|delete|status (default: status)")
+                    help="create|delete|status|add-users|verify-addr|recover (default: status)")
 args = parser.parse_args()
 
 G.NAME = args.name
 G.NUM_NODES = args.nodes
-G.NUM_USERS = args.users
 G.OP = args.op
 G.MOUNTS = args.mount
+G.TIMEZONE = args.timezone
 G.HOME = os.path.realpath(args.home) if args.home else None
 
-USER = lambda i: "user-{}".format(i)
+# bind host IP_ADDR:22 to headnode:22 if ssh_bind_addr is given
+if args.ssh_bind_addr:
+    HEADNODE_BINDS = { "22/tcp" : (args.ssh_bind_addr, 22) }
+else:
+    HEADNODE_BINDS = {}
+
+G.USERS = list()
+if args.user_file:
+    for line in csv.reader(args.user_file):
+        G.USERS.append(User(*line))
 
 G.spec = {
     "name" : G.NAME,
@@ -94,6 +120,10 @@ G.spec = {
             ],
         },
     }, # templates
+    # cluster network IPAM config
+    "subnet" : "192.168.11.0/24",
+    "iprange" : "192.168.11.255/28",
+    "gateway" : "192.168.11.254",
     "nodes" : [
         {
             "hostname" : "node-{}".format(i),
@@ -103,6 +133,7 @@ G.spec = {
     ] + [
         {
             "hostname" : "headnode",
+            "binds" : HEADNODE_BINDS,
             "daemons" : [
                 {
                     "name" : "sshd",
@@ -125,6 +156,14 @@ G.spec = {
         [ "{}:/home:rw".format(G.HOME) ] if G.HOME else [],
 }
 
+def to_json(obj):
+    if type(obj) == set:
+        return list(obj)
+    raise TypeError("Unsupported type {}".format(type(obj)))
+
+def json_print(obj):
+    print(json.dumps(obj, indent=2, default=to_json))
+
 def do_status():
     global G, log
     try:
@@ -140,36 +179,32 @@ def add_users():
     global G
     cluster = G.cluster
     headnode = cluster.get_container("headnode")
-    for i in range(1, G.NUM_USERS+1):
-        user = USER(i)
-        cluster.all_exec_run("useradd {}".format(user))
-
-def make_ssh_keys():
-    global G
-    cluster = G.cluster
-    headnode = cluster.get_container("headnode")
-    for i in range(1, G.NUM_USERS+1):
-        user = USER(i)
-        ssh_dir = "/home/{}/.ssh".format(user)
-        headnode.exec_run("mkdir -p "+ssh_dir, user=user)
-        headnode.exec_run("rm -f id_rsa id_rsa.pub", workdir=ssh_dir, user=user)
-        headnode.exec_run("ssh-keygen -q -N '' -f {}/id_rsa".format(ssh_dir),
-                          user=user)
-        id_rsa = headnode.read_file(ssh_dir+"/id_rsa")
-        id_rsa_pub = headnode.read_file(ssh_dir+"/id_rsa.pub")
-        headnode.write_file(ssh_dir+"/authorized_keys", id_rsa_pub, user=user)
-        # copy known_hosts from root
-        known_hosts = headnode.read_file("/root/.ssh/known_hosts")
-        headnode.write_file(ssh_dir+"/known_hosts", known_hosts, user=user)
-        if G.HOME:
-            continue # using shared /home
-        for cont in cluster.containers:
-            cont.exec_run("mkdir -p "+ssh_dir, user=user)
-            cont.write_file(ssh_dir+"/id_rsa", id_rsa, user=user)
-            cont.exec_run("chmod 600 {}/id_rsa".format(ssh_dir), user=user)
-            cont.write_file(ssh_dir+"/id_rsa.pub", id_rsa_pub, user=user)
-            cont.write_file(ssh_dir+"/authorized_keys", id_rsa_pub, user=user)
-            cont.write_file(ssh_dir+"/known_hosts", known_hosts, user=user)
+    for u in G.USERS:
+        log.info("add/updating user {}".format(u.username))
+        if u.username == "root":
+            script = """
+                echo {u.password} | passwd {u.username} --stdin
+            """.format(u=u)
+        else:
+            script = """
+                useradd {u.username} 2>&1
+                echo {u.password} | passwd {u.username} --stdin
+                mkdir -p /home/{u.username}/.ssh
+                cd /home/{u.username}/.ssh
+                test -f id_rsa || ssh-keygen -q -N '' -f id_rsa
+                cp id_rsa.pub authorized_keys
+                cp /root/.ssh/known_hosts ./
+                chown {u.username}:{u.username} -R .
+                touch /home/{u.username}/ts
+            """.format(u=u)
+        rc, out = headnode.pipe("bash", script)
+    nodes = " ".join([ "-H node-{}".format(i) for i in range(1, G.NUM_NODES+1) ])
+    pscp = "bash -c 'pscp.pssh "+nodes+" {0} {0}'"
+    for f in ["/etc/passwd", "/etc/shadow", "/etc/group"]:
+        log.info("Synchronizing {}".format(f))
+        cmd = pscp.format(f)
+        rc, out = headnode.exec_run(cmd)
+        assert(rc == 0)
 
 def do_create():
     global G, log
@@ -185,12 +220,12 @@ def do_create():
              .format(G.NAME, G.NUM_NODES))
     G.cluster = cluster = LDMSDCluster.get(G.NAME, create = True, spec = G.spec)
     log.info("Starting daemons ...")
+    cluster.all_exec_run("bash -c 'ln -f -s /usr/share/zoneinfo/{} \
+                                      /etc/localtime'".format(G.TIMEZONE))
     cluster.start_daemons()
     cluster.make_known_hosts()
     log.info("Adding users ...")
     add_users()
-    log.info("Making SSH keys ...")
-    make_ssh_keys()
     log.info("DONE")
 
 def do_delete():
@@ -203,6 +238,76 @@ def do_delete():
         log.info("Removing cluster {}".format(G.NAME))
         cluster.remove()
 
+def do_add_users():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+        return
+    add_users()
+
+def do_verify_addr():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+        return
+    G.ip_addrs = ip_addrs = dict() # 'name': set([ 'ip-addr' ])
+    for c in G.cluster.containers:
+        rc, out = c.exec_run("bash -c 'ip addr|grep inet'")
+        tmp = set(re.findall(r'^\s+inet ([^/]+)\/', out, flags=re.M))
+        ip_addrs[c.hostname] = tmp
+        assert( c.ip_addr in tmp )
+        rc, out = c.exec_run("bash -c 'grep $HOSTNAME /etc/hosts'")
+        ip_hosts = set(re.findall(r'^(\S+)', out, flags=re.M))
+        assert(ip_hosts < tmp)
+
+def do_start_services():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+        return
+    cluster.update_etc_hosts()
+    cluster.start_daemons()
+
+def do_recover():
+    global G, log
+    try:
+        G.cluster = cluster = LDMSDCluster.get(G.NAME)
+    except docker.errors.NotFound as e:
+        log.info("{} cluster is not running".format(G.spec["name"]))
+        return
+    if False:
+        our_conts = []
+        clients = get_docker_clients()
+        for cl in clients:
+            conts = cl.containers.list(all=True)
+            for cont in conts:
+                if cont.attrs['NetworkSettings']['Networks'].get('ldmscon2020'):
+                    our_conts.append(cont)
+    log.info("Starting containers")
+    for cont in cluster.containers:
+        log.info("  starting {}".format(cont.name))
+        retry = 0
+        while True:
+            cont.start()
+            cont.wait_running(timeout=10)
+            retry += 1
+            if cont.is_running():
+                break
+            if retry >= 3:
+                log.error("Cannot start container: {}".format(cont.name))
+                sys.exit(-1)
+    log.info("Recovering /etc/hosts")
+    cluster.update_etc_hosts()
+    log.info("Starting daemons...")
+    cluster.start_daemons()
+    log.info("Done")
+
 def do_unknown_op():
     global G, log
     log.error("Unknown operation: {}".format(G.OP))
@@ -211,6 +316,10 @@ OP_TBL = {
         "status" : do_status,
         "create" : do_create,
         "delete" : do_delete,
+        "add-users" : do_add_users,
+        "verify-addr" : do_verify_addr,
+        "start-services" : do_start_services,
+        "recover" : do_recover,
     }
 
 op = OP_TBL.get(G.OP, do_unknown_op)

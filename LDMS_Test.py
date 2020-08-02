@@ -7,6 +7,7 @@ import time
 import json
 import socket
 import docker
+import ipaddress as ip
 import subprocess
 
 import TADA
@@ -331,6 +332,7 @@ def process_args(parsed_args):
 DEEP_COPY_TBL = {
         dict: lambda x: { k:deep_copy(v) for k,v in x.items() },
         list: lambda x: [ deep_copy(v) for v in x ],
+        tuple: lambda x: tuple( deep_copy(v) for v in x ),
         int: lambda x: x,
         float: lambda x: x,
         str: lambda x: x,
@@ -451,6 +453,7 @@ class Spec(dict):
         self.SUBST_TBL = {
             dict: self._subst_dict,
             list: self._subst_list,
+            tuple: self._subst_tuple,
             str: self._subst_str,
             int: self._subst_scalar,
             float: self._subst_scalar,
@@ -459,6 +462,7 @@ class Spec(dict):
         self.EXPAND_TBL = {
             dict: self._expand_dict,
             list: self._expand_list,
+            tuple: self._expand_tuple,
             int: self._expand_scalar,
             float: self._expand_scalar,
             str: self._expand_scalar,
@@ -500,6 +504,9 @@ class Spec(dict):
     def _expand_list(self, lst, lvl):
         return [ self._expand(x, lvl+1) for x in lst ]
 
+    def _expand_tuple(self, tpl, lvl):
+        return tuple( self._expand(x, lvl+1) for x in tpl )
+
     def _expand_dict(self, dct, lvl):
         lst = [dct] # list of extension
         ext = dct.get("!extends")
@@ -531,6 +538,9 @@ class Spec(dict):
 
     def _subst_list(self, lst):
         return [ self._subst(x) for x in lst ]
+
+    def _subst_tuple(self, tpl):
+        return tuple( self._subst(x) for x in tpl )
 
     def _subst_dict(self, dct):
         _save = self.VAR
@@ -603,7 +613,7 @@ class Container(object):
             t1 = time.time()
             if t1-t0 > timeout:
                 return False
-            self.obj.update()
+            self.obj.reload()
             time.sleep(1)
         return True
 
@@ -620,7 +630,10 @@ class Container(object):
     @property
     def ip_addr(self):
         try:
-            return self.interfaces[0][1] # address of the first network interface
+            for name, addr in self.interfaces:
+                if name == self.cluster.net.name:
+                    return addr
+            return None
         except:
             return None
 
@@ -710,6 +723,12 @@ class Container(object):
         _env = _env.split('\x00')
         _env = dict( v.split('=', 1) for v in _env if v )
         return _env
+
+    def start(self, *args, **kwargs):
+        return self.obj.start(*args, **kwargs)
+
+    def stop(self, *args, **kwargs):
+        return self.obj.stop(*args, **kwargs)
 
 
 class Service(object):
@@ -859,11 +878,28 @@ class Network(object):
 
     @classmethod
     def create(cls, name, driver='overlay', scope='swarm', attachable=True,
-                    labels = None):
+                    labels = None, subnet = None):
         """A utility to create and wrap the docker network"""
         client = docker.from_env()
         try:
-            obj = client.networks.create(name=name, driver=driver,
+            if subnet:
+                # NOTE: `iprange` is for docker automatic IP assignment.
+                #       Since LMDS_Test manually assign IP addresses, we will
+                #       limit docker iprange to be a small number.
+                #       `gateway` is the max host IP address.
+                ip_net = ip.ip_network(subnet)
+                bc = int(ip_net.broadcast_address)
+                gateway = str(ip.ip_address(bc - 1))
+                iprange = str(ip.ip_address(bc & ~3)) + "/30"
+                ipam_pool = docker.types.IPAMPool(subnet=subnet,
+                                        iprange=iprange, gateway=gateway)
+                ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
+                obj = client.networks.create(name=name, driver=driver,
+                                     ipam=ipam_config,
+                                     scope=scope, attachable=attachable,
+                                     labels = labels)
+            else:
+                obj = client.networks.create(name=name, driver=driver,
                                      scope=scope, attachable=attachable,
                                      labels = labels)
         except docker.errors.APIError as e:
@@ -929,6 +965,9 @@ class Network(object):
         """Get labels"""
         return self.obj.attrs["Labels"]
 
+    def connect(self, container, *args, **kwargs):
+        return self.obj.connect(container, *args, **kwargs)
+
 
 ################################################################################
 
@@ -984,7 +1023,9 @@ class DockerCluster(object):
                     mounts = [], env = [], labels = {},
                     node_aliases = {},
                     cap_add = [],
-                    cap_drop = []):
+                    cap_drop = [],
+                    subnet = None,
+                    host_binds = {}):
         """Create virtual cluster with docker network and service
 
         If the docker network existed, this will failed. The hostname of each
@@ -1106,9 +1147,12 @@ class DockerCluster(object):
                         volumes = volumes,
                         cap_add = cap_add,
                         cap_drop = cap_drop,
-                        network = name,
+                        #network = name,
                         hostname = hostname,
                     )
+                binds = host_binds.get(hostname)
+                if binds:
+                    cont_param["ports"] = binds
                 lbl_cont_build.append( (cl_name, cont_param) )
                 cont_build.append( (cl, cont_param) )
         # memorize cont_build as a part of label
@@ -1116,10 +1160,19 @@ class DockerCluster(object):
         lbl["cont_build"] = json.dumps(lbl_cont_build)
         net = Network.create(name = name, driver = "overlay",
                              attachable = True, scope = "swarm",
-                             labels = lbl)
+                             labels = lbl, subnet = subnet)
+        if subnet:
+            ip_net = ip.ip_network(subnet)
+            ip_itr = ip_net.hosts()
         # then, create the actual containers
         for cl, params in cont_build:
-            cl.containers.run(**params)
+            cont = cl.containers.create(**params)
+            if subnet:
+                ip_addr = next(ip_itr)
+                net.connect(cont, ipv4_address=str(ip_addr))
+            else:
+                net.connect(cont)
+            cont.start()
         cluster = DockerCluster(net.obj)
         cluster.update_etc_hosts(node_aliases = node_aliases)
         return cluster
@@ -1176,8 +1229,15 @@ class DockerCluster(object):
 
     def get_containers(self, timeout = 10):
         """Return a list of docker Containers of the virtual cluster"""
-        cont_list = [ DockerClusterContainer(c.obj, self) \
-                            for c in self.net.containers ]
+        our_conts = []
+        clients = get_docker_clients()
+        for cl in clients:
+            conts = cl.containers.list(all=True)
+            for cont in conts:
+                if cont.attrs['NetworkSettings']['Networks'].get(self.net.name):
+                    our_conts.append(cont)
+
+        cont_list = [ DockerClusterContainer(c, self) for c in our_conts ]
         cont_list.sort(key = lambda x: LooseVersion(x.name))
         return cont_list
 
@@ -1899,6 +1959,8 @@ class LDMSDCluster(BaseCluster):
         # assign daemons to containers using node_aliases
         node_aliases = {}
         hostnames = [ node["hostname"] for node in nodes ]
+        host_binds = { node["hostname"]: node["binds"] \
+                    for node in nodes if node.get("binds") }
         for node in nodes:
             a = node.get("aliases")
             if a:
@@ -1931,6 +1993,8 @@ class LDMSDCluster(BaseCluster):
                     node_aliases = node_aliases,
                     cap_add = cap_add,
                     cap_drop = cap_drop,
+                    subnet = spec.get("subnet"),
+                    host_binds = host_binds,
                  )
         return kwargs
 

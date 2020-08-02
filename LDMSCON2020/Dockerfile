@@ -1,5 +1,5 @@
 # SYNOPSIS
-#     docker build -t ldmscon2020 .
+#     docker build -t ldmscon2020 - < Dockerfile
 #
 # PREREQUISITE
 #     `ovis-centos-build` image (in ldms-test/docker) must be built first.
@@ -48,6 +48,8 @@ cd build || exit -1 ; \
 	--enable-zaptest \
 	--enable-papi-sampler \
 	--enable-syspapi-sampler \
+	--enable-tutorial-sampler \
+	--enable-tutorial-store \
         PYTHON="/usr/bin/python2" \
 	CFLAGS="-ggdb3 -O0 -Wall -Werror" \
 	|| exit -1 ; \
