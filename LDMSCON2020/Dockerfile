@@ -9,6 +9,7 @@ RUN /bin/bash -c '\
 set -e ; \
 set -x ; \
 yum -y install emacs wget ; \
+yum -y install openmpi ; \
 '
 
 # SOS-4 will be installed manually from the headnode
