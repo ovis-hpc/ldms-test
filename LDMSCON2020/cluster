@@ -103,15 +103,15 @@ G.spec = {
                 {
                     "name" : "slurmd",
                     "type" : "slurmd",
-                    #"plugstack" : [
-                    #    {
-                    #        "required" : True,
-                    #        "path" : "/opt/ovis/lib/ovis-ldms/libslurm_notifier.so",
-                    #        "args" : [
-                    #            "client=sock:localhost:411:none",
-                    #        ],
-                    #    },
-                    #],
+                    "plugstack" : [
+                        {
+                            "required" : False,
+                            "path" : "/opt/ovis/lib/ovis-ldms/libslurm_notifier.so",
+                            "args" : [
+                                "client=sock:localhost:411:none",
+                            ],
+                        },
+                    ],
                 },
             ],
         },
@@ -313,7 +313,7 @@ def do_check_recover():
         if not cont.obj or cont.obj.status != 'running':
             need_recover = 1
             break
-        _top = cont.obj.top() 
+        _top = cont.obj.top()
         _procs = set([ ent[-1].split('/')[-1] \
                     for ent in _top.get('Processes', []) ])
         if cont.hostname == 'headnode':
