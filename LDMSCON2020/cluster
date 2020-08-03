@@ -102,21 +102,16 @@ G.spec = {
                 },
                 {
                     "name" : "slurmd",
-                    "!extends" : "slurmd",
-                },
-            ],
-        },
-        "slurmd" : {
-            "type" : "slurmd",
-            "plugstack" : [
-                {
-                    "required" : True,
-                    "path" : "/opt/ovis/lib/ovis-ldms/libslurm_notifier.so",
-                    "args" : [
-                        "auth=none",
-                        "port=10000",
-                        "client=sock:localhost:411:none",
-                    ],
+                    "type" : "slurmd",
+                    #"plugstack" : [
+                    #    {
+                    #        "required" : True,
+                    #        "path" : "/opt/ovis/lib/ovis-ldms/libslurm_notifier.so",
+                    #        "args" : [
+                    #            "client=sock:localhost:411:none",
+                    #        ],
+                    #    },
+                    #],
                 },
             ],
         },
