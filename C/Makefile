@@ -49,4 +49,4 @@ $(BUILDDIR)/test_stream_publish: test_stream_publish.c
 	mkdir -p $(BUILDDIR)
 	gcc -I $(OVIS_PREFIX)/include -o $@ \
 		$^ -L$(OVIS_PREFIX)/lib -L$(OVIS_PREFIX)/lib64 \
-		-lldms -lldmsd_stream -lovis_util -pthread
+		-lldms -lldmsd_stream -lovis_util -pthread -ggdb3 -O0
