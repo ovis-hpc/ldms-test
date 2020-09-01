@@ -12,7 +12,8 @@ import logging
 from io import StringIO
 
 from distutils.spawn import find_executable
-from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, read_msg
+from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, read_msg, \
+                        is_ldmsd_version_4
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -176,6 +177,30 @@ def rm(path):
     if os.path.exists(path):
         os.remove(path)
 
+def prdcr_start_regex(agg, regex_str):
+    if is_ldmsd_version_4(agg.ldmsd_version):
+        txt = "prdcr_start_regex regex={}".format(regex_str)
+    else:
+        obj = { "request": "update",
+                "id": 1,
+                "schema": "prdcr",
+                "enabled": True,
+                "re": [regex_str]}
+        txt = "json " + json.dumps(obj)
+    return agg.config_ldmsd([txt])
+
+def prdcr_stop_regex(agg, regex_str):
+    if is_ldmsd_version_4(agg.ldmsd_version):
+        txt = "prdcr_stop_regex regex={}".format(regex_str)
+    else:
+        obj = { "request": "update",
+                "id": 1,
+                "schema": "prdcr",
+                "enabled": False,
+                "re": [regex_str]}
+        txt = "json " + json.dumps(obj)
+    return agg.config_ldmsd([txt])
+
 if __name__ == "__main__":
     if sys.flags.interactive:
         exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
@@ -334,11 +359,19 @@ if __name__ == "__main__":
     test.assert_test(4, _verify, _verify_msg)
 
     agg_h = cluster.get_container('agg-1')
-    rc, out = agg_h.config_ldmsd([ "prdcr_stop_regex regex=.*" ])
-    test.assert_test(5, (len(out) == 0), out)
+    rc, out = prdcr_stop_regex(agg_h, ".*")
+    if is_ldmsd_version_4(agg_h.ldmsd_version):
+        test.assert_test(5, (len(out) == 0), out)
+    else:
+        rsp = json.loads(out)
+        test.assert_test(5, rsp["status"] == 0, rsp)
 
-    rc, out = agg_h.config_ldmsd([ "prdcr_start_regex regex=.*" ])
-    test.assert_test(6, (len(out) == 0), out)
+    rc, out = prdcr_start_regex(agg_h, ".*")
+    if is_ldmsd_version_4(agg_h.ldmsd_version):
+        test.assert_test(6, (len(out) == 0), out)
+    else:
+        rsp = json.loads(out)
+        test.assert_test(6, rsp["status"] == 0, rsp)
 
     # give them time to reconnect before publishing new data
     time.sleep(5)
