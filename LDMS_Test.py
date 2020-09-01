@@ -1676,7 +1676,6 @@ class LDMSDContainer(DockerClusterContainer):
         ver = tuple(map(int, m.groups()))
         return ver
 
-
 BaseCluster = DockerCluster
 
 class LDMSDCluster(BaseCluster):
@@ -2377,6 +2376,8 @@ def ldmsd_version(prefix):
             raise ValueError("Cannot determine ldmsd version")
     return tuple(map(int, m.groups()))
 
+def is_ldmsd_version_4(ver):
+    return ver < (4, 100, 0)
 
 class Munged(object):
     """Munged(cont)
