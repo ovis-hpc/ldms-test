@@ -110,7 +110,11 @@ spec = {
                 #
                 # These are config for v5, see v4 config below.
                 "load name=test plugin=test_sampler",
-                "config name=test action=default schema=test_sampler base=%hostname%/test num_sets=3",
+                "config name=test JSON={\"schema\":\"test_sampler\",\"schema_type\":\"default\","
+                "\"component_id\":\"1\","
+                "\"instances\":{\"%hostname%/test_0\":\"\","
+                "\"%hostname%/test_1\":\"\","
+                "\"%hostname%/test_2\":\"\"}}",
                 "smplr_add name=smplr instance=test interval=1000000 offset=0",
                 "smplr_start name=smplr",
                 "setgroup_add name=%hostname%/grp interval=1000000 offset=0",
