@@ -22,6 +22,15 @@ cont.open(args.container)
 schema = cont.schema_by_name(args.schema)
 index = schema[args.index]
 
+def STR(obj):
+    if obj is None:
+        return None
+    if type(obj) == str:
+        return obj
+    if type(obj) == bytes:
+        return obj.decode()
+    return str(obj)
+
 itr = index.attr_iter()
 def obj_iter(itr):
     b = itr.begin()
@@ -30,7 +39,7 @@ def obj_iter(itr):
         b = itr.next()
 
 print('[')
-names = [ a.name().decode() for a in schema ]
+names = [ STR(a.name()) for a in schema ]
 first = True
 for obj in obj_iter(itr):
     values = map(lambda v: v.tolist() if type(v) == numpy.ndarray else v, obj)
