@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import print_function
+import re
 import argparse
 import os
 import sys
@@ -201,6 +202,43 @@ def prdcr_stop_regex(agg, regex_str):
         txt = "json " + json.dumps(obj)
     return agg.config_ldmsd([txt])
 
+def prdcr_unsubscribe(node, regex, stream):
+    """Tells ldmsd on `node` to prdcr_unsubscribe regex=`regex` stream=`stream`"""
+    if is_ldmsd_version_4(node.ldmsd_version):
+        txt = "prdcr_unsubscribe regex={} stream={}".format(regex, stream)
+    else:
+        raise NotImplementedError("prdcr_unsubscribe is not supported (yet) in v5")
+    return node.config_ldmsd([txt])
+
+def stream_client_dump(node):
+    """Dump stream clients in ldmsd on node as a list of (stream_name, cb_fn, cb_ctxt) tuples"""
+    if is_ldmsd_version_4(node.ldmsd_version):
+        txt = "stream_client_dump"
+    else:
+        raise NotImplementedError("stream_client_dump is not supported (yet) in v5")
+    rc, out = node.config_ldmsd([txt])
+    obj = json.loads(out)
+    lst = [ (s["name"], c["cb_fn"], c["ctxt"]) \
+                    for s in obj["streams"] \
+                    for c in s["clients"] ]
+    return lst
+
+def verify_msg(test, assert_no, msg, json_data, err_text):
+    if msg["type"] == "json":
+        if msg["obj"] != json_data:
+            test.assert_test(assert_no, False, err_text)
+            return False
+    elif msg["type"] == "string":
+        if msg["text"] != json.dumps(json_data):
+            test.assert_test(assert_no, False, err_text)
+            return False
+    else:
+        test.assert_test(assert_no, False,
+                         "Unknown message type: {}".format(msg["type"]))
+        return False
+    return True
+
+
 if __name__ == "__main__":
     if sys.flags.interactive:
         exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
@@ -255,6 +293,11 @@ if __name__ == "__main__":
     test.add_assertion(15, 'STRING stream data resumes after stream-sampler-1 restart')
     test.add_assertion(16, 'ldmsd_stream data check on agg-2 after stream-sampler-1 restart')
 
+    test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
+    test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
+
+    test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
+
     # Tell the TADA infrastructure that the test is starting
     test.start()
 
@@ -307,6 +350,7 @@ if __name__ == "__main__":
     # data verification
     samp1 = cluster.get_container("stream-sampler-1")
     samp2 = cluster.get_container("stream-sampler-2")
+    agg1 = cluster.get_container("agg-1")
     agg2 = cluster.get_container("agg-2")
 
     samp1_out_txt = samp1.read_file("/data/stream-sampler-1.out")
@@ -534,6 +578,139 @@ if __name__ == "__main__":
         _verify = False
         _verify_msg = "Message mismatch"
     test.assert_test(16, _verify, _verify_msg)
+
+    #test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
+    rc, out = prdcr_unsubscribe(agg1, regex='stream-sampler-1', stream='test_stream')
+    if is_ldmsd_version_4(agg_h.ldmsd_version):
+        test.assert_test(17, (len(out) == 0), out)
+    else:
+        rsp = json.loads(out)
+        test.assert_test(17, rsp["status"] == 0, rsp)
+
+    #test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
+
+    samp1_out_txt_pre = samp1.read_file("/data/stream-sampler-1.out")
+    samp2_out_txt_pre = samp2.read_file("/data/stream-sampler-2.out")
+    agg2_out_txt_pre = agg2.read_file("/data/agg-2.out")
+
+    data = {
+            'stream-sampler-1': { "gen" : 4,
+                 "schema" : "stream_test",
+                 "timestamp" : 1559242274,
+                 "data" : {
+                     "id" : 23456,
+                     "list" : [ 1, 1, 1, 1, 1, 1 ]
+                 }
+             },
+            'stream-sampler-2': { "gen" : 4,
+                 "schema" : "stream_test",
+                 "timestamp" : 1559242274,
+                 "data" : {
+                     "id" : 23456,
+                     "list" : [ 2, 2, 2, 2, 2, 2 ]
+                 }
+             },
+         }
+
+    for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
+        _data = data[host]
+        text_data = json.dumps(_data)
+        cont = cluster.get_container(host)
+        cont.write_file(data_file, text_data)
+        cmd = "bash -c \"" \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t json -f {fname} & " \
+              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
+              " -s test_stream -t string -f {fname} & " \
+              "wait" \
+              "\"".format( fname=data_file,
+                           host=host,
+                           xprt=cont.ldmsd_spec["listen_xprt"],
+                           port=cont.ldmsd_spec["listen_port"],
+                           auth=cont.ldmsd_spec["listen_auth"] )
+
+        rc, out = cont.exec_run(cmd)
+
+    samp1_out_txt_post = samp1.read_file("/data/stream-sampler-1.out")
+    samp2_out_txt_post = samp2.read_file("/data/stream-sampler-2.out")
+    agg2_out_txt_post = agg2.read_file("/data/agg-2.out")
+
+    samp1_out = StringIO(samp1_out_txt_post)
+    samp2_out = StringIO(samp2_out_txt_post)
+    agg2_out = StringIO(agg2_out_txt_post)
+
+    samp1_out.seek(len(samp1_out_txt_pre))
+    samp2_out.seek(len(samp2_out_txt_pre))
+    agg2_out.seek(len(agg2_out_txt_pre))
+
+    while True: # this will break
+        # samp1
+        _data = data["stream-sampler-1"]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(samp1_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-1 data verification failed"):
+            break
+        msg = read_msg(samp1_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-1 data verification failed"):
+            break
+        # samp2
+        _data = data["stream-sampler-2"]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(samp2_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-2 data verification failed"):
+            break
+        msg = read_msg(samp2_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-2 data verification failed"):
+            break
+        # agg-2 - expects only 2 messages from samp2
+        _data = data["stream-sampler-2"]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(agg2_out)
+        if not verify_msg(test, 18, msg, _data, "agg-2 data verification failed"):
+            break
+        msg = read_msg(agg2_out)
+        if not verify_msg(test, 18, msg, _data, "agg-2 data verification failed"):
+            break
+        if agg2_out.tell() != len(agg2_out_txt_post):
+            test.assert_test(18, False, "agg-2 has extra stream data")
+            break
+        test.assert_test(18, True, "data verified")
+        break
+
+    #test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
+    # Get client dump from stream-sampler-2 before killing agg-1
+    while True: # this will break
+        before = stream_client_dump(samp2)
+        # Kill agg-1
+        agg1.kill_ldmsd()
+        time.sleep(5)
+        # Get client dump from stream-sampler-2
+        after = stream_client_dump(samp2)
+        before = set(before)
+        after = set(after)
+        if not (after < before):
+            diff = after - before
+            if diff:
+                test.assert_test(19, False, "Unexpected streams/clients: {}".format(diff))
+            else:
+                test.assert_test(19, False, "streams/clients not removed: {}".format(after))
+            break
+        diff = set(before) - set(after)
+        if len(diff) != 1:
+            test.assert_test(19, False, "Too many terminated clients: {}".format(diff))
+            break
+        stream_name, cb_fn, ctxt = diff.pop()
+        if stream_name != "test_stream":
+            test.assert_test(19, False, "Unexpected stream name: {}".format(stream_name))
+            break
+        if not re.match(r'\S*ldmsd\(', cb_fn):
+            test.assert_test(19, False, "Unexpected cb_fn: {}".format(cb_fn))
+            break
+        test.assert_test(19, True, "verified")
+        break
 
     test.finish()
     # cleanup data
