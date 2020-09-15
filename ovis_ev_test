@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+
+import argparse
+import logging
+import os
+import sys
+
+import TADA
+
+from LDMS_Test import create_suite_from_C_test_results, \
+                      LDMSDCluster, LDMSDContainer, \
+                      add_common_args, process_args
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+####  constant value #### -----------------------------------------------------
+c_TEST_RESULT_PATH = "/data/test_ovis_ev.result"
+
+#### argument parsing #### ----------------------------------------------------
+ap = argparse.ArgumentParser(description = "Test the ovis_ev library")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ----------------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+
+#### spec #### ----------------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_ovis_ev cluster".format(USER),
+    "type" : "FVT",
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                }
+            ]
+        }
+    ],
+    "cap_add" : [ "SYS_PTRACE" ],
+    "image" : "ovis-centos-build",
+    "ovis_prefix" : PREFIX,
+    "env" : { 
+        "LD_LIBRARY_PATH" : "/data/tada/lib:{0}/lib:{0}/lib64".format(PREFIX),
+    },
+    "mounts" : [
+            "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+log.info("-- Create the cluster -- ")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+cont = cluster.get_container("node-1")
+rc, out = cont.exec_run("make -C /tada-src/C BUILDDIR=/data/tada/lib")
+if rc:
+    raise RuntimeError("libtada build failed, output: {}".format(out))
+
+cluster.start_daemons()
+
+cmd = "bash -c \"" \
+      "/data/tada/lib/test_ovis_ev -l {}\"".format(c_TEST_RESULT_PATH)
+
+rc, out = cont.exec_run(cmd)
+
+if rc:
+    raise RuntimeError("Failed to run the C test program")
+
+c_test_result = cont.read_file(c_TEST_RESULT_PATH)
+create_suite_from_C_test_results(c_test_result, args.tada_addr)
+cluster.remove()
