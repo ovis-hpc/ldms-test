@@ -216,6 +216,33 @@ def parse_ldms_ls(txt):
             raise RuntimeError("Unable to process line: {}".format(l))
     return ret
 
+def create_suite_from_C_test_results(txt, tada_addr):
+    import json
+
+    r = json.loads(txt)
+    cnt = len(r)
+
+    test = TADA.Test(test_suite = r[0]["test-suite"],
+                     test_type = r[0]["test-type"],
+                     test_name = r[0]["test-name"],
+                     test_desc = r[0]["test-desc"],
+                     test_user = r[0]["test-user"],
+                     commit_id = r[0]["commit-id"],
+                     tada_addr = tada_addr)
+
+    for msg in r:
+        if msg["msg-type"] == "assert-status":
+            test.add_assertion(msg["assert-no"], msg["assert-desc"])
+
+    test.start()
+
+    for msg in r:
+        if msg["msg-type"] == "assert-status":
+            result = True if (msg["test-status"] == "passed") else False
+            test.assert_test(msg["assert-no"], result, msg["assert-cond"])
+
+    test.finish()
+
 def env_dict(env):
     """Make env dict(NAME:VALUE) from list(NAME=VALUE) or dict(NAME:VALUE)
 
