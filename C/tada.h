@@ -19,6 +19,9 @@ typedef struct test_assertion_s {
 	struct test_s *test;
 } *test_assertion_t;
 
+#define TADA_TEST_F_SEND_RESULT 1
+#define TADA_TEST_F_LOG_RESULT  2
+
 typedef struct test_s {
 	const char *suite_name;
 	const char *test_name;
@@ -29,16 +32,19 @@ typedef struct test_s {
 	char test_id[65];
 	struct sockaddr_in sin;
 	int udp_fd;
-	struct test_assertion_s test_asserts[];
+	char *log_path;
+	FILE *log_file;
+	int flags;
+	struct test_assertion_s *test_asserts;
 } *test_t;
 
 #define TADA_TRUE	(1 == 1)
 #define TADA_FALSE	(1 == 0)
-#define TADAD_HOST	"tadad-host"
+#define TADAD_HOST	"localhost"
 #define TADAD_PORT	9862
 
-#define TEST_BEGIN(_suite_name, _test_name, _test_type, \
-		   _test_user, _commit_id, _test_desc, c_name) \
+#define TEST_BEGIN(_suite_name, _test_name, _test_type, _test_user, \
+		   _commit_id, _test_desc, _log_path, _flags, c_name) \
 	struct test_s c_name = {			    \
 		.suite_name = _suite_name,		    \
 		.test_name = _test_name,		    \
@@ -46,7 +52,9 @@ typedef struct test_s {
 		.test_user = _test_user,		    \
 		.test_desc = _test_desc,		    \
 		.commit_id = _commit_id,		    \
-		.test_asserts = {			    \
+		.log_path = _log_path,			    \
+		.flags = _flags,			    \
+		.test_asserts = (struct test_assertion_s[]){\
 
 
 #define TEST_ASSERTION(c_test_name, assert_no, _desc)			\

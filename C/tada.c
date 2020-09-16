@@ -1,4 +1,4 @@
-
+#include <stdio.h>
 #include <netdb.h>
 #include <assert.h>
 #include <string.h>
@@ -6,6 +6,31 @@
 #include <unistd.h>
 #include <openssl/sha.h>
 #include "tada.h"
+
+void _submit(test_t test, char *msg_buf, size_t cnt)
+{
+	int rc;
+	FILE *log = stdout;
+	static int line_no = 0;
+	if (test->flags & TADA_TEST_F_SEND_RESULT) {
+		rc = sendto(test->udp_fd, msg_buf, cnt, 0,
+				(struct sockaddr *)&test->sin,
+				sizeof(test->sin));
+		if (rc < 0) {
+			fprintf(stderr, "Failed to send a message to "
+					"the TADA server, error %d.\n", rc);
+		}
+	}
+
+	if (test->flags & TADA_TEST_F_LOG_RESULT) {
+		if (test->log_file)
+			log = test->log_file;
+		if (line_no > 0)
+			fprintf(log, ",\n");
+		fprintf(log, "%s\n", msg_buf);
+	}
+	line_no++;
+}
 
 /*
  * { "msg-type" : "test-start",
@@ -26,6 +51,22 @@ void tada_start(test_t test)
 	unsigned char md[32];
 	int i;
 	time_t ts;
+	FILE *f = stdout;
+
+	if (test->flags & TADA_TEST_F_LOG_RESULT) {
+		if (test->log_path) {
+			test->log_file = fopen(test->log_path, "w");
+			if (test->log_file) {
+				f = test->log_file;
+			} else {
+				fprintf(stderr, "Failed to open the log file '%s'. "
+						"The log messages are printed to stdout.\n",
+						test->log_path);
+			}
+		}
+		fprintf(f, "[");
+	}
+
 
 	if (!tada_addr) {
 		tada_host = TADAD_HOST;
@@ -82,7 +123,7 @@ void tada_start(test_t test)
 	assert(cnt < sizeof(msg_buf));
 	test->udp_fd = socket(AF_INET, SOCK_DGRAM, 0);
 	assert(test->udp_fd >= 0);
-	cnt = sendto(test->udp_fd, msg_buf, cnt, 0, (struct sockaddr *)&test->sin, sizeof(test->sin));
+	_submit(test, msg_buf, cnt);
 }
 
 void tada_finish(test_t test)
@@ -111,8 +152,7 @@ void tada_finish(test_t test)
 			       test->test_asserts[assert_no].description
 			       );
 		assert(cnt < sizeof(msg_buf));
-		cnt = sendto(test->udp_fd, msg_buf, cnt,
-			     0, (struct sockaddr *)&test->sin, sizeof(test->sin));
+		_submit(test, msg_buf, cnt);
 	}
 
 	cnt = snprintf(msg_buf, sizeof(msg_buf),
@@ -124,9 +164,16 @@ void tada_finish(test_t test)
 		       time(NULL)
 		       );
 	assert(cnt < sizeof(msg_buf));
-	cnt = sendto(test->udp_fd, msg_buf, cnt, 0, (struct sockaddr *)&test->sin, sizeof(test->sin));
+	_submit(test, msg_buf, cnt);
 	close(test->udp_fd);
 	test->udp_fd = -1;
+	if (test->log_file) {
+		fprintf(test->log_file, "]");
+		fclose(test->log_file);
+	} else {
+		fprintf(stdout, "]");
+	}
+
 }
 
 int tada_assert(test_t test, int assert_no, int cond, const char *cond_str)
@@ -168,7 +215,6 @@ int tada_assert(test_t test, int assert_no, int cond, const char *cond_str)
 		       test->test_asserts[assert_no].result == TEST_PASSED ? "passed" : "failed"
 		       );
 	assert(cnt < sizeof(msg_buf));
-	cnt = sendto(test->udp_fd, msg_buf, cnt,
-		     0, (struct sockaddr *)&test->sin, sizeof(test->sin));
+	_submit(test, msg_buf, cnt);
 	return cond;
 }
