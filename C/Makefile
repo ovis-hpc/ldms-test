@@ -7,7 +7,8 @@ TARGETS = $(BUILDDIR)/libutil.so \
 	  $(BUILDDIR)/libtada.so \
 	  $(BUILDDIR)/libtest_stream_sampler.so \
 	  $(BUILDDIR)/test_stream_publish \
-	  $(BUILDDIR)/test_ovis_ev
+	  $(BUILDDIR)/test_ovis_ev \
+	  $(BUILDDIR)/test_ovis_json
 
 LDMSD_VERSION = $(shell /usr/bin/strings ${OVIS_PREFIX}/sbin/ldmsd | \
 	      grep OVIS_LDMS_VERSION | \
@@ -64,3 +65,10 @@ $(BUILDDIR)/test_ovis_ev: test_ovis_ev.c
 		$^ -L$(OVIS_PREFIX)/lib -L$(OVIS_PREFIX)/lib64 -L$(BUILDDIR) \
 		-ltada -lutil \
 		-lovis_ev -pthread ${GCC_COMMON_FLAGS}
+
+$(BUILDDIR)/test_ovis_json: test_ovis_json.c
+	mkdir -p $(BUILDDIR)
+	gcc -I $(OVIS_PREFIX)/include -o $@ \
+		$^ -L$(OVIS_PREFIX)/lib -L$(OVIS_PREFIX)/lib64 -L$(BUILDDIR) \
+		-ltada -lutil \
+		-lcoll -lovis_json ${GCC_COMMON_FLAGS}
