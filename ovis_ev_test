@@ -74,7 +74,8 @@ if rc:
 cluster.start_daemons()
 
 cmd = "bash -c \"" \
-      "/data/tada/lib/test_ovis_ev -l {}\"".format(c_TEST_RESULT_PATH)
+      "/data/tada/lib/test_ovis_ev -l {log} -c {commit} -u {user}\"".format(
+                        log=c_TEST_RESULT_PATH, commit=COMMIT_ID, user=USER)
 
 rc, out = cont.exec_run(cmd)
 

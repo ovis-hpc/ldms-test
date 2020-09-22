@@ -9,7 +9,7 @@
 #include "tada.h"
 #include "util.h"
 
-#define FMT "f:l:"
+#define FMT "c:f:l:u:"
 
 #define TIME_DIFF_THRESHOLD 0.000001 /* 1 us */
 #define GENERIC_WORKER_DST	"generic_dst"
@@ -460,16 +460,24 @@ int main(int argc, char **argv) {
 	int op;
 	int test_flags = TADA_TEST_F_LOG_RESULT;
 	char *log_path = NULL;
+	char *commit_id = "";
+	char *user = "";
 	ev_worker_t gn_dst, gn_src;
 	ev_type_t gn_test_type, gn_no_test_type;
 
 	while ((op = getopt(argc, argv, FMT)) != -1) {
 		switch (op) {
+		case 'c':
+			commit_id = strdup(optarg);
+			break;
 		case 'f':
 			test_flags = atoi(optarg);
 			break;
 		case 'l':
 			log_path = strdup(optarg);
+			break;
+		case 'u':
+			user = strdup(optarg);
 			break;
 		default:
 			fprintf(stderr, "Unrecognized cli-option '%s'", optarg);
@@ -484,8 +492,8 @@ int main(int argc, char **argv) {
 					sizeof(struct ev_expected_s));
 	ev_dispatch(gn_dst, gn_no_test_type, no_test_actor);
 
-	TEST_BEGIN("test_ovis_ev", "C-Test", "FVT", NULL,
-		   "-", "Test the ovis_ev library", log_path,
+	TEST_BEGIN("test_ovis_ev", "ovis_ev_test", "FVT", user,
+		   commit_id, "Test the ovis_ev library", log_path,
 		   test_flags, suite)
 	TEST_ASSERTION(suite, POST_WO_TO_ASSERT_NO,
 				"Test posting an event without timeout")
