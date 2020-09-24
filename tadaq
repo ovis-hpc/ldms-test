@@ -50,6 +50,9 @@ if __name__ == "__main__":
     parser.add_argument("--test-name", type=str, help="Test name filter.")
     parser.add_argument("--test-user", type=str, help="Test user filter.")
     parser.add_argument("--commit-id", type=str, help="commit-id filter.")
+    parser.add_argument("--only-passed", action = "store_true")
+    parser.add_argument("--only-failed", action = "store_true")
+    parser.add_argument("--only-skipped", action = "store_true")
 
     # options regarding re-run tests
     parser.add_argument("--latest", action = "store_true",
@@ -108,6 +111,15 @@ if __name__ == "__main__":
         print("    test-id: {.test_id}".format(o))
         for a in o.assertions:
             status = a.assert_result
+            if args.only_failed:
+                if status != "failed":
+                    continue
+            if args.only_skipped:
+                if status != "skipped":
+                    continue
+            if args.only_passed:
+                if status != "passed":
+                    continue
             if status == 'passed':
                 status = bcolors.OKGREEN + 'passed' + bcolors.ENDC
             elif status == 'failed':
