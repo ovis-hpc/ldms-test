@@ -109,7 +109,8 @@ if __name__ == "__main__":
                         .format(o.test_name, start, finish))
         print("        {.test_desc}".format(o))
         print("    test-id: {.test_id}".format(o))
-        for a in o.assertions:
+        sorted_assertions = sorted(o.assertions, key = lambda a: int(a.assert_id))
+        for a in sorted_assertions:
             status = a.assert_result
             if args.only_failed:
                 if status != "failed":
