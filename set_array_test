@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+#
+# Test the set array capability.
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+TEST_DESC = "Set array capabality test."
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = TEST_DESC )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+STORE_ROOT = "/store" # path inside container (agg-2)
+SET_ARRAY_CARD = 10
+SAMP_INTERVAL = 1000000
+SAMP_OFFSET = 0
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+        "set_array_card=%set_array_card%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s set_array_test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : SAMP_INTERVAL,
+            "offset" : SAMP_OFFSET,
+            "set_array_card" : SET_ARRAY_CARD,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "set_array_test",
+                 test_desc = TEST_DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "1st update got some callbacks")
+test.add_assertion(2, "2nd update got N callbacks")
+test.add_assertion(3, "3nd update got N callbacks")
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+node1 = cluster.get_container("node-1")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(15)
+
+# execute the set_array script on head node
+N_CB = SET_ARRAY_CARD//2
+cmd = "/tada-src/python/ldms_update.py \
+      -H {host} -P {port} -I {interval} -O {offset} -C {count}" \
+      .format(
+              host = "node-1",
+              port = LDMSD_PORT,
+              interval = SAMP_INTERVAL*N_CB,
+              offset = SAMP_OFFSET + SAMP_INTERVAL//2,
+              count = 3
+          )
+rc, out = headnode.exec_run(cmd)
+
+hunks = json.loads(out)
+
+# verify the output
+
+M = 1000000
+
+def verify_hunk(h):
+    # h (hunk) is a list of set snapshot
+    # we expect one set -- node-1/meminfo
+    prev_ts = None
+    for s in h:
+        if s["name"] != "node-1/meminfo":
+            return (False, "Unexpected set: {}".format(s["name"]))
+        ts = s["transaction_timestamp"]
+        ts = ts["sec"]*M + ts["usec"]
+        if prev_ts == None:
+            prev_ts = ts
+            continue
+        diff = ts - prev_ts
+        if diff < int(SAMP_INTERVAL * 0.8):
+            return (False, "the difference of update timestamps is too little")
+        if diff > int(SAMP_INTERVAL * 1.2):
+            return (False, "the difference of update timestamps is too great")
+        prev_ts = ts
+    return (True, "verified hunk of {} snapshots".format(len(h)))
+
+#test.add_assertion(1, "1st update got some callbacks")
+while True:
+    h = hunks[0]
+    if not len(h):
+        test.assert_test(1, False, "first update hunk has no data")
+    cond, text = verify_hunk(h)
+    test.assert_test(1, cond, text)
+    break
+#test.add_assertion(2, "2nd update got N callbacks")
+while True:
+    h = hunks[1]
+    if len(h) != N_CB:
+        test.assert_test(2, False, "expecting {} snapshots, but got {}"\
+                                   .format(N_CB, len(h)))
+    cond, text = verify_hunk(h)
+    test.assert_test(2, cond, text)
+    break
+#test.add_assertion(3, "3nd update got N callbacks")
+while True:
+    h = hunks[2]
+    if len(h) != N_CB:
+        test.assert_test(3, False, "expecting {} snapshots, but got {}"\
+                                   .format(N_CB, len(h)))
+    cond, text = verify_hunk(h)
+    test.assert_test(3, cond, text)
+    break
+
+test.finish()
+cluster.remove() # this destroys entire cluster
