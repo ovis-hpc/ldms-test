@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+#
+# Test auth_ovis authentication plugin
+
+import os
+import re
+import pdb
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test auth_ovis plugin" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+
+#### spec helpers #### ------------------------------------------------------
+def dom_name(num):
+    return "dom{}".format(num)
+
+def dom_sock(num):
+    return "/munge/{}/sock".format(dom_name(num))
+
+def dom_key(num):
+    return str(num)*4096
+
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+        "perm=0600",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "auth" : [
+                {
+                    "name" : "ovis",
+                    "plugin" : "ovis",
+                    "conf" : "/db/auth0.conf",
+                },
+            ],
+            "listen" : [
+                {
+                    "xprt" : "sock",
+                    "port" : 10000,
+                    "auth" : "ovis",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+                {
+                    "plugin" : "vmstat",
+                    "!extends" : "sampler_plugin",
+                },
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_auth_ovis_test",
+                 test_desc = "Test auth_ovis plugin",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "ldms_ls with auth none")
+test.add_assertion(2, "ldms_ls with wrong secret")
+test.add_assertion(3, "ldms_ls 'dir' with right secret")
+test.add_assertion(4, "ldms_ls 'read' with right secret")
+
+#### Helper Functions ####
+def ldms_ls(cont, host = None, port = LDMSD_PORT, l = False, auth = None,
+            auth_args=None, user="root"):
+    try:
+        args = "-l -v" if l else ""
+        _host = "-h {}".format(host) if host else ""
+        if auth:
+            _auth = "-a {}".format(auth)
+            if auth_args:
+                _auth += "".join([" -A {}={}".format(k, v) \
+                                        for k,v in auth_args.items()])
+        else:
+            _auth = ""
+        rc, out = cont.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     {_host} " \
+                                    "     {_auth} " \
+                                    "2>/dev/null'" \
+                                    .format(_host=_host, _auth=_auth,
+                                            port=port, args=args),
+                                user=user)
+
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        raise
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+node1 = cluster.get_container("node-1")
+
+#### Prep auth files ####
+path = "{}/auth0.conf".format(DB)
+with open(path, "w") as f:
+    f.write("secretword=0000000000000000")
+os.chmod(path, 0o600)
+
+path = "{}/auth1.conf".format(DB)
+with open(path, "w") as f:
+    f.write("secretword=1111111111111111")
+os.chmod(path, 0o600)
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+#test.add_assertion(1, "ldms_ls with auth none")
+sets = ldms_ls(headnode, host="node-1", port=10000)
+sets = set(sets)
+expect = set(["Connection failed/rejected."])
+if sets == expect:
+    test.assert_test(1, True, "verified")
+else:
+    test.assert_test(1, False, "result({}) != expect({})".format(sets, expect))
+
+#test.add_assertion(2, "ldms_ls with wrong secret")
+sets = ldms_ls(headnode, host="node-1", port=10000,
+               auth="ovis", auth_args={"conf": "/db/auth1.conf"})
+sets = set(sets)
+expect = set(["Connection failed/rejected."])
+if sets == expect:
+    test.assert_test(2, True, "verified")
+else:
+    test.assert_test(2, False, "result({}) != expect({})".format(sets, expect))
+
+
+#test.add_assertion(3, "ldms_ls 'dir' with right secret")
+sets = ldms_ls(headnode, host="node-1", port=10000,
+               auth="ovis", auth_args={"conf": "/db/auth0.conf"})
+sets = set(sets)
+expect = set(["node-1/{}".format(name) for name in ["vmstat", "meminfo"]])
+if sets == expect:
+    test.assert_test(3, True, "verified")
+else:
+    test.assert_test(3, False, "result({}) != expect({})".format(sets, expect))
+
+#test.add_assertion(4, "ldms_ls 'read' with right secret")
+while True:
+    lsets = ldms_ls(headnode, l=True, host="node-1", port=10000,
+                   auth="ovis", auth_args={"conf": "/db/auth0.conf"})
+    sets = set(lsets)
+    expect = set(["node-1/{}".format(name) for name in ["vmstat", "meminfo"]])
+    if sets != expect:
+        test.assert_test(4, False, "result({}) != expect({})".format(sets, expect))
+        break
+    for s in lsets.values():
+        if 'data' not in s or len(s['data']) == 0:
+            test.assert_test(4, False, "{} has no data".format(s['name']))
+            break
+    test.assert_test(4, True, "verified")
+    break
+
+test.finish()
+cluster.remove() # this destroys entire cluster
