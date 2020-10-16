@@ -1,0 +1,380 @@
+#!/usr/bin/env python3
+
+# Test ldmsd_controller and ldmsctl
+#
+# Currently, this is a sniff test of ldmsd_controller and ldmsctl. It will be
+# expanded to test more commands and corner cases in the future.
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import docker
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, cs_rm
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test ldmsd_controller and ldmsctl"
+ap = argparse.ArgumentParser(description = DESC)
+add_common_args(ap)
+ap.add_argument("--no-ldmsd-controller", action="store_true", default=False,
+                help="Do not test ldmsd_controller")
+ap.add_argument("--no-ldmsctl", action="store_true", default=False,
+                help="Do not test ldmsctl")
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+NUM_COMPUTE = 1
+LDMSD_PORT = 10000
+STORE_ROOT = "/store" # path inside container (agg-2)
+ENABLE_LDMSD_CONTROLLER = not args.no_ldmsd_controller
+ENABLE_LDMSCTL = not args.no_ldmsctl
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-{}".format(i),
+            "component_id" : i,
+            "!extends" : "compute-node",
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
+        {
+            "hostname" : "agg-1{}".format(j),
+            "!extends" : "compute-node",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                },
+            ]
+        } for j in [1, 2]
+    ] + [
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_ctrl_test",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "ldmsd_controller interactive session")
+test.add_assertion(2, "ldmsctl interactive session")
+test.add_assertion(3, "ldmsd_controller start bogus producer")
+test.add_assertion(4, "ldmscl start bogus producer")
+test.add_assertion(5, "ldmsd_controller bogus command")
+test.add_assertion(6, "ldmsctl bogus command")
+test.add_assertion(7, "ldmsd_controller load bogus plugin")
+test.add_assertion(8, "ldmsctl load bogus plugin")
+test.add_assertion(9, "ldmsd_controller prdcr/updtr")
+test.add_assertion(10, "ldmsctl prdcr/updtr")
+
+#### Helper Functions ####
+def ldms_ls(host, port = LDMSD_PORT, l = False):
+    try:
+        args = "-l -v" if l else ""
+        rc, out = headnode.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     -h {host} 2>/dev/null'" \
+                                    .format(host=host, port=port, args=args))
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        return None
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+node1 = cluster.get_container("node-1")
+agg11 = cluster.get_container("agg-11")
+agg12 = cluster.get_container("agg-12")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+#test.add_assertion(1, "ldmsd_controller interactive session")
+while ENABLE_LDMSD_CONTROLLER:
+    cmd = "ldmsd_controller --host agg-11 --port 10000 --xprt sock"
+    ldmsd_controller = headnode.exec_interact(["/bin/bash", "-c", cmd])
+    time.sleep(1.0)
+    out1 = ldmsd_controller.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out1.splitlines()]
+    elines = [ "Welcome to the LDMSD control processor",
+               "sock:agg-11:10000>" ]
+    if lines != elines:
+        test.assert_test(1, False, "Unexpected welcome message: {}"\
+                                   .format(out1))
+        break
+    test.assert_test(1, True, "connected")
+    break
+
+#test.add_assertion(2, "ldmsctl interactive session")
+while ENABLE_LDMSCTL:
+    cmd = "ldmsctl -h agg-12 -p 10000 -x sock"
+    ldmsctl = headnode.exec_interact(["/bin/bash", "-c", cmd])
+    time.sleep(1.0)
+    out2 = ldmsctl.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out2.splitlines()]
+    elines = ["ldmsctl>"]
+    if lines != elines:
+        test.assert_test(2, False, "Unexpected welcome message: {}"\
+                                   .format(out2))
+        break
+    test.assert_test(2, True, "connected")
+    break
+
+#test.add_assertion(3, "ldmsd_controller start bogus producer")
+while ENABLE_LDMSD_CONTROLLER:
+    cmd = "prdcr_start name=bogus"
+    ldmsd_controller.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsd_controller.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "The producer specified does not exist.", "sock:agg-11:10000>"]
+    if lines != elines:
+        test.assert_test(3, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(3, True, "expected output verified")
+    break
+
+#test.add_assertion(4, "ldmscl start bogus producer")
+while ENABLE_LDMSCTL:
+    cmd = "prdcr_start name=bogus"
+    ldmsctl.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsctl.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "The producer specified does not exist.", "ldmsctl>"]
+    if lines != elines:
+        test.assert_test(4, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(4, True, "expected output verified")
+    break
+
+#test.add_assertion(5, "ldmsd_controller bogus command")
+while ENABLE_LDMSD_CONTROLLER:
+    cmd = "bogus"
+    ldmsd_controller.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsd_controller.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "*** Unknown syntax: bogus", "sock:agg-11:10000>"]
+    if lines != elines:
+        test.assert_test(5, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(5, True, "expected output verified")
+    break
+
+#test.add_assertion(6, "ldmsctl bogus command")
+while ENABLE_LDMSCTL:
+    cmd = "bogus"
+    ldmsctl.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsctl.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "Unrecognized command 'bogus'", "ldmsctl>"]
+    if lines != elines:
+        test.assert_test(6, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(6, True, "expected output verified")
+    break
+
+#test.add_assertion(7, "ldmsd_controller load bogus plugin")
+while ENABLE_LDMSD_CONTROLLER:
+    cmd = "load name=bogus"
+    ldmsd_controller.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsd_controller.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "Failed to load the plugin 'bogus'.", "sock:agg-11:10000>"]
+    if len(lines) != 3 or lines[0] != elines[0] \
+                       or lines[2] != elines[2] \
+                       or not lines[1].startswith(elines[1]):
+        test.assert_test(7, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(7, True, "expected output verified")
+    break
+
+#test.add_assertion(8, "ldmsctl load bogus plugin")
+while ENABLE_LDMSCTL:
+    cmd = "load name=bogus"
+    ldmsctl.write(cmd + "\n")
+    time.sleep(0.5)
+    out = ldmsctl.read(idle_timeout = 0.1)
+    lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    elines = [cmd, "Failed to load the plugin 'bogus'.", "ldmsctl>"]
+    if len(lines) != 3 or lines[0] != elines[0] \
+                       or lines[2] != elines[2] \
+                       or not lines[1].startswith(elines[1]):
+        test.assert_test(8, False, "Unexpected output: {}".format(out))
+        break
+    test.assert_test(8, True, "expected output verified")
+    break
+
+def prdcr_updtr_routine(_id, ls_host, ctrl, prompt):
+    cmds = [ "prdcr_add name=prdcr host=node-1 xprt=sock port={port}"
+             " type=active interval=1000000\n" \
+                     .format(port=LDMSD_PORT),
+             "prdcr_start name=prdcr\n",
+             "updtr_add name=updtr interval=1000000 offset=500000\n",
+             "updtr_prdcr_add name=updtr regex=prdcr\n",
+             "updtr_start name=updtr\n" ]
+    ctrl.write("".join(cmds))
+    _out = ctrl.read(0.5)
+    out = _out.replace(" \r", "").splitlines()
+    eout = prompt.join(cmds + ['']).splitlines()
+    if out != eout:
+        test.assert_test(_id, False, "Unexpected output: {}".format(_out))
+        return
+    time.sleep(4)
+    ctrl.write("prdcr_status\n")
+    _out = ctrl.read(0.5)
+    out = _out.splitlines()
+    if not re.match(".*\sCONNECTED\s*.*", out[3]) \
+            or not re.match(".*\snode-1/meminfo\s.*\sREADY\s*.*", out[4]):
+        test.assert_test(_id, False, "Unexpected prdcr status: {}".format(_out))
+        return
+    ctrl.write("updtr_status\n")
+    _out = ctrl.read(0.5)
+    out = _out.splitlines()
+    if not re.match("updtr\s+.*\sRUNNING\s*.*", out[3]) \
+            or not re.match("\s+prdcr\s+.*\sCONNECTED\s*.*", out[4]):
+        test.assert_test(_id, False, "Unexpected updtr status: {}".format(_out))
+        return
+    _ts0 = time.time()
+    time.sleep(2)
+    res = list(ldms_ls(ls_host, l=True).values())
+    if len(res) != 1 or res[0]["name"] != "node-1/meminfo":
+        test.assert_test(_id, False, "Unexpected ldms_ls result: {}".format(res))
+        return
+    update_time = float(res[0]["meta"]["update"])
+    if update_time < _ts0:
+        test.assert_test(_id, False, "Bad ldms_ls update time: {}".format(update_time))
+        return
+    test.assert_test(_id, True, "verified")
+
+#test.add_assertion(9, "ldmsd_controller prdcr/updtr")
+if ENABLE_LDMSD_CONTROLLER:
+    prdcr_updtr_routine(9, "agg-11", ldmsd_controller, "sock:agg-11:10000> ")
+
+#test.add_assertion(10, "ldmsctl prdcr/updtr")
+if ENABLE_LDMSCTL:
+    prdcr_updtr_routine(10, "agg-12", ldmsctl, "ldmsctl> ")
+
+test.finish()
+
+cluster.remove() # this destroys entire cluster
