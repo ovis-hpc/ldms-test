@@ -5,6 +5,7 @@ import pwd
 import glob
 import time
 import json
+import errno
 import socket
 import docker
 import ipaddress as ip
@@ -15,7 +16,7 @@ import TADA
 import pdb
 
 from functools import wraps
-from io import StringIO
+from io import StringIO, BytesIO
 from distutils.version import LooseVersion
 from distutils.spawn import find_executable
 
@@ -660,6 +661,16 @@ class Container(object):
         if type(out) == bytes:
             return (rc, out.decode())
         return (rc, out)
+
+    def exec_interact(self, cmd):
+        """Execute `cmd` in the container with an interactive TTY
+
+        Returns a ContainerTTY for communicating to the process spawned from
+        `cmd` inside the container.
+        """
+        (rc, out) = self.exec_run(cmd, stdout=True, stderr=True, stdin=True,
+                                  tty=True, socket=True)
+        return ContainerTTY(out)
 
     def remove(self, **kwargs):
         self.obj.remove(**kwargs)
@@ -2490,6 +2501,57 @@ class Munged(object):
         pid = self.get_pid()
         self.cont.exec_run("kill {}".format(pid))
 
+
+class ContainerTTY(object):
+    """A utility to communicate with a process inside a container"""
+    EOT = b'\x04' # end of transmission (ctrl-d)
+
+    def __init__(self, sockio):
+        self.sockio = sockio
+        self.sock = sockio._sock
+        self.sock.setblocking(False) # use non-blocking io
+
+    def read(self, idle_timeout = 1):
+        bio = BytesIO()
+        active = 1
+        while True:
+            try:
+                buff = self.sock.recv(1024)
+                bio.write(buff)
+                active = 1 # stay active if read succeed
+            except BlockingIOError as e:
+                if e.errno != errno.EAGAIN:
+                    raise
+                if not active: # sock stays inactive > idle_timeout
+                    break
+                active = 0
+                time.sleep(idle_timeout)
+        val = bio.getvalue()
+        return val.decode() if val else None
+
+    def write(self, data):
+        if type(data) == str:
+            data = data.encode()
+        self.sock.send(data)
+
+    def term(self):
+        if self.sock:
+            self.sock.send(self.EOT)
+            self.sock = None
+            self.sockio.close()
+
+# control sequence regex
+CS_RE = re.compile("""
+(?:
+    \x1b\\[       # ESC[ -- the control sequence introducer
+    [\x30-\x3f]*  # parameter bytes
+    [\x20-\x2f]*  # intermediate bytes
+    [\x40-\x7e]   # final byte
+)
+""", re.VERBOSE)
+def cs_rm(s):
+    """Remove control sequences from the string `s`"""
+    return CS_RE.sub("", s)
 
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())
