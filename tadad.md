@@ -9,6 +9,7 @@ SYNOPSIS
 
 ```
 tadad [-c,--config CONFIG_FILE] [-p,--port TADAD_PORT]
+      [-F,--foreground] [-l,--log LOG_FILE] [-L,--log-level LOG_LEVEL]
       [--db-driver DRIVER] [--db-database DATABASE]
       [--db-path PATH] [--db-host HOST] [--db-port DB_PORT]
       [--db-user USER] [--db-password PASSWORD]
@@ -50,6 +51,22 @@ order get processed.
 <dd>
 The UDP socket port for TADA Daemon to listen to the test result messages from
 the test scripts or test programs.
+</dd>
+
+<dt><b>-F,--foreground</b>
+<dd>
+Run the program in foreground. By default, `tadad` is run in daemon mode.
+</dd>
+
+<dt><b>-l,--log</b> <em>LOG_FILE</em></dt>
+<dd>
+`tadad` log file. The default is `tadad.log`.
+</dd>
+
+<dt><b>-L,--log-level</b> <em>LOG_LEVEL</em></dt>
+<dd>
+Log level. The possible values are: DEBUG, INFO, WARNING, ERROR, and CRITICAL
+(default: INFO).
 </dd>
 
 <dt><b>--db-driver</b> <em>DRIVER</em></dt>

@@ -14,7 +14,8 @@ tadaq [-c,--config CONFIG_FILE]
       [--db-user USER] [--db-password PASSWORD]
       [--test-suite SUITE] [--test-type TYPE] [--test-name NAME]
       [--test-user USER] [--commit-id COMMIT_ID]
-      [--latest] [--purge-old-tests]
+      [--all] [--purge-old-tests]
+      [--only-passed] [--only-failed] [--only-skipped]
 ```
 
 
@@ -26,9 +27,8 @@ The `--db-*` options are for database connection, and `--test-*` options are for
 result filtering.
 
 A test may have multiple runs (same suite, type, name, user,
-commit-id, but different start time). By default, all runs are reported. The
-`--latest` option can be given to limit the results to only the latest run of
-each result.
+commit-id, but different start time). By default, only the latest runs are
+reported. The `--all` option can be given to show the results from all runs.
 
 The old runs in each test can also be purged from the database with
 `--purge-old-tests` option.
@@ -132,15 +132,31 @@ If specified, filter the test results to match the given user.
 If specified, filter the test results to match the given commit ID.
 </dd>
 
-<dt><b>--latest</b></dt>
+<dt><b>--all</b></dt>
 <dd>
-Only show the latest results of the same kind of test run.
+Show results from all runs (instead of just the latest runs).
+</dd>
+
+<dt><b>--only-passed</b></dt>
+<dd>
+Show only PASSED assertions in each test.
+</dd>
+
+<dt><b>--only-failed</b></dt>
+<dd>
+Show only FAILED assertions in each test.
+</dd>
+
+<dt><b>--only-skipped</b></dt>
+<dd>
+Show only SKIPPED assertions in each test.
 </dd>
 
 <dt><b>--purge-old-tests</b></dt>
 <dd>
 Purge old runs of each test in the database.
 </dd>
+
 </dl>
 
 
@@ -148,7 +164,7 @@ EXAMPLES
 ========
 
 ```bash
-# use default config file, get all test results by `bob` in LDMSD suite where
+# use default config file, get the latest results by `bob` in LDMSD suite where
 # the target commit-id being `abcdef`
 $ tadaq --test-suite LDMSD --test-user bob --commit-id abcdef
 
@@ -158,11 +174,14 @@ $ tadaq -c /home/bob/tada.cfg
 # use CLI db options
 $ tadaq --db-driver mysql --db-user bob --db-database bobdb
 
-# List results from `MySuite` test suite, but only the latest runs
-$ tadaq --test-suite MySuite --latest
+# List all results from `MySuite` test suite
+$ tadaq --test-suite MySuite --all
 
 # Purge old test runs (keep only the latest runs)
 $ tadaq --purge-old-tests
+
+# Shows only `failed` assertions from tests run by `bob`
+$ tadaq --only-failed --test-user bob
 ```
 
 SEE ALSO
