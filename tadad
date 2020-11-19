@@ -96,7 +96,6 @@ def db_test_finish(obj, result):
     obj.test_finish = int(result["timestamp"])
     obj.commit()
 
-@atexit.register
 def tadad_term():
     log.info("------------ term ------------")
 
@@ -174,6 +173,8 @@ if __name__ == "__main__":
     FORMAT_CONS = '%(asctime)s %(name)-6s %(levelname)-7s %(message)s'
     logging.basicConfig(filename=args.log, level=args.log_level, format=FORMAT_CONS)
     log = logging.getLogger("tadad")
+
+    atexit.register(tadad_term)
 
     if not args.foreground:
         root_logger = logging.getLogger()
