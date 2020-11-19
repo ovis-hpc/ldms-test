@@ -8,10 +8,13 @@ import sys
 import os
 import binascii
 import hashlib
+import atexit
+import signal
+from ctypes import CDLL
 
 from TADA import TADA_DB
 
-log = logging.getLogger('tada_server')
+libc = CDLL(None) # this is actually the main program which includes libc sym.
 
 results = {}
 db = None # the database
@@ -28,8 +31,6 @@ class bcolors:
 
 def tada_server(host='0.0.0.0', port=9862):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
     log.info("Listening on udp %s:%s" % (host, port))
     s.bind((host, port))
     while True:
@@ -37,10 +38,10 @@ def tada_server(host='0.0.0.0', port=9862):
         yield addr, data
 
 def test_start(addr, result):
-    print("{0} - [{1}:{2:5}]".format(result['test-suite'], addr[0], addr[1]))
+    log.info("{0} - [{1}:{2:5}]".format(result['test-suite'], addr[0], addr[1]))
     timestamp = dt.datetime.fromtimestamp(int(result['timestamp']))
-    print("    {0} {1}".format(str(timestamp), result['test-name']))
-    print("    test-id: {0}".format(result["test-id"]))
+    log.info("    {0} {1}".format(str(timestamp), result['test-name']))
+    log.info("    test-id: {0}".format(result["test-id"]))
 
 def test_assert(addr, result):
     status = result['test-status']
@@ -51,7 +52,7 @@ def test_assert(addr, result):
     elif status == 'skipped':
         status = bcolors.WARNING + status + bcolors.ENDC
 
-    print("        {0:10} {1:4} {2}, {3}"
+    log.info("        {0:10} {1:4} {2}, {3}"
           .format(status,
                   result['assert-no'],
                   result['assert-desc'],
@@ -95,12 +96,18 @@ def db_test_finish(obj, result):
     obj.test_finish = int(result["timestamp"])
     obj.commit()
 
+@atexit.register
+def tadad_term():
+    log.info("------------ term ------------")
+
+def tadad_SIGTERM(signum, frame):
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, tadad_SIGTERM)
+
 if __name__ == "__main__":
     if sys.flags.interactive:
         exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
-
-    FORMAT_CONS = '%(asctime)s %(name)-12s %(levelname)8s\t%(message)s'
-    logging.basicConfig(level=logging.DEBUG, format=FORMAT_CONS)
 
     # program argparse
     parser = argparse.ArgumentParser()
@@ -112,6 +119,14 @@ if __name__ == "__main__":
                         "is processed.")
     parser.add_argument("--port", "-p", help="Port number for tada server",
                         type=int, default=9862)
+    parser.add_argument("--foreground", "-F", action="store_true",
+                        help="Run in foreground instead of daemonizing.")
+    parser.add_argument("--log", "-l", help="Log file (default: tadad.log)",
+                        type=str, default="tadad.log")
+    parser.add_argument("--log-level", "-L", type=str, default="INFO",
+                        help="Log level. Possible values are: "
+                        "DEBUG, INFO, WARNING, ERROR, and CRITICAL "
+                        "(default: INFO)")
     parser.add_argument("--db-driver", type=str, default="sqlite",
                         help="The database driver (sqlite, mysql or pgsql).")
     parser.add_argument("--db-database", type=str, default="tada_db",
@@ -155,6 +170,20 @@ if __name__ == "__main__":
 
     # parse the remaining arguments
     args = parser.parse_args()
+
+    FORMAT_CONS = '%(asctime)s %(name)-6s %(levelname)-7s %(message)s'
+    logging.basicConfig(filename=args.log, level=args.log_level, format=FORMAT_CONS)
+    log = logging.getLogger("tadad")
+
+    if not args.foreground:
+        root_logger = logging.getLogger()
+        lfd = root_logger.handlers[0].stream.fileno()
+        libc.close(0)     # stdin
+        libc.dup2(lfd, 1) # stdout to log
+        libc.dup2(lfd, 2) # stderr to log
+        libc.daemon(1, 1)
+
+    log.info("============ start ============")
 
     db = TADA_DB(**args.__dict__)
 
