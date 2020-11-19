@@ -55,8 +55,8 @@ if __name__ == "__main__":
     parser.add_argument("--only-skipped", action = "store_true")
 
     # options regarding re-run tests
-    parser.add_argument("--latest", action = "store_true",
-                        help="Get only the latest test among the reruns.")
+    parser.add_argument("--all", action = "store_true",
+                        help="Show all records instead of the latest results.")
     parser.add_argument("--purge-old-tests", action = "store_true",
                         help="Purge old reruns.")
 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
 
     fltr = { k: v  for k,v in args.__dict__.items() \
                        if k in FILTERS and v != None }
-    objs = db.findTests(latest = args.latest, **fltr)
+    objs = db.findTests(latest = not args.all, **fltr)
     for o in objs:
         print("{o.test_suite} - {o.test_user} - commit_id: {o.commit_id}" \
               .format(o = o))
