@@ -10,6 +10,7 @@ import docker
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
@@ -223,6 +224,31 @@ cont.exec_run("rm -f /db/*.out")
 #### Start ####
 test.start()
 
+@atexit.register
+def cleanup():
+    # cleanup at exit
+    log.info("-- Finishing Test --")
+    test.finish()
+    if args.debug:
+        return # do not cleanup files/cluster when --debug is given
+    log.info("-- Cleaning up files --")
+    _list = [ "bad.json", "bad_config.sh", "missing_cfg_attr.sh", "no_papi.sh",
+              "papi0.papi.json", "papi0.sh",
+              "papi1.papi.json", "papi1.sh",
+              "papi10.papi.json", "papi10.sh",
+              "slurm-2.out",
+              "slurm-3.out",
+              "slurm-4.out",
+              "slurm-5.out",
+              "slurm-6.out",
+              "slurm-7.out",
+            ]
+    _list = [ "/db/{}".format(x) for x in _list ]
+    cmd = "rm -f " + (" ".join(_list))
+    cluster.exec_run(cmd)
+    log.info("-- Removing the virtual cluster --")
+    cluster.remove()
+
 log.info("-- Start daemons --")
 cluster.start_daemons()
 
@@ -395,29 +421,11 @@ while True: # will break
     cont = cluster.get_container("node-1")
     jobid10 = submit_papi_job("papi10", num_tasks=2, duration=2,
                               papi_config = papi_config10)
-    time.sleep(2)
+    time.sleep(5)
     rc, out = cont.exec_run("grep \"PAPI error .* translating event code 'FOO'\" /var/log/ldmsd.log")
     msg = out.split('ERROR', 1)[-1].strip()
     test.assert_test(10, rc == 0, msg)
     break
 
 #### Finish ####
-log.info("-- Finishing Test --")
-test.finish()
-log.info("-- Cleaning up files --")
-_list = [ "bad.json", "bad_config.sh", "missing_cfg_attr.sh", "no_papi.sh",
-          "papi0.papi.json", "papi0.sh",
-          "papi1.papi.json", "papi1.sh",
-          "papi10.papi.json", "papi10.sh",
-          "slurm-2.out",
-          "slurm-3.out",
-          "slurm-4.out",
-          "slurm-5.out",
-          "slurm-6.out",
-          "slurm-7.out",
-        ]
-_list = [ "/db/{}".format(x) for x in _list ]
-cmd = "rm -f " + (" ".join(_list))
-cluster.exec_run(cmd)
-log.info("-- Removing the virtual cluster --")
-cluster.remove()
+sys.exit(0) # see cleanup() function
