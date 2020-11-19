@@ -200,7 +200,7 @@ spec = {
                 {
                     "name" : "agg",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 400000,
+                    "offset" : 200000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "node-{}".format(i*2+j),
@@ -221,7 +221,7 @@ spec = {
                 {
                     "name" : "aggregator",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 800000,
+                    "offset" : 400000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "agg-1{}".format(i),
