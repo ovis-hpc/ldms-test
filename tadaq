@@ -2,10 +2,13 @@
 
 import os
 import sys
+import pwd
 import argparse
 import datetime as dt
 
 from TADA import TADA_DB
+
+USER = pwd.getpwuid(os.getuid()).pw_name
 
 class bcolors:
     HEADER = '\033[95m'
@@ -48,7 +51,9 @@ if __name__ == "__main__":
     parser.add_argument("--test-suite", type=str, help="Test suite filter.")
     parser.add_argument("--test-type", type=str, help="Test type filter.")
     parser.add_argument("--test-name", type=str, help="Test name filter.")
-    parser.add_argument("--test-user", type=str, help="Test user filter.")
+    parser.add_argument("--test-user", type=str, default=USER,
+                        help="Test user filter. The default is the user "
+                        "calling the script. \"*\" matches all users.")
     parser.add_argument("--commit-id", type=str, help="commit-id filter.")
     parser.add_argument("--only-passed", action = "store_true")
     parser.add_argument("--only-failed", action = "store_true")
@@ -90,6 +95,9 @@ if __name__ == "__main__":
 
     # parse the remaining arguments
     args = parser.parse_args()
+
+    if args.test_user == "*":
+        args.test_user = None
 
     db = TADA_DB(**args.__dict__)
 
