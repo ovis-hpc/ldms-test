@@ -1,13 +1,16 @@
 #!/bin/bash
 #
 # Usage: ./test-all.sh         # or
-#        OVIS_PREFIX=/my/ovis ./test-all.sh
+#        OVIS_PREFIX=/my/ovis LOG=/my/log ./test-all.sh
 #
 # If OVIS_PREFIX environment variable is not specified, `/opt/ovis` is used.
-# The output is printed to STDOUT and is also logged to `test-all.log`.
+#
+# The output is printed to STDOUT and is also logged to a log file pointed to by
+# LOG environment varaible. The default LOG is ${HOME}/test-all.log.
 
 # Use /opt/ovis by default
 OVIS_PREFIX=${OVIS_PREFIX:-/opt/ovis}
+LOG=${LOG:-${HOME}/test-all.log}
 
 LIST=(
 agg_slurm_test
@@ -47,4 +50,4 @@ for T in ${LIST[*]}; do
 	echo ${CMD}
 	${CMD}
 	echo "----------------------------------------------"
-done 2>&1 | tee test-all.log
+done 2>&1 | tee ${LOG}
