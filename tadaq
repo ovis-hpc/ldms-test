@@ -101,6 +101,15 @@ if __name__ == "__main__":
                        if k in FILTERS and v != None }
     objs = db.findTests(latest = not args.all, **fltr)
     for o in objs:
+        sorted_assertions = sorted(o.assertions, key = lambda a: float(a.assert_id))
+        fltr_assertions = list(filter(lambda x: \
+                x.assert_result == "failed" if args.only_failed else \
+                x.assert_result == "skipped" if args.only_skipped else \
+                x.assert_result == "passed" if args.only_passed else \
+                True
+            , sorted_assertions))
+        if not fltr_assertions:
+            continue
         print("{o.test_suite} - {o.test_user} - commit_id: {o.commit_id}" \
               .format(o = o))
         start = dt.datetime.fromtimestamp(int(o.test_start))
@@ -109,18 +118,8 @@ if __name__ == "__main__":
                         .format(o.test_name, start, finish))
         print("        {.test_desc}".format(o))
         print("    test-id: {.test_id}".format(o))
-        sorted_assertions = sorted(o.assertions, key = lambda a: float(a.assert_id))
-        for a in sorted_assertions:
+        for a in fltr_assertions:
             status = a.assert_result
-            if args.only_failed:
-                if status != "failed":
-                    continue
-            if args.only_skipped:
-                if status != "skipped":
-                    continue
-            if args.only_passed:
-                if status != "passed":
-                    continue
             if status == 'passed':
                 status = bcolors.OKGREEN + 'passed' + bcolors.ENDC
             elif status == 'failed':
