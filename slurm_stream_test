@@ -126,7 +126,7 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "LDMSD",
-                 test_name = "slurm stream test",
+                 test_name = "slurm_stream_test",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)

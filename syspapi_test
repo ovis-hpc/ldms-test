@@ -174,7 +174,7 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "syspapi",
+                 test_name = "syspapi_test",
                  test_desc = "LDMSD syspapi sampler test",
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
