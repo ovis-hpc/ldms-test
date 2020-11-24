@@ -105,6 +105,15 @@ if __name__ == "__main__":
         db.purgeOldTests()
         sys.exit(0)
 
+    if args.commit_id == None:
+        # by default, we should get the most recent test of the caller user
+        obj = db.findFirst(order_by="test_start DESC", test_user=USER)
+        if obj:
+            args.commit_id = obj.commit_id
+        pass
+    if args.commit_id == "*":
+        args.commit_id = None # any commit IDs
+
     fltr = { k: v  for k,v in args.__dict__.items() \
                        if k in FILTERS and v != None }
     objs = db.findTests(latest = not args.all, **fltr)

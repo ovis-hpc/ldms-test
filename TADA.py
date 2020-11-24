@@ -263,6 +263,21 @@ class SQLModel(object):
         return [ cls(_conn, data) for data in lst ]
 
     @classmethod
+    def find_first(cls, _conn, order_by=None, **kwargs):
+        _order_by =  "ORDER BY {}".format(order_by) if order_by else ""
+        cur = _conn.cursor()
+        qparam = conn_qparam(_conn)
+        if kwargs:
+            _cond = "WHERE " + ( " and ".join("{}={}".format(k, qparam) \
+                                    for k in kwargs.keys()) )
+        else:
+            _cond = ""
+        sql = "SELECT * FROM {} {} {}".format(cls.__table__, _cond, _order_by)
+        cur.execute(sql, tuple(map(str, kwargs.values())))
+        data = cur.fetchone()
+        return cls(_conn, data) if data else None
+
+    @classmethod
     def create(cls, _conn, *args, **kwargs):
         """Insert a new record into the table
 
@@ -600,6 +615,10 @@ class TADA_DB(object):
                 _objs[k] = o
             objs = _objs.values()
         return objs
+
+    def findFirst(self, order_by=None, **kwargs):
+        """Find the first test macthing the filtering conditions"""
+        return TADATestModel.find_first(self.conn, order_by=order_by, **kwargs)
 
     def getTest(self, *args, **kwargs):
         """Get the test macthing the criteria or create a new test if not found"""
