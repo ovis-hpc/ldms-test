@@ -345,4 +345,5 @@ else: # loop completed
                                    .format(missing, excess))
     else:
         test.assert_test(4, True, "verified")
+test.finish()
 cluster.remove()
