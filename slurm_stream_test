@@ -46,6 +46,11 @@ COMMIT_ID = args.commit_id
 SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
+DEBUG = args.debug
+
+def dprompt(text):
+    if DEBUG and sys.stdout.isatty():
+        input(text)
 
 #### spec #### -------------------------------------------------------
 spec = {
@@ -118,7 +123,8 @@ spec = {
     "mounts": [
         "{}:/db:rw".format(DB),
     ] + args.mount +
-    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ) +
+    [ "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])) ],
 }
 
 
@@ -293,12 +299,16 @@ test.add_assertion(155, "new job's task replaces oldest slot")
 
 #test.add_assertion(156, "Job data in each metric set reflects matching text file")
 
-
 #### Start! ####
 test.start()
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+cont = cluster.get_container("compute-1")
+rc, out = cont.exec_run("make -C /tada-src/C BUILDDIR=/db/tada/lib")
+if rc:
+    raise RuntimeError("libtada build failed, output: {}".format(out))
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
@@ -394,7 +404,7 @@ def deliver_events(events):
          cont = cluster.get_container("compute-{0}".format(node_id))
          for event in node:
             update_expect_file(json_path+"/event-file.json", event)
-            rc, out = cont.exec_run("/data/tada/lib/test_stream_publish -h compute-{node} -x sock -p 10000"
+            rc, out = cont.exec_run("/db/tada/lib/test_stream_publish -h compute-{node} -x sock -p 10000"
                               " -a munge -s test-slurm-stream -t json -f {fname}"
                                 .format(fname="/db/event-file.json",
                                         node=node_id))
@@ -512,5 +522,7 @@ verify(156, (results == expected_data), 'ldms_ls == text_file')
 log.info("-- Test Finished --")
 
 test.finish()
+
+dprompt("Press ENTER to remove the cluster (Ctrl-C to debug)")
 
 cluster.remove()
