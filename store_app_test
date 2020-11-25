@@ -459,5 +459,7 @@ for mname in thr.get_metric_names():
 else:
     test.assert_test(1, True, "sos data is not empty and sos data < ldms_ls data")
 
+test.finish()
+
 dprompt("Press ENTER to REMOVE the cluster, or Ctrl-C to debug")
 cluster.remove()
