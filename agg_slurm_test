@@ -1,5 +1,29 @@
 #!/usr/bin/env python3
 
+# Setup:
+#   - 2 samplers, each has the following samplers: meminfo, slurm_sampler,
+#     syspapi_sampler, papi_sampler
+#   - agg11 and agg12 as L1 aggregators, agg11 connects to sampler1 and agg12
+#     connects to sampler2
+#   - agg2 as L2 aggregator with:
+#     - store_sos for meminfo data
+#     - store_sos for syspapi_sampler data
+#     - store_slurm for slurm_sampler data
+#     - store_papi for papi_sampler data
+#
+# Scenario:
+#   - all ldmsds start
+#   - wait a while so that syspapi data can populate the store
+#   - submit job1
+#   - submit job2
+#   - wait a while, expecting syspapi to pause and data from papi_sampler shall
+#     populate store_papi
+#   - cancel job1 and job2
+#   - wait for a while, expecting syspapi to resume and its data continue
+#     populating the store.
+#   - terminate all ldmsds
+#   - verify the store data
+
 import os
 import re
 import pwd
@@ -17,6 +41,10 @@ from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -455,15 +483,17 @@ time.sleep(5)
 job_two = cluster.sbatch("/db/job.sh")
 log.info("job_two: {}".format(job_two))
 time.sleep(5)
-job_three = cluster.sbatch("/db/job.sh")
-log.info("job_three: {}".format(job_three))
-time.sleep(25)
-
-if DEBUG and sys.flags.interactive:
-    input("Press ENTER to continue")
+log.info("-- Cancelling jobs --")
+log.info("job_one: {}".format(job_one))
+cluster.scancel(job_one)
+log.info("job_two: {}".format(job_two))
+cluster.scancel(job_two)
+time.sleep(60)
 
 for C in cluster.containers:
     C.kill_ldmsd()
+
+time.sleep(5)
 
 def sos_query(dcont, scont, schema, idx):
     rc, out = dcont.exec_run("sos_cmd -C {} -q -S {} -X {} -f json"\
@@ -481,10 +511,10 @@ def check_timestamp(data, interval=1):
     comps = {}
     for obj in data:
         comp_id = obj["component_id"]
-        comp_data = comps.get(comp_id, [])
+        comp_data = comps.setdefault(comp_id, list())
         comp_data.append(obj)
-        comps.setdefault(comp_id, comp_data)
     count = 0
+    D.comps = comps
     jumps = []
     for comp_data in comps.values():
         comp_data.sort(key = lambda x: float(x['timestamp']))
@@ -498,6 +528,32 @@ def check_timestamp(data, interval=1):
             prev = x
     return count, jumps
 
+def check_papi(data):
+    # check papi/syspapi data
+    data.sort(key = lambda x: float(x['timestamp']))
+    comps = {}
+    for obj in data:
+        comp_id = obj["component_id"]
+        comp_data = comps.setdefault(comp_id, list())
+        comp_data.append(obj)
+    is_syspapi = lambda x: x['schema'] == 'syspapi'
+    is_not_syspapi = lambda x: x['schema'] != 'syspapi'
+    chk = [is_syspapi, is_not_syspapi]
+    _ret = {}
+    for comp_id, comp_data in comps.items():
+        switches = []
+        chk_idx = 0
+        check = chk[chk_idx]
+        for d in comp_data:
+            if check(d):
+                continue
+            # switch the checking function
+            switches.append(d)
+            chk_idx = int(not chk_idx)
+            check = chk[chk_idx]
+        _ret[comp_id] = switches
+    return _ret
+
 agg2 = cluster.get_container("agg-2")
 
 slurm = sos_query(agg2, "/{}/slurm/slurm".format(STORE_ROOT), "mt-slurm", "time_job")
@@ -509,7 +565,7 @@ meminfo = sos_query(agg2, "/{}/sos/meminfo".format(STORE_ROOT), "meminfo", "time
 
 # Slurm data check
 #test.add_assertion(2, "slurm data verification")
-slurm_expect = set([(j,r) for j in [job_one, job_two, job_three] \
+slurm_expect = set([(j,r) for j in [job_one, job_two] \
                           for r in [0,1]])
 s = set([ (int(o['job_id']), int(o['task_rank'])) for o in slurm ])
 test.assert_test(2, s == slurm_expect, "get expected data from store")
@@ -522,12 +578,14 @@ test.assert_test(3, len(meminfo) > 5 and missing_counts == 0, "No data missing")
 # papi data check
 #test.add_assertion(4, "(SYS/JOB) PAPI data verification")
 papi = syspapi + papi_ld_ins + papi_tot_cyc + papi_sr_ins
-missing_counts, jumps = check_timestamp(papi)
-for a, b in jumps:
-    # verify that each jump (missing data) is a transition between
-    # jobpapi and syspapi
-    if "syspapi" not in [a['schema'], b['schema']] or a['schema'] == b['schema']:
-        test.assert_test(4, False, "papi data missing: {}".format([a,b]))
+comp_switches = check_papi(papi)
+for comp, switches in comp_switches.items():
+    # For each component, we expect the storing data to be syspapi first, then
+    # switch to papi (b/c job started), then switch back to syspapi (b/c job
+    # terminated). So, we expect 2 switches.
+    if len(switches) != 2:
+        test.assert_test(4, False, "Wrong papi_sampler/syspapi_sampler "
+                                   "switching: {}".format(switches))
         break
 else: # loop does not break
     if not papi_tot_cyc:
@@ -543,4 +601,6 @@ else: # loop does not break
 
 test.finish()
 cleanup_db(cluster)
+if DEBUG and sys.flags.interactive:
+    input("Press ENTER to remove cluster (Ctrl-C to debug)")
 cluster.remove() # this destroys entire cluster
