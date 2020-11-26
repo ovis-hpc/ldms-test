@@ -19,6 +19,7 @@ ldmsd_auth_ovis_test
 ldmsd_auth_test
 ldmsd_ctrl_test
 ldmsd_stream_test
+mt-slurm-test
 ovis_ev_test
 papi_sampler_test
 papi_store_test
