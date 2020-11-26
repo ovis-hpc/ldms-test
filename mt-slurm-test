@@ -188,6 +188,7 @@ spec = {
     "env" : { "FOO": "BAR" },
     "mounts": [
         "{}:/db:rw".format(DB),
+        "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])),
     ] + args.mount +
     ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }
@@ -196,7 +197,7 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "LDMSD",
-                 test_name = "slurm store test",
+                 test_name = "mt-slurm-test",
                  tada_addr = args.tada_addr)
 
 test.add_assertion(1, "Every job in input data represented in output")
@@ -494,6 +495,11 @@ test.start()
 print("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
+cont = cluster.get_container("headnode")
+rc, out = cont.exec_run("make -C /tada-src/C BUILDDIR=/db/tada/lib")
+if rc:
+    raise RuntimeError("libtada build failed, output: {}".format(out))
+
 print("-- Start daemons --")
 cluster.start_daemons()
 
@@ -593,7 +599,7 @@ def deliver_events(events):
          cont = cluster.get_container("compute-{0}".format(int(node[0]['data']['nodeid'])+1))
          for event in node:
             update_expect_file(json_path+"/event-file.json", event)
-            rc, out = cont.exec_run("/data/tada/lib/test_stream_publish -h compute-{node} -x sock -p 10000"
+            rc, out = cont.exec_run("/db/tada/lib/test_stream_publish -h compute-{node} -x sock -p 10000"
                               " -a munge -s test-slurm-stream -t json -f {fname}"
                                 .format(fname="/db/event-file.json",
                                         node=int(node[0]['data']['nodeid'])+1))
