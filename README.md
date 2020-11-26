@@ -1,8 +1,15 @@
+Quick Links
+===========
+
+* [How to develop a test](#toc) (this document)
+* [How to run test scripts](TEST.md)
+* [tadad(1)](tadad.md)
+* [tadaq(1)](tadaq.md)
+
+
 TOC
 ===
 
-* [tadad](tadad.md)
-* [tadaq](tadaq.md)
 * [Overview](#overview)
 * [SYNOPSIS](#synopsis)
 * [Docker Host Cluster Setup](#docker-host-cluster-setup)
