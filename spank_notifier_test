@@ -121,7 +121,7 @@ def submit_job(cluster, num_tasks):
                     '#SBATCH -n {num_tasks}\n'\
                     '#SBATCH -D /db\n'\
                     'export SUBSCRIBER_DATA=\'{{"sub":"data"}}\'\n'\
-                    'srun bash /db/show_spank_env.sh\n'\
+                    'srun /bin/bash /db/show_spank_env.sh\n'\
                     .format(
                         num_tasks = num_tasks,
                     ))
@@ -448,7 +448,7 @@ if __name__ == "__main__":
                     '#SBATCH --output spank_test.out\n'\
                     '#SBATCH -D /db\n'\
                     'export SUBSCRIBER_DATA=\'{"sub":"data"}\'\n'\
-                    'srun bash /db/crash_stream_listener.sh\n')
+                    'srun /bin/bash /db/crash_stream_listener.sh\n')
 
     log.info("-- Submitting job that crashes listener --")
     jobid = cluster.sbatch("/db/spank_job_2.sh")
