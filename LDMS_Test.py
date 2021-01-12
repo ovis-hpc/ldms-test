@@ -2235,7 +2235,8 @@ class LDMSDCluster(BaseCluster):
         """
         _base = os.path.basename(script_path)
         _dir = os.path.dirname(script_path)
-        rc, out = self.exec_run("sbatch " + _base, workdir = _dir)
+        rc, out = self.exec_run("bash -c \"sbatch {}\"".format(_base),
+                                workdir = _dir)
         if rc:
             raise RuntimeError("sbatch error, rc: {}, output: {}"\
                                     .format(rc, out))
