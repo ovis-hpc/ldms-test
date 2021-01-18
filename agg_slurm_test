@@ -111,6 +111,7 @@ common_plugin_config = [
         "component_id=%component_id%",
         "instance=%hostname%/%plugin%",
         "producer=%hostname%",
+        "job_set=%hostname%/slurm_sampler",
     ]
 spec = {
     "name" : CLUSTERNAME,
@@ -167,13 +168,13 @@ spec = {
             "!extends" : "ldmsd-base",
             "samplers" : [
                 {
-                    "plugin" : "meminfo",
-                    "!extends" : "sampler_plugin",
-                },
-                {
                     "plugin" : "slurm_sampler",
                     "!extends" : "sampler_plugin",
                     "start" : False, # override
+                },
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
                 },
                 {
                     "plugin" : "syspapi_sampler",
@@ -479,10 +480,9 @@ time.sleep(5)
 log.info("-- Submitting jobs --")
 job_one = cluster.sbatch("/db/job.sh")
 log.info("job_one: {}".format(job_one))
-time.sleep(5)
 job_two = cluster.sbatch("/db/job.sh")
 log.info("job_two: {}".format(job_two))
-time.sleep(5)
+time.sleep(10)
 log.info("-- Cancelling jobs --")
 log.info("job_one: {}".format(job_one))
 cluster.scancel(job_one)
@@ -565,9 +565,9 @@ meminfo = sos_query(agg2, "/{}/sos/meminfo".format(STORE_ROOT), "meminfo", "time
 
 # Slurm data check
 #test.add_assertion(2, "slurm data verification")
-slurm_expect = set([(j,r) for j in [job_one, job_two] \
+slurm_expect = set([(j,r, "job.sh", "root") for j in [job_one, job_two] \
                           for r in [0,1]])
-s = set([ (int(o['job_id']), int(o['task_rank'])) for o in slurm ])
+s = set([ (int(o['job_id']), int(o['task_rank']), o['job_name'], o['job_user'] ) for o in slurm ])
 test.assert_test(2, s == slurm_expect, "get expected data from store")
 
 # meminfo data check
@@ -600,7 +600,7 @@ else: # loop does not break
         test.assert_test(4, True, "No data missing")
 
 test.finish()
-cleanup_db(cluster)
 if DEBUG and sys.flags.interactive:
     input("Press ENTER to remove cluster (Ctrl-C to debug)")
+cleanup_db(cluster)
 cluster.remove() # this destroys entire cluster
