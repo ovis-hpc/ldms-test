@@ -47,7 +47,7 @@ syspapi_test
 
 for T in ${LIST[*]}; do
 	echo "======== ${T} ========"
-	CMD="./${T} --prefix ${OVIS_PREFIX}"
+	CMD="./${T} --prefix ${OVIS_PREFIX} $@"
 	echo ${CMD}
 	${CMD}
 	echo "----------------------------------------------"
