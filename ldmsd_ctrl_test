@@ -333,7 +333,9 @@ def prdcr_updtr_routine(_id, ls_host, ctrl, prompt):
              "updtr_add name=updtr interval=1000000 offset=500000\n",
              "updtr_prdcr_add name=updtr regex=prdcr\n",
              "updtr_start name=updtr\n" ]
-    ctrl.write("".join(cmds))
+    for c in cmds:
+        ctrl.write(c)
+        time.sleep(0.5)
     _out = ctrl.read(0.5)
     out = _out.replace(" \r", "").splitlines()
     eout = prompt.join(cmds + ['']).splitlines()
