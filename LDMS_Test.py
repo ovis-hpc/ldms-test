@@ -325,7 +325,7 @@ def add_common_args(parser):
             help = "Specify the user who run the test.")
     parser.add_argument("--prefix", type = str,
             default = guess_ovis_prefix(),
-            help = "The OVIS installation prefix.")
+            help = "The OVIS installation path on the host. This will be mounted to /opt/ovis in containers.")
     parser.add_argument("--src", type = str,
             help = "The path to OVIS source tree (for gdb). " \
             "If not specified, src tree won't be mounted.")
