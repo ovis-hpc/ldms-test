@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 
 spec = {
     "name" : "REPLACE_ME",
-    "description" : "cluster for ldmsd_stream_test",
+    "description" : "cluster for prdcr_subscribe_test",
     "templates" : { # generic template can apply to any object by "!extends"
         "compute-node" : {
             "daemons" : [
