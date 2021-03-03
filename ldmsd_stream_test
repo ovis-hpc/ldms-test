@@ -1,0 +1,500 @@
+#!/usr/bin/env python3
+
+"""
+The script tests the ldmsd_stream_publish and ldmsd_stream_publish_file APIs
+as well as the ldmsd_stream_subscribe and the ldmsd_stream_publish programs.
+
+The script tests weather the APIs and program send the data correctly or not.
+The data used in the test is smaller and larger than the maximum message length.
+
+ldmsd_stream_publish ---> ldmsd_stream_subscribe
+ldmsd_stream_publish ---> samplerd with the test_stream_sampler plugin
+                                ||        |
+                                ||        |
+                                ||        V
+                               agg with the test_stream_sampler plugin
+"""
+
+import argparse
+import io
+import itertools
+import json
+import logging
+import os
+import sys
+import TADA
+import time
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, D, process_args, add_common_args
+from time import sleep
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+# Exception class
+class LDMSDStreamTestFail(Exception):
+    pass
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Run test scenario of 4 samplers " \
+                             "(or more) -> 2 x agg-1 -> agg-2." )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+LDMSD_PORT = 10000
+LDMSD_XPRT = "sock"
+DOCKER_IMAGE = "ovis-centos-build"
+DATA_ROOT = args.data_root
+
+#### Constant variables #### ----------------------------
+STREAM_NAME = "test_stream"
+TADA_LIB = "/data/tada/lib"
+TADA_SRC = "/tada-src"
+DATA_DIR = "/data"
+
+SUBSCRIBERS = [ "subscriber", "samplerd", "agg" ]
+STREAM_TYPES = [ "json", "string" ]
+DATA_SIZES = [ "large", "small" ]
+
+STREAM_DATA = {"large": "/large-data.json",
+               "small" : "/small-data.json"}
+
+PORTS = { "json"   : LDMSD_PORT + 1,
+          "string" : LDMSD_PORT + 2}
+
+SAMPLE_SIZES = { "large": 100, "small" : 1000 }
+
+STREAM_OUT = {}
+for pg in SUBSCRIBERS:
+    STREAM_OUT[pg] = {}
+    for sz in DATA_SIZES:
+        STREAM_OUT[pg][sz] = {}
+        for t in STREAM_TYPES:
+            STREAM_OUT[pg][sz][t] = "{}-{}-{}.out".format(pg, sz, t)
+
+#### spec #### ------------------------------
+
+SSH_DAEMON = [{ "name" : "sshd", "type" : "sshd" }]
+
+spec = {
+    "name" : args.clustername,
+    "description" : "{}'s ldmsd_stream_test".format(args.user),
+    "type" : "FVT",
+    "templates" : {
+        "ldmsd-daemon" : {
+                "type" : "ldmsd",
+                "listen" : [
+                    { "port": LDMSD_PORT, "xprt" : LDMSD_XPRT}
+                ],
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "publisher",
+            "daemons" : SSH_DAEMON
+        },
+        {
+            "hostname" : "subscriber",
+            "daemons" : SSH_DAEMON
+        },
+        {
+            "hostname" : "samplerd",
+            "daemons" : SSH_DAEMON + [
+                {
+                    "name" : "samplerd",
+                    "!extends" : "ldmsd-daemon"
+                }
+            ]
+        },
+        {
+            "hostname" : "agg",
+            "daemons" : SSH_DAEMON + [
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-daemon",
+                    "prdcrs" : [
+                        {
+                            "name" : "samplerd",
+                            "host" : "samplerd",
+                            "port" : LDMSD_PORT,
+                            "xprt" : LDMSD_XPRT,
+                            "type" : "active",
+                            "interval" : 1000000
+                        }
+                    ],
+                    "config" : [
+                        "prdcr_start_regex regex=.*"
+                    ]
+                }
+            ]
+        }
+    ],
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN"],
+    "image" : DOCKER_IMAGE,
+    "ovis_prefix": args.prefix,
+    "env" : {
+        "LD_LIBRARY_PATH" : TADA_LIB + ":/opt/ovis/lib:/opt/ovis/lib64",
+        "LDMSD_PLUGIN_LIBPATH" : TADA_LIB + ":/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
+        "PYTHONPATH" : "/opt/ovis/lib/python3.6/site-packages",
+    },
+    "mounts" : args.mount + [
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), TADA_SRC),
+        "{0}:{1}:rw".format(DATA_ROOT, DATA_DIR),
+        ] + (["{0}:{0}:ro".format(args.src)] if args.src else [])
+}
+
+#### functions #### ------------------------------------------------------------
+def get_assert_no():
+    try:
+        get_assert_no.counter += 1
+    except AttributeError:
+        get_assert_no.counter = 1
+    return get_assert_no.counter
+
+ASSERTIONS = {}
+def add_assertion(_test, name, desc):
+    ASSERTIONS[name] = get_assert_no()
+    _test.add_assertion(ASSERTIONS[name], desc)
+
+def rm(path):
+    if os.path.exists(path):
+        os.remove(path)
+
+def get_msg_max(cont):
+    fname = TADA_LIB + "/get_msg_max.py"
+    script = \
+        "#!/usr/bin/env python3\n" \
+        "from ovis_ldms import ldms\n" \
+        "x = ldms.Xprt()\n" \
+        "print(x.msg_max)"
+    cont.write_file(fname, script)
+    cont.exec_run("chmod +x {}".format(fname))
+    rc, out = cont.exec_run(fname)
+    if rc:
+        raise RuntimeError("Failed to get maximum message length")
+    return int(out)
+
+def data_sz_get(data_sz, max_msg_len):
+    if data_sz == "small":
+        return int(max_msg_len / 2)
+    elif data_sz == "large":
+        return int(max_msg_len * 4)
+    else:
+        raise ValueError("Invalid data size {}".format(data_sz))
+
+def stream_source_path_get(data_sz, is_host):
+    if is_host:
+        dpath = DATA_ROOT
+    else:
+        dpath = DATA_DIR
+    return "{0}/{1}".format(dpath, STREAM_DATA[data_sz])
+
+def stream_out_path_get(sub_name, data_sz, stream_type, is_host):
+    if is_host:
+        dpath = DATA_ROOT
+    else:
+        dpath = DATA_DIR
+    return "{0}/{1}".format(dpath, STREAM_OUT[sub_name][data_sz][stream_type])
+
+def prdcr_subscribe(cont):
+    return cont.config_ldmsd(["prdcr_subscribe regex=.* stream={}".format(STREAM_NAME)])
+
+def term_test_stream_sampler(cont):
+    return cont.config_ldmsd(["term name=test_stream_sampler"])
+
+def start_test_stream_sampler(cont, stream_type, data_sz):
+    return cont.config_ldmsd(["load name=test_stream_sampler",
+                            "config name=test_stream_sampler stream={sname} " \
+                            "output={fout}".format(sname = STREAM_NAME,
+                                fout=stream_out_path_get(cont.hostname,
+                                        data_sz, stream_type, False))])
+
+def start_subscriber(cont, port, fout):
+    cmd = "bash -c \"" \
+          "ldmsd_stream_subscribe -x {xprt} -p {port} -s {name} -f {fout} &" \
+          "\"".format( xprt = LDMSD_XPRT,
+                       port = port,
+                       name = STREAM_NAME,
+                       fout = fout)
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError("Failed to start ldmsd_stream_subscribe. Error {0}: {1}".format(rc, out))
+
+def kill_subscriber(cont):
+    rc, out = cont.exec_run("pgrep -f ldmsd_stream_subscribe")
+    if rc:
+        raise
+    else:
+        rc, out = cont.exec_run("kill {}".format(out))
+        if rc:
+            raise
+
+def start_publisher(cont, host, port, stream_type, fin):
+    cmd = "bash -c \"" \
+          "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -s {name} -t {type} -f {fin} &" \
+          "wait" \
+          "\"".format( host = host,
+                       xprt = LDMSD_XPRT,
+                       port = port,
+                       name = STREAM_NAME,
+                       type = stream_type,
+                       fin = fin)
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError("Failed to start ldmsd_stream_publish. Error {}".format(rc))
+
+def subscriber_output_check(fout, fin, t, count):
+    LEAD_FMT='EVENT:{{"type":"{0}","size":{1},"event":'
+    
+    def consume(f, e, lead_str):
+        """Consume expected string `e` from the file `f`"""
+        # Consume lead string first
+        sleep(0.05)
+        s = f.read(len(lead_str))
+        if len(s) != len(lead_str):
+            raise LDMSDStreamTestFail("Expecting more data, but EOF is reached.")
+        assert(s == lead_str)
+        s = f.read(len(e))
+        if len(s) != len(e):
+            raise LDMSDStreamTestFail("Expecting more data, but EOF is reached.")
+        assert(s == e)
+        s = f.read(2) # '}\n'
+        if len(s) != 2:
+            raise LDMSDStreamTestFail("Expecting more data, but EOF is reached.")
+        assert(s == '}\n')
+
+    fi = open(fin)
+    fo = open(fout)
+    in_str = fi.read()
+    lead_str = LEAD_FMT.format(t, len(in_str))
+
+    for i in range(0, count):
+        consume(fo, in_str, lead_str)
+
+    # Check if fo is depleted
+    pos = fo.tell()
+    end = fo.seek(0, 2)
+    if pos != end:
+        raise LDMSDStreamTestFail("output file has more data than expected.")
+    return True
+
+def test_stream_sampler_check(fin, fout, count):
+    def read_msg(_file):
+        """Read a message "\x01...\x03" from `_file` file handle"""
+        pos = _file.tell()
+        sio = io.StringIO()
+        c = _file.read(1)
+        if not c:
+            raise LDMSDStreamTestFail("End of file")
+        if c != "\x01":
+            _file.seek(pos)
+            raise LDMSDStreamTestFail("not a start of message")
+        c = _file.read(1)
+        while c and c != "\x02":
+            sio.write(c)
+            c = _file.read(1)
+        if c != "\x02":
+            _file.seek(pos)
+            raise LDMSDStreamTestFail("Bad message header")
+        _type = sio.getvalue()
+        sio = io.StringIO() # reset sio
+        c = _file.read(1)
+        while c and c != "\x03":
+            sio.write(c)
+            c = _file.read(1)
+        if c != "\x03":
+            _file.seek(pos)
+            raise LDMSDStreamTestFail("incomplete message")
+        text = sio.getvalue()
+        text = text.strip('\x00')
+        obj = None
+        if _type == "json":
+            obj = json.loads(text)
+        return { "type": _type, "text": text, "obj": obj}
+
+    fo = open(fout)
+    fi = open(fin)
+    in_str = fi.read()
+    try:
+        in_obj = json.loads(in_str)
+    except:
+        in_obj = None
+
+    for i in range(0, count):
+        m = read_msg(fo)
+        if m["type"] == "json":
+            if in_obj == m["obj"]:
+                return True
+            else:
+                return False
+        if m["type"] == "string":
+            if in_str == m["text"]:
+                return True
+            else:
+                return False
+
+    # Check if fo is depleted
+    pos = fo.tell()
+    end = fo.seek(0, 2)
+    if pos != end:
+        raise RuntimeError("output file has more data than expected.")
+
+# Prepare the test
+for x in STREAM_OUT.values(): # subscribers
+    for y in x.values(): # types
+        for z in y.values(): # sizes
+            rm(z)
+
+#### test definition ### -------------------------------------------------------
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_stream_test",
+                 test_desc = "ldmsd_stream ...", #TODO
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr)
+
+# Add assertions
+for t in STREAM_TYPES:
+    for sz in DATA_SIZES:
+        if sz == "small":
+            _sz = "smaller"
+        elif sz == "large":
+            _sz = "larger"
+        else:
+            raise ValueError("Unknow data sizes - {}".format(sz))
+        for sub in SUBSCRIBERS:
+            if sub == "subscriber":
+                _n = "ldmsd_stream_subscribe"
+            else:
+                _n = sub
+            add_assertion(test, "{0}-{1}-{2}".format(sub, t, sz),
+                  "{n} receives {sz} {t} streams".format(n=_n, sz=sz, t=t))
+
+test.start()
+
+cluster = LDMSDCluster.get(args.clustername, create = True, spec = spec)
+
+# Build test_stream_sampler
+cont = cluster.get_container("samplerd")
+rc, out = cont.exec_run("make -C {0}/C BUILDDIR={1}".format(TADA_SRC, TADA_LIB))
+if rc:
+    raise RuntimeError("libtada build failed, output: {}".format(out))
+
+# Start daemons on each node
+cluster.start_daemons()
+
+# Wait for daemons to be ready
+time.sleep(5)
+
+# Test ldmsd_stream_subscriber + publisher
+def subscriber_case(sub_cont, pub_cont, hostname, stream_type, data_sz):
+    global args
+    global test
+
+    log.info("test ldmsd_stream_subscribe with {0} {1} streams".format(data_sz, stream_type))
+    cont_fin = stream_source_path_get(data_sz, False)
+    host_fin = stream_source_path_get(data_sz, True)
+    cont_fout = stream_out_path_get(sub_cont.hostname, data_sz, stream_type, False)
+    host_fout = stream_out_path_get(sub_cont.hostname, data_sz, stream_type, True)
+
+    start_subscriber(sub_cont, PORTS[stream_type], cont_fout)
+    log.info("--- Sending stream to ldmsd_stream_subscriber")
+    for i in range(0, SAMPLE_SIZES[data_sz]):
+        start_publisher(pub_cont, hostname, PORTS[stream_type], stream_type, cont_fin)
+
+    log.info("--- Verifying the received streams")
+    _assert_name = "subscriber-{0}-{1}".format(stream_type, data_sz)
+    _verify_msg = "Verify all streams were received correctly"
+    try:
+        result = subscriber_output_check(host_fout, host_fin, stream_type, SAMPLE_SIZES[data_sz])
+    except LDMSDStreamTestFail as e:
+        test.assert_test(ASSERTIONS[_assert_name], False, e)
+    except:
+        raise
+    else:
+        test.assert_test(ASSERTIONS[_assert_name], result, _verify_msg)
+    if not args.debug:
+        rm(host_fout)
+    kill_subscriber(sub_cont)
+
+def ldmsd_case(pub_cont, samplerd_cont, agg_cont, stream_type, data_sz):
+    global test
+    global args
+
+    log.info("test LDMSD with {0} {1} streams".format(data_sz, stream_type))
+    host_fin = stream_source_path_get(data_sz, True)
+    cont_fin = stream_source_path_get(data_sz, False)
+    host_samplerd_fout = stream_out_path_get(samplerd_cont.hostname, data_sz, stream_type, True)
+    host_agg_fout = stream_out_path_get(agg_cont.hostname, data_sz, stream_type, True)
+
+    rc, out = start_test_stream_sampler(samplerd_cont, stream_type, data_sz)
+    if rc:
+        raise LDMSDStreamTestFail("samplerd: Failed to load/config/start test_stream_sampler")
+    rc, out = start_test_stream_sampler(agg_cont, stream_type, data_sz)
+    if rc:
+        raise LDMSDStreamTestFail("agg: Failed to load/config/start test_stream_sampler")
+    rc, out = prdcr_subscribe(agg_cont)
+    if rc:
+        raise LDMSDStreamTestFail("agg: Failed prdcr_subscribe")
+
+    log.info("--- Sending stream to samplerd")
+    for i in range(0, SAMPLE_SIZES[data_sz]):
+        start_publisher(pub_cont, samplerd_cont.hostname, LDMSD_PORT, stream_type, cont_fin)
+
+    # Test samplerd output
+    log.info("--- Verifying the streams received by samplerd")
+    _assert_name = "samplerd-{}-{}".format(stream_type, data_sz)
+    _verify_msg = "Verify all streams were received correctly"
+    try:
+        result = test_stream_sampler_check(host_fin, host_samplerd_fout, SAMPLE_SIZES[data_sz])
+    except LDMSDStreamTestFail as e:
+        test.assert_test(ASSERTIONS[_assert_name], False, "{}".format(e))
+    except:
+        raise
+    else:
+        test.assert_test(ASSERTIONS[_assert_name], result, _verify_msg)
+
+    # Test agg output
+    log.info("--- Verifying the streams received by samplerd")
+    _assert_name = "agg-{}-{}".format(stream_type, data_sz)
+    _verify_msg = "Verify all streams were received correctly"
+    try:
+        result = test_stream_sampler_check(host_fin, host_agg_fout, SAMPLE_SIZES[data_sz])
+    except LDMSDStreamTestFail as e:
+        test.assert_test(ASSERTIONS[_assert_name], False, "".format(e))
+    except:
+        raise
+    else:
+        test.assert_test(ASSERTIONS[_assert_name], result, _verify_msg)
+
+    if not args.debug:
+        rm(host_samplerd_fout)
+        rm(host_agg_fout)
+
+sub_cont = cluster.get_container("subscriber")
+pub_cont = cluster.get_container("publisher")
+samplerd_cont = cluster.get_container("samplerd")
+agg_cont = cluster.get_container("agg")
+
+MAX_MSG_LEN = get_msg_max(sub_cont)
+
+# Write stream data files
+for sz in DATA_SIZES:
+    with open(stream_source_path_get(sz, True), "w") as o:
+        o.write("[")
+        o.write("1" * (data_sz_get(sz, MAX_MSG_LEN)))
+        o.write("]")
+
+# Test ldmsd_stream_subscribe
+for t in STREAM_TYPES:
+    for sz in DATA_SIZES:
+        subscriber_case(sub_cont, pub_cont, sub_cont.hostname, t, sz)
+        ldmsd_case(pub_cont, samplerd_cont, agg_cont, t, sz)
+
+test.finish()
