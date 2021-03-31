@@ -350,7 +350,7 @@ def process_args(parsed_args):
     args = parsed_args
     args.clustername = get_cluster_name(args)
     if not args.data_root:
-        args.data_root = "/home/{a.user}/db/{a.clustername}".format(a = args)
+        args.data_root = os.path.expanduser("~{a.user}/db/{a.clustername}".format(a = args))
     if not os.path.exists(args.data_root):
         os.makedirs(args.data_root)
     args.commit_id = get_ovis_commit_id(args.prefix)
