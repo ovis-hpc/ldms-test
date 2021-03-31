@@ -201,6 +201,11 @@ def verify_jobinfo(cluster, test, node_events, jobinfo):
     test.assert_test(assert_no + 3, True, "`task_exit` verified")
     test.assert_test(assert_no + 4, True, "`exit` verified")
 
+def undrain():
+    cont = cluster.get_container("headnode")
+    cont.exec_run("scontrol update node=node-[1-8] state=down reason=undrain")
+    cont.exec_run("scontrol update node=node-[1-8] state=resume")
+
 
 if __name__ == "__main__":
     if sys.flags.interactive:
@@ -298,6 +303,7 @@ if __name__ == "__main__":
                 "required {libdir}/ovis-ldms/libslurm_notifier.so foo=bar" \
                 .format(libdir=args.libdir))
         cont.exec_run("slurmd")
+    undrain()
 
     j0 = submit_job(cluster, num_tasks = 4)
     j1 = submit_job(cluster, num_tasks = 4)
@@ -324,6 +330,9 @@ if __name__ == "__main__":
 
     log.info("-- Start daemons --")
     cluster.start_daemons()
+    time.sleep(2)
+    undrain()
+    time.sleep(2)
 
     # Test Strategy:
     #
