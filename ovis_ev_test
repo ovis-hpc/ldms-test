@@ -52,13 +52,14 @@ spec = {
         }
     ],
     "cap_add" : [ "SYS_PTRACE" ],
-    "image" : "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix" : PREFIX,
-    "env" : { 
+    "env" : {
         "LD_LIBRARY_PATH" : "/data/tada/lib:{0}/lib:{0}/lib64".format(PREFIX),
     },
     "mounts" : [
             "{}:/tada-src:ro".format(os.path.realpath(sys.path[0])),
+            "{}:/data:rw".format(DB),
     ] + args.mount +
     ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }

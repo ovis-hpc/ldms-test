@@ -1,0 +1,62 @@
+#!/bin/sh
+
+set -e
+
+# NOTE: This is to protect the image that needs to start with `-w` to avoid a
+#       huge nubmer of bind mounts for (almost-all) files under /etc (by
+#       singularity).
+mount -o remount,ro,bind / /
+
+# local volatile storage
+mount -t tmpfs tmpfs /local -o size=128M
+
+pushd /local
+umask 0077
+
+# prep some dirs to bind with read-write
+mkdir -p .ldms-test
+mkdir -m 0755 var run
+mkdir -p var/empty/sshd
+mkdir -p var/{log,lib}/munge
+mkdir -p var/spool/slurm/{ctld,d}
+mkdir -m 0755 -p run/munge
+mkdir -m 0755 -p munge
+mkdir -p etc/slurm
+mkdir -p etc/profile.d
+mkdir -p store
+
+# prep files
+touch etc/ldmsd.conf
+touch etc/profile.d/ovis.sh
+ldconfig -C etc/ld.so.cache
+[[ -e var/run ]] || ln -s ../run var/run
+
+# bind
+ENTRIES=( .ldms-test etc/ldmsd.conf etc/profile.d/ovis.sh etc/ld.so.cache
+	  etc/slurm munge run var store )
+for E in ${ENTRIES[*]}; do
+	mount --bind $E /$E
+done
+
+# specs & IP address
+echo "$1" > .ldms-test/cluster_spec.json
+echo "$2" > .ldms-test/node_spec.json
+echo "$3" > .ldms-test/ip_addr
+
+test -z "$3" || {
+	ip addr flush dev eth0;
+	ip addr add "$3" dev eth0;
+}
+
+test -z "$1" || {
+	python3 > .ldms-test/env.sh <<EOF
+import os
+import json
+import shlex
+f = open(".ldms-test/cluster_spec.json")
+spec = json.load(f)
+env = spec.get("env", {})
+for k,v in env.items():
+    print("export {}={}".format(k, shlex.quote(v)))
+EOF
+}

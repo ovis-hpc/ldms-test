@@ -165,7 +165,7 @@ spec = {
 
     #"image": "ovis-centos-build:slurm",
     "cap_add": [ "SYS_PTRACE" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": "REPLACE_ME",
     "env" : {
         "LD_LIBRARY_PATH": "/data/tada/lib:/opt/ovis/lib:/opt/ovis/lib64",

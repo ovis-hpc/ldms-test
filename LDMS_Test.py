@@ -1,30 +1,31 @@
 import os
 import re
+import pdb
 import sys
 import pwd
-import glob
-import time
 import json
-import errno
+import time
+import shlex
 import socket
-import docker
-import ipaddress as ip
-import subprocess
+import subprocess as sp
 
 import TADA
 
-import pdb
-
-from functools import wraps
-from io import StringIO, BytesIO
-from distutils.version import LooseVersion
+from abc import abstractmethod, ABC
+from io import StringIO
 from distutils.spawn import find_executable
+from configparser import ConfigParser, ExtendedInterpolation
 
 from functools import reduce
 
 # `D` Debug object to store values for debugging
 class Debug(object): pass
 D = Debug()
+
+
+# `G` being the convenient global object holder
+class Global(object): pass
+G = Global()
 
 #############
 #  Helpers  #
@@ -142,6 +143,8 @@ def parse_ldms_ls(txt):
     """
     ret = dict()
     lines = txt.splitlines()
+    D.txt = txt
+    D.lines = lines
     itr = iter(lines)
     meta_section = False
     for l in itr:
@@ -153,6 +156,7 @@ def parse_ldms_ls(txt):
             continue
         m = _LS_RE.match(l)
         if not m:
+            D.l = l
             raise RuntimeError("Bad line format: {}".format(l))
         m = m.groupdict()
         if m["meta_begin"]: # start meta section
@@ -257,15 +261,6 @@ def env_dict(env):
         raise TypeError("`env` is not a list nor a dict")
     return dict( e.split("=", 1) for e in env )
 
-def get_docker_clients():
-    """Get all docker clients to dockerds in the swarm"""
-    dc = docker.from_env()
-    nodes = dc.nodes.list()
-    addrs = [ n.attrs["Description"]["Hostname"] for n in nodes ]
-    addrs.sort()
-    return [ docker.DockerClient(base_url = "tcp://{}:2375".format(a)) \
-                    for a in addrs ]
-
 def jprint(obj):
     """Pretty print JSON object"""
     print(json.dumps(obj, indent=2))
@@ -317,7 +312,11 @@ def get_cluster_name(parsed_args):
 
 def add_common_args(parser):
     """Add common arguments for test scripts"""
+    G.parser = parser # global parser
     _USER = pwd.getpwuid(os.geteuid())[0]
+    parser.add_argument("--config", type = str, help = "The configuration file")
+    parser.add_argument("--runtime", type = str, default="docker",
+            help = "The runtime plugin (default: docker).")
     parser.add_argument("--clustername", type = str,
             help = "The name of the cluster. The default is "
             "{USER}-{TEST_NAME}-{COMMIT_ID}.")
@@ -344,16 +343,75 @@ def add_common_args(parser):
                  "container. MODE can be `ro` or `rw`. If MODE is not given, "
                  "the default is `rw`. Example: --mount /mnt/abc:/home:ro."
         )
+    parser.add_argument("--image", type = str, default="ovis-centos-build",
+            help = "The image to run containers with (default: ovis-centos-build)")
+
+def process_config_file(path = None):
+    """Process `ldms-test` configuration file"""
+    G.conf = conf = ConfigParser(interpolation = ExtendedInterpolation(),
+                                 allow_no_value=True)
+    # default config
+    _USER = pwd.getpwuid(os.geteuid())[0]
+    _DEFAULT_CONFIG = {
+            "ldms-test": {
+                "prefix": guess_ovis_prefix(),
+                "runtime": "doker",
+                "clustername": None,
+                "user": _USER,
+                "src": None,
+                "data_root": None,
+                "tada_addr": "tada-host:9862",
+                "debug": False,
+                "mount": "",
+                "image": "ovis-centos-build",
+                },
+            "docker": {
+                },
+            "singularity": {
+                "hosts": "localhost",
+                },
+            }
+    conf.read_dict(_DEFAULT_CONFIG)
+    if not path: # config not spefified, check default location
+        path = sys.path[0]+"/ldms-test.conf"
+        if not os.path.exists(path):
+            return conf
+    conf.read(path)
+    if conf.has_section("ldms-test") and hasattr(G, "parser"):
+        # update args defaults with values from config
+        sect = conf["ldms-test"]
+        keys = set(sect).intersection(G.args.__dict__)
+        df = { k: sect[k] for k in keys }
+        df["mount"] = bash_items(df["mount"])
+        G.parser.set_defaults( **df )
+        # re-parse args
+        args = G.parser.parse_args()
+        G.args.__dict__.update(args.__dict__)
+    return conf
+
+# Process the default config file at load
+process_config_file()
 
 def process_args(parsed_args):
     """Further process the parsed common arguments"""
+    G.args = parsed_args
     args = parsed_args
+    process_config_file(args.config)
     args.clustername = get_cluster_name(args)
     if not args.data_root:
         args.data_root = os.path.expanduser("~{a.user}/db/{a.clustername}".format(a = args))
     if not os.path.exists(args.data_root):
         os.makedirs(args.data_root)
     args.commit_id = get_ovis_commit_id(args.prefix)
+    # then, apply the final args values to the ldms-test config section
+    for k, v in G.args.__dict__.items():
+        if type(v) == list:
+            v = "\n".join(v)
+        G.conf.set("ldms-test", k, str(v))
+    # Then, let the runtime environment module process the configuration as well
+    from importlib import import_module
+    m = import_module("runtime." + G.args.runtime)
+    m.process_config(G.conf)
     if args.debug:
         TADA.DEBUG = True
 
@@ -384,6 +442,35 @@ def debug_prompt(prompt = "Press ENTER to continue or Ctrl-C to debug"):
         else:
             raise RuntimeError("Unknown python version: {}" \
                                .format(sys.version_info.major))
+
+def bash_items(exp):
+    """List of str from `exp` expanded under bash
+
+    Parameters
+    ----------
+    exp: a str of expression to be expanded
+
+    Returns
+    -------
+    list(str): a list of str from the expansion
+
+    Examples
+    --------
+    >>> bash_items('''
+    ... a{1..5}
+    ... b{3,5,7} "item with space"
+    ... x y z
+    ... ''')
+    ['a1', 'a2', 'a3', 'a4', 'a5', 'b3', 'b5', 'b7', 'item with space', 'x', 'y', 'z']
+    >>>
+    """
+    cmd = """A=({})
+             for ((I=0;I<${{#A[*]}};I++)); do
+                 echo ${{A[$I]}}
+             done
+    """.format(exp)
+    out = sp.check_output(cmd, shell=True)
+    return out.decode().splitlines()
 
 class Spec(dict):
     """Spec object -- handling spec object extension and substitution
@@ -595,765 +682,44 @@ class Spec(dict):
     def _subst_str(self, val):
         return self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), val)
 
-
-#####################################################
-#                                                   #
-#   Convenient wrappers for docker.models classes   #
-#                                                   #
-#####################################################
-
-class Container(object):
-    """Docker Container Wrapper
-
-    This class wraps docker.models.containers.Container, providing additional
-    convenient methods (such as `read_file()` and `write_file()`) and properties
-    (e.g. `ip_addr`). The wrapper only exposes the following APIs:
-        - attrs : dict() of Container attributes,
-        - name : the name of the container,
-        - client : the docker client handle for manipulating the container,
-        - exec_run() : execute a program inside the container,
-        - remove() : remove the container.
-
-    The following is the additional convenient properties and methods:
-        - interfaces : a list of (network_name, IP_address) of the container,
-        - ip_addr : the IP address of the first interface.
-        - hostname : the hostname of the container,
-        - env : the environment variables of the container (from config),
-        - write_file() : a utility to write data to a file in the container,
-        - read_file() : a utility to read a file in the container (return str).
-
-    """
-    def __init__(self, obj):
-        if not isinstance(obj, docker.models.containers.Container):
-            raise TypeError("obj is not a docker Container")
-        self.obj = obj
-        self.attrs = obj.attrs
-        self.name = obj.name
-        self.client = obj.client
-
-    def is_running(self):
-        """Check if the container is running"""
-        try:
-            return self.obj.attrs["State"]["Status"] == "running"
-        except:
-            return False
-
-    def wait_running(self, timeout=10):
-        """Wait until the container become "running" or timeout
-
-        Returns
-        -------
-        True  if the container becomes running before timeout
-        False otherwise
-        """
-        t0 = time.time()
-        while not self.is_running():
-            t1 = time.time()
-            if t1-t0 > timeout:
-                return False
-            self.obj.reload()
-            time.sleep(1)
-        return True
-
-    def exec_run(self, *args, **kwargs):
-        self.wait_running()
-        (rc, out) = self.obj.exec_run(*args, **kwargs)
-        if type(out) == bytes:
-            return (rc, out.decode())
-        return (rc, out)
-
-    def exec_interact(self, cmd):
-        """Execute `cmd` in the container with an interactive TTY
-
-        Returns a ContainerTTY for communicating to the process spawned from
-        `cmd` inside the container.
-        """
-        (rc, out) = self.exec_run(cmd, stdout=True, stderr=True, stdin=True,
-                                  tty=True, socket=True)
-        return ContainerTTY(out)
-
-    def remove(self, **kwargs):
-        self.obj.remove(**kwargs)
-
-    @property
-    def ip_addr(self):
-        try:
-            for name, addr in self.interfaces:
-                if name == self.cluster.net.name:
-                    return addr
-            return None
-        except:
-            return None
-
-    @property
-    def interfaces(self):
-        """Return a list() of (network_name, IP_address) of the container."""
-        return [ (k, v['IPAddress']) for k, v in \
-                 self.attrs['NetworkSettings']['Networks'].items() ]
-
-    @property
-    def hostname(self):
-        """Return hostname of the container"""
-        return self.attrs["Config"]["Hostname"]
-
-    @property
-    def env(self):
-        """Return environment from container configuration.
-
-        Please note that the environment in each `exec_run` may differ.
-        """
-        return self.attrs["Config"]["Env"]
-
-    def write_file(self, path, content, user = None):
-        """Write `content` to `path` in the container"""
-        cmd = "/bin/bash -c 'cat - >{} && echo -n true'".format(path)
-        rc, sock = self.exec_run(cmd, stdin=True, socket=True, user = user)
-        sock = sock._sock # get the raw socket
-        sock.setblocking(True)
-        if type(content) == str:
-            content = content.encode()
-        sock.send(content)
-        sock.shutdown(socket.SHUT_WR)
-        D.ret = ret = sock.recv(8192)
-        # skip 8-byte header
-        ret = ret[8:].decode()
-        sock.close()
-        if ret != "true":
-            raise RuntimeError(ret)
-
-    def read_file(self, path):
-        """Read file specified by `path` from the container"""
-        cmd = "cat {}".format(path)
-        rc, output = self.exec_run(cmd)
-        if rc:
-            raise RuntimeError("Error {} {}".format(rc, output))
-        return output
-
-    def chmod(self, mode, path):
-        """chmod `mode` `path`"""
-        cmd = "chmod {:o} {}".format(int(mode), path)
-        rc, output = self.exec_run(cmd)
-        if rc:
-            raise RuntimeError("Error {} {}".format(rc, output))
-
-    def chown(self, owner, path):
-        """chown `owner` `path`"""
-        cmd = "chown {} {}".format(owner, path)
-        rc, output = self.exec_run(cmd)
-        if rc:
-            raise RuntimeError("Error {} {}".format(rc, output))
-
-    def pipe(self, cmd, content):
-        """Pipe `content` to `cmd` executed in the container"""
-        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
-        sock = sock._sock
-        sock.setblocking(True)
-        if type(content) == str:
-            content = content.encode()
-        sock.send(content)
-        sock.shutdown(socket.SHUT_WR)
-        D.ret = ret = sock.recv(8192)
-        sock.close()
-        if len(ret) == 0:
-            rc = 0
-            output = ''
-        else:
-            # skip 8-byte header
-            output = ret[8:].decode()
-            rc = ret[0]
-            if rc == 1: # OK
-                rc = 0
-        return rc, output
-
-    def proc_environ(self, pid):
-        """Returns environment (dict) of process `pid`"""
-        _env = self.read_file("/proc/{}/environ".format(pid))
-        _env = _env.split('\x00')
-        _env = dict( v.split('=', 1) for v in _env if v )
-        return _env
-
-    def start(self, *args, **kwargs):
-        return self.obj.start(*args, **kwargs)
-
-    def stop(self, *args, **kwargs):
-        return self.obj.stop(*args, **kwargs)
-
-
-class Service(object):
-    """Docker Service Wrapper
-
-    This class wraps docker.models.services.Service and provides additional
-    convenient properties and methods. The wrapper only exposes a subset of
-    docker Service APIs as follows:
-        - attrs : the dictionary containing docker Service information,
-        - name : the name of the docker Service,
-        - client : the docker Client handle.
-        - remove() : remove the service
-
-    The following is the list of additional properties and methods provided by
-    this class:
-        - mounts : mount points (from config),
-        - env : environment variables (from config),
-        - net : docker Network associated with this service,
-        - containers : a list of wrapped Container objects (cached property of
-          get_containers()),
-        - tasks_running() : check if all tasks (containers) are running,
-        - wait_tasks_running() : block-waiting until all tasks become running
-          or timeout,
-        - get_containers() : return a list of wrapped Container objects in the
-          service,
-        - build_etc_hosts() : returns `str` build for `/etc/hosts` for the
-          containers of this service (as a virtual cluster),
-        - update_etc_hosts() : like build_etc_hosts(), but also overwrite
-          `/etc/hosts` in all containers of this service.
-    """
-    def __init__(self, obj):
-        if not isinstance(obj, docker.models.services.Service):
-            raise TypeError("obj is not a docker Service")
-        self.obj = obj
-        self.attrs = obj.attrs # expose attrs
-        self.name = obj.name
-        self.client = obj.client
-
-    def remove(self):
-        self.obj.remove()
-
-    def tasks_running(self):
-        """Returns `True` if all tasks are in "running" state"""
-        try:
-            tasks = self.obj.tasks()
-            nrep = self.obj.attrs["Spec"]["Mode"]["Replicated"]["Replicas"]
-            if len(tasks) != nrep:
-                return False
-            for t in tasks:
-                if t['Status']['State'] != 'running':
-                    return False
-        except:
-            return False
-        return True
-
-    def wait_tasks_running(self, timeout = 10):
-        """Return `True` if all tasks become "running" before timeout (sec)"""
-        t0 = time.time()
-        while not self.tasks_running():
-            t1 = time.time()
-            if t1-t0 > timeout:
-                return False
-            time.sleep(1)
-        return True
-
-    def get_containers(self, timeout = 10):
-        """Return a list of docker Container within the service"""
-        if not self.wait_tasks_running(timeout = timeout):
-            raise RuntimeError("Some tasks (containers) are not running.")
-        cont_list = list()
-        d = docker.from_env()
-        for t in self.obj.tasks():
-            D.t = t
-            nid = t['NodeID']
-            node = d.nodes.get(nid)
-            addr = node.attrs['Description']['Hostname'] + ":2375"
-            # client to remote dockerd
-            ctl = docker.from_env(environment={'DOCKER_HOST': addr})
-            cont_id = t['Status']['ContainerStatus']['ContainerID']
-            D.cont = cont = ctl.containers.get(cont_id)
-            cont_list.append(Container(cont))
-        cont_list.sort(lambda a,b: cmp(LooseVersion(a.name),LooseVersion(b.name)))
-        return cont_list
-
-    def build_etc_hosts(self, node_aliases = {}):
-        """Returns the generated `/etc/hosts` content"""
-        sio = StringIO()
-        sio.write("127.0.0.1 localhost\n")
-        for cont in self.containers:
-            name = cont.attrs["Config"]["Hostname"]
-            networks = cont.attrs["NetworkSettings"]["Networks"]
-            for net_name, net in networks.items():
-                addr = net["IPAddress"]
-                sio.write("{} {}".format(addr, name))
-                alist = node_aliases.get(name, [])
-                if type(alist) == str:
-                    alist = [ alist ]
-                for a in alist:
-                    sio.write(" {}".format(a))
-                sio.write("\n")
-        return sio.getvalue()
-
-    def update_etc_hosts(self, node_aliases = {}):
-        """Update entries in /etc/hosts"""
-        etc_hosts = self.build_etc_hosts(node_aliases = node_aliases)
-        conts = self.get_containers()
-        for cont in conts:
-            cont.write_file("/etc/hosts", etc_hosts)
-
-    @property
-    def mounts(self):
-        cont_spec = self.attrs['Spec']['TaskTemplate']['ContainerSpec']
-        mounts = []
-        for m in cont_spec.get('Mounts', []):
-            mode = "ro" if "ReadOnly" in m else "rw"
-            mounts.append("{}:{}:{}".format(m['Source'], m['Target'], mode))
-        return mounts
-
-    @property
-    def env(self):
-        """Cluster-wide environments"""
-        cont_spec = self.attrs['Spec']['TaskTemplate']['ContainerSpec']
-        return cont_spec.get('Env', [])
-
-    @cached_property
-    def containers(self):
-        return self.get_containers(timeout = 60)
-
-    @property
-    def net(self):
-        return [ self.client.networks.get(n["Target"]) \
-                    for n in self.attrs["Spec"]["TaskTemplate"]["Networks"] ]
-
-    @property
-    def labels(self):
-        return self.attrs["Spec"]["Labels"]
-
-
-class Network(object):
-    """Docker Network Wrapper"""
-
-    def __init__(self, obj):
-        if type(obj) != docker.models.networks.Network:
-            raise TypeError("obj is not a docker Network object")
-        self.obj = obj
-        self.clients = get_docker_clients()
-
-    @classmethod
-    def create(cls, name, driver='overlay', scope='swarm', attachable=True,
-                    labels = None, subnet = None):
-        """A utility to create and wrap the docker network"""
-        client = docker.from_env()
-        try:
-            if subnet:
-                # NOTE: `iprange` is for docker automatic IP assignment.
-                #       Since LMDS_Test manually assign IP addresses, we will
-                #       limit docker iprange to be a small number.
-                #       `gateway` is the max host IP address.
-                ip_net = ip.ip_network(subnet)
-                bc = int(ip_net.broadcast_address)
-                gateway = str(ip.ip_address(bc - 1))
-                iprange = str(ip.ip_address(bc & ~3)) + "/30"
-                ipam_pool = docker.types.IPAMPool(subnet=subnet,
-                                        iprange=iprange, gateway=gateway)
-                ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool])
-                obj = client.networks.create(name=name, driver=driver,
-                                     ipam=ipam_config,
-                                     scope=scope, attachable=attachable,
-                                     labels = labels)
-            else:
-                obj = client.networks.create(name=name, driver=driver,
-                                     scope=scope, attachable=attachable,
-                                     labels = labels)
-        except docker.errors.APIError as e:
-            if e.status_code != 409: # other error, just raise it
-                raise
-            msg = e.explanation + ". This could be an artifact from previous " \
-                  "run. To remove the network, all docker objects using net " \
-                  "network must be remvoed first (e.g. service, container). " \
-                  "Then, remove the network with `docker network rm {}`." \
-                  .format(name)
-            raise RuntimeError(msg)
-        return Network(obj)
-
-    @classmethod
-    def get(cls, name, create = False, **kwargs):
-        """Find (or optionally create) and wrap docker network"""
-        client = docker.from_env()
-        try:
-            obj = client.networks.get(name)
-        except docker.errors.NotFound:
-            if not create:
-                raise
-            obj = Network.create(name, **kwargs)
-        return Network(obj)
-
-    @property
-    def name(self):
-        return self.obj.name
-
-    @property
-    def short_id(self):
-        return self.obj.short_id
-
-    def rm(self):
-        self.obj.remove()
-
-    def remove(self):
-        self.obj.remove()
-
-    @property
-    def containers(self):
-        """Containers in the network"""
-        conts = []
-        for c in self.clients:
-            try:
-                obj = c.networks.get(self.name)
-            except docker.errors.NotFound:
-                continue # skip clients not participating in our network
-            D.obj = obj
-            _conts = obj.attrs["Containers"]
-            _conts = _conts if _conts else {}
-            for cont_id in _conts:
-                try:
-                    cont = c.containers.get(cont_id)
-                    conts.append(Container(cont))
-                except docker.errors.NotFound:
-                    continue # ignore the host-side endpoint appearing as
-                             # container.
-        return conts
-
-    @property
-    def labels(self):
-        """Get labels"""
-        return self.obj.attrs["Labels"]
-
-    def connect(self, container, *args, **kwargs):
-        return self.obj.connect(container, *args, **kwargs)
-
+def get_cluster_class():
+    from importlib import import_module
+    rt = G.conf["ldms-test"]["runtime"]
+    rt = "runtime.{}".format(rt)
+    rt_mod = import_module(rt)
+    return rt_mod.get_cluster_class()
 
 ################################################################################
 
 
-class DockerClusterContainer(Container):
-    """A Container wrapper for containers in DockerCluster"""
-    def __init__(self, obj, cluster):
-        self.cluster = cluster
-        super(DockerClusterContainer, self).__init__(obj)
+##################################
+#  Container/Cluster Interfaces  #
+##################################
 
-    @property
-    def aliases(self):
-        """The list of aliases of the container hostname"""
-        return self.cluster.node_aliases.get(self.hostname, [])
+class LDMSDContainerTTY(ABC):
+    EOT = b'\x04' # end of transmission (ctrl-d)
 
-class DockerCluster(object):
-    """Docker Cluster
-
-    A utility to create a virtual cluster with Docker Swarm Network and Docker
-    Containers. Instead of relying on Docker Service to orchestrate docker
-    containers, which at the time this is written cannot add needed capabilities
-    to the containers, this class manages the created containers itself.  The
-    virtual cluster has exactly one overlay network. The hostnames of the nodes
-    inside the virtual cluster is "node-{slot}", where the `{slot}` is the task
-    slot number of the container.  `/etc/hosts` of each container is also
-    modified so that programs inside each container can use the hostname to
-    commnunicate to each other. Hostname aliases can also be set at `create()`.
-
-    DockerCuster.create() creates the virtual cluster (as well as docker
-    Service). DockerCluster.get() obtains the existing virtual cluster,
-    and can optionally create a new virtual cluster if `create = True`. See
-    `create()` and `get()` class methods for more details.
-    """
-    def __init__(self, obj):
-        """Do not direcly call this, use .create() or .get() instead"""
-        # obj must be a docker network with DockerCluster label
-        if type(obj) != docker.models.networks.Network:
-            raise TypeError("`obj` must be a docker Network")
-        lbl = obj.attrs.get("Labels")
-        if "DockerCluster" not in lbl:
-            msg = "The network is not created by DockerCluster. " \
-                  "Please remove or disconnect docker containers " \
-                  "using the network first, then remove the network " \
-                  "by `docker network rm {}`. " \
-                  .format(obj.name)
-            raise TypeError(msg)
-        self.obj = obj
-        self.net = Network(obj)
-        self.cont_dict = None
-
-    @classmethod
-    def create(cls, name, image = "centos:7", nodes = 8,
-                    mounts = [], env = [], labels = {},
-                    node_aliases = {},
-                    cap_add = [],
-                    cap_drop = [],
-                    subnet = None,
-                    host_binds = {}):
-        """Create virtual cluster with docker network and service
-
-        If the docker network existed, this will failed. The hostname of each
-        container in the virtual cluster is formatted as "node-{slot}", where
-        '{slot}' is the docker task slot number for the container. Applications
-        can set node aliases with `node_aliases` parameter.
-
-        Example
-        -------
-        >>> cluster = DockerCluster.create(
-                            name = "vc", nodes = 16,
-                            mounts = [ "/home/bob/ovis:/opt/ovis:ro" ],
-                            env = { "CLUSTERNAME" : "vc" },
-                            node_aliases = { "node-1" : [ "head" ] },
-                            cap_add = [ "SYS_PTRACE" ]
-                        )
-
-        Parameters
-        ----------
-        name : str
-            The name of the cluster (also the name of the network).
-        image : str
-            The name of the image to use.
-        nodes : int
-            The number of nodes in the virtual cluster.
-        mounts : list(str)
-            A list of `str` of mount points with format "SRC:DEST:MODE",
-            in which "SRC" being the source path (on the docker host),
-            "DEST" being the mount destination path (in the container),
-            and "MODE" being "ro" or "rw" (read-only or read-write).
-        env : list(str) or dict(str:str)
-            A list of "NAME=VALUE", or a dictionary of { NAME: VALUE } of
-            environment variables.
-        labels : dict(str:str)
-            A dictionary of { LABEL : VALUE } for user-defined labels for the
-            docker service.
-        node_aliases : dict(str:list(str))
-            A dictionary of { NAME : list( str ) } containing a list of aliases
-            of the nodes.
-        cap_add : list(str)
-            A list of capabilities (e.g. 'SYS_PTRACE') to add to containers
-            created by the virtual cluster.
-        cap_drop : list(str)
-            A list of capabilities to drop.
+    @abstractmethod
+    def read(self, idle_timeout = 1):
+        """Read the TTY until idle
 
         Returns
         -------
-        DockerCluster
-            The virtual cluster handle.
+        str: data read from the TTY
         """
-        if type(nodes) == int:
-            nodes = [ "node-{}".format(i) for i in range(0, nodes) ]
-        lbl = dict(labels)
-        cfg = dict(name = name,
-                   image = image,
-                   env = env,
-                   nodes = nodes,
-                   mounts = mounts,
-                   cap_add = cap_add,
-                   cap_drop = cap_drop,
-               )
-        lbl.update({
-                "node_aliases": json.dumps(node_aliases),
-                "DockerCluster" : json.dumps(cfg),
-              })
-        clients = get_docker_clients()
+        raise NotImplementedError()
 
-        # allocation table by client: [current_load, alloc, client]
-        tbl = [ [ cl.info()["ContainersRunning"], 0, cl ] for cl in clients ]
-        # and start calculating allocation for each client
-        # sort clients by load
-        tbl.sort( key = lambda x: x[0] )
-        max_load = tbl[-1][0] # last entry
-        _n = len(nodes) # number of containers needed
-        cn = len(tbl)
-        # make the load equal by filling the diff from max_load first
-        for ent in tbl:
-            _a = max_load - ent[0]
-            if not _a:
-                break # reaching max_load, no need to continue
-            _a = _a if _a < _n else _n
-            ent[1] = _a
-            _n -= _a
-            if not _n:
-                break # all containers allocated, no need to continue
-        # evenly distribute remaining load after equalization
-        _a = _n // cn
-        for ent in tbl:
-            ent[1] += _a
-        # the remainders
-        _n %= cn
-        for i in range(0, _n):
-            tbl[i][1] += 1
+    @abstractmethod
+    def write(self, data):
+        """Write `data` to TTY"""
+        raise NotImplementedError()
 
-        # making parameters for containers
-        _slot = 1
-        cont_build = [] # store (client, cont_param)
-        lbl_cont_build = [] # store (client_name, cont_param) for reference
-        volumes = { src: {"bind": dst, "mode": mo } \
-                    for src, dst, mo in map(lambda x:x.split(':'), mounts)
-                }
-        idx = 0
-        for load, n, cl in tbl:
-            # allocate `n` container using `client`
-            cl_info = cl.info()
-            cl_name = cl_info["Name"]
-            for i in range(0, n):
-                node = nodes[idx]
-                idx += 1
-                hostname = node
-                cont_name = "{}-{}".format(name, node)
-                cont_param = dict(
-                        image = image,
-                        name = cont_name,
-                        command = "/bin/bash",
-                        tty = True,
-                        detach = True,
-                        environment = env,
-                        volumes = volumes,
-                        cap_add = cap_add,
-                        cap_drop = cap_drop,
-                        #network = name,
-                        hostname = hostname,
-                    )
-                binds = host_binds.get(hostname)
-                if binds:
-                    cont_param["ports"] = binds
-                lbl_cont_build.append( (cl_name, cont_param) )
-                cont_build.append( (cl, cont_param) )
-        # memorize cont_build as a part of label
-        dc = docker.from_env()
-        lbl["cont_build"] = json.dumps(lbl_cont_build)
-        net = Network.create(name = name, driver = "overlay",
-                             attachable = True, scope = "swarm",
-                             labels = lbl, subnet = subnet)
-        if subnet:
-            ip_net = ip.ip_network(subnet)
-            ip_itr = ip_net.hosts()
-        # then, create the actual containers
-        for cl, params in cont_build:
-            cont = cl.containers.create(**params)
-            if subnet:
-                ip_addr = next(ip_itr)
-                net.connect(cont, ipv4_address=str(ip_addr))
-            else:
-                net.connect(cont)
-            cont.start()
-        cluster = DockerCluster(net.obj)
-        cluster.update_etc_hosts(node_aliases = node_aliases)
-        return cluster
+    @abstractmethod
+    def term(self):
+        """Terminate TTY connection"""
+        raise NotImplementedError()
 
-    @classmethod
-    def get(cls, name, create = False, **kwargs):
-        """Finds (or optionally creates) and returns the DockerCluster
-
-        This function finds the DockerCluster by `name`. If the service
-        is found, everything else is ignored. If the service not found and
-        `create` is `True`, DockerCluster.create() is called with
-        given `kwargs`. Otherwise, `docker.errors.NotFound` is raised.
-
-        Parameters
-        ----------
-        name : str
-            The name of the virtual cluster.
-        create : bool
-            If `True`, the function creates the service if it is not found.
-            Otherwise, no new service is created (default: False).
-        **kwargs
-            Parameters for DockerCluster.create()
-        """
-        try:
-            dc = docker.from_env()
-            net = dc.networks.get(name)
-            return cls(net)
-        except docker.errors.NotFound:
-            if not create:
-                raise
-            return cls.create(name = name, **kwargs)
-
-    def is_running(self):
-        """Check if the service (all ) is running"""
-        for cont in self.containers:
-            if not cont.is_running():
-                return False
-        return True
-
-    def wait_running(self, timeout=10):
-        """Wait for all containers to run"""
-        t0 = time.time()
-        while not self.is_running():
-            t1 = time.time()
-            if t1-t0 > timeout:
-                return False
-            time.sleep(1)
-        return True
-
-    @cached_property
-    def containers(self):
-        """A list of containers wrapped by DockerClusterContainer"""
-        return self.get_containers()
-
-    def get_containers(self, timeout = 10):
-        """Return a list of docker Containers of the virtual cluster"""
-        our_conts = []
-        clients = get_docker_clients()
-        for cl in clients:
-            conts = cl.containers.list(all=True)
-            for cont in conts:
-                if cont.attrs['NetworkSettings']['Networks'].get(self.net.name):
-                    our_conts.append(cont)
-
-        cont_list = [ DockerClusterContainer(c, self) for c in our_conts ]
-        cont_list.sort(key = lambda x: LooseVersion(x.name))
-        return cont_list
-
-    def get_container(self, name):
-        """Get container by name"""
-        if not self.cont_dict:
-            cont_list = self.containers
-            cont_dict = dict()
-            for cont in cont_list:
-                k = cont.attrs['Config']['Hostname']
-                cont_dict[k] = cont
-            for k, v in self.node_aliases.items():
-                cont = cont_dict[k]
-                if type(v) == str:
-                    v = [ v ]
-                for n in v:
-                    cont_dict[n] = cont
-            self.cont_dict = cont_dict
-        return self.cont_dict.get(name)
-
-    @cached_property
-    def node_aliases(self):
-        """dict(hostname:list) - node aliases by hostname"""
-        txt = self.net.obj.attrs["Labels"]["node_aliases"]
-        return json.loads(txt)
-
-    def remove(self):
-        """Remove the docker service and its network"""
-        for cont in self.containers:
-            try:
-                cont.remove(force = True)
-            except:
-                pass
-        self.net.remove()
-
-    @property
-    def labels(self):
-        """Labels"""
-        return self.net.obj.attrs["Labels"]
-
-    def build_etc_hosts(self, node_aliases = {}):
-        """Returns the generated `/etc/hosts` content"""
-        if not node_aliases:
-            node_aliases = self.node_aliases
-        sio = StringIO()
-        sio.write("127.0.0.1 localhost\n")
-        for cont in self.containers:
-            name = cont.hostname
-            ip_addr = cont.ip_addr
-            sio.write("{0.ip_addr} {0.hostname}".format(cont))
-            networks = cont.attrs["NetworkSettings"]["Networks"]
-            alist = node_aliases.get(name, [])
-            if type(alist) == str:
-                alist = [ alist ]
-            for a in alist:
-                sio.write(" {}".format(a))
-            sio.write("\n")
-        return sio.getvalue()
-
-    def update_etc_hosts(self, node_aliases = {}):
-        """Update entries in /etc/hosts"""
-        etc_hosts = self.build_etc_hosts(node_aliases = node_aliases)
-        conts = self.get_containers()
-        for cont in conts:
-            cont.write_file("/etc/hosts", etc_hosts)
-
-
-class LDMSDContainer(DockerClusterContainer):
+class LDMSDContainer(ABC):
     """Container wrapper for a container being a part of LDMSDCluster
 
     LDMSDContainer extends DockerClusterContainer -- adding ldmsd-specific
@@ -1363,11 +729,10 @@ class LDMSDContainer(DockerClusterContainer):
     should be obtained by calling `get_container()` or accessing `containers` of
     LDMSDCluster.
     """
-    def __init__(self, obj, svc):
-        if not issubclass(type(svc), LDMSDCluster):
-            raise TypeError("`svc` must be a subclass of LDMSDCluster")
-        self.svc = svc
-        super(LDMSDContainer, self).__init__(obj, svc)
+    def __init__(self, obj, cluster):
+        if not issubclass(type(cluster), LDMSDCluster):
+            raise TypeError("`clutser` must be a subclass of LDMSDCluster")
+        self.cluster = cluster
         self.DAEMON_TBL = {
             "etcd": self.start_etcd,
             "ldmsd": self.start_ldmsd,
@@ -1377,6 +742,63 @@ class LDMSDContainer(DockerClusterContainer):
             "slurmctld": self.start_slurmctld,
         }
         self.munged = dict()
+
+    @abstractmethod
+    def start(self):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def stop(self):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def exec_run(self, cmd, env=None, user=None):
+        """[ABSTRACT] Execute `cmd` in the container.
+
+        Parameters
+        ----------
+        cmd:  a `str` of the command to execute
+        env:  (optional) a `dict` of additional environment variables
+        user: (optional) a username (`str`) that execute the command
+
+        Returns
+        -------
+        (rc, out) a pair of return code (rc:int) and output (out:str) from the
+                  command.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def pipe(self, cmd, content):
+        """[ABSTRACT] Execute `cmd` (str) in the container with `content` (str) feeding to STDIN
+
+        Returns
+        -------
+        (rc, out) a pair of return code (rc:int) and output (out:str) from the
+                  command.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def write_file(self, path, content, user = None):
+        """Write `content` to `path` in the container"""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def read_file(self, path):
+        """Read file specified by `path` from the container"""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def exec_interact(self, cmd):
+        """[ABSTRACT] Execute `cmd` in the container interactively
+
+        Returns
+        -------
+        tty: an object representing a TTY that is a subclass of
+             `LDMSDContainerTTY`.
+        """
+        raise NotImplementedError()
 
     def pgrep(self, *args):
         """Return (rc, output) of `pgrep *args`"""
@@ -1417,7 +839,32 @@ class LDMSDContainer(DockerClusterContainer):
         cfg = self.get_ldmsd_config(spec)
         self.write_file(spec["config_file"], cfg)
         cmd = self.get_ldmsd_cmd(spec)
-        self.exec_run(cmd, environment = env_dict(spec["env"]))
+        rc, out = self.exec_run(cmd, env = env_dict(spec["env"]))
+        if rc:
+            raise RuntimeError("ldmsd exec error {}: {}".format(rc, out))
+        t0 = time.time()
+        while time.time() - t0 < 5: # give it 5 sec max
+            rc, pid = self.exec_run("pgrep ldmsd")
+            if rc == 0:
+                break
+            time.sleep(0.1)
+        # timedwait until ldmsd listen to the specified port
+        if rc:
+            raise RuntimeError("Cannot get ldmsd PID")
+        pid = int(pid)
+        port = spec.get("listen_port")
+        if not port:
+            lstn = spec.get("listen")
+            if lstn:
+                port = lstn[0].get("port")
+        if not port:
+            raise RuntimeError("Cannot determine ldmsd port")
+        grp = ":\\<{:x}\\>".format(int(port))
+        grp_cmd = "grep {} /proc/net/tcp".format(shlex.quote(grp))
+        def _check_listen():
+            rc, out = self.exec_run(grp_cmd)
+            return rc == 0
+        cond_timedwait(_check_listen, 5)
 
     def kill_ldmsd(self):
         """Kill ldmsd in the container"""
@@ -1426,10 +873,76 @@ class LDMSDContainer(DockerClusterContainer):
     @cached_property
     def spec(self):
         """Get container spec"""
-        for node in self.svc.spec["nodes"]:
+        for node in self.cluster.spec["nodes"]:
             if self.hostname == node["hostname"]:
                 return node
         return None
+
+    @property
+    def interfaces(self):
+        return self.get_interfaces()
+
+    @abstractmethod
+    def get_interfaces(self):
+        """[ABSTRACT] Returns a list of (IF_NAME, IP_ADDR) tuples"""
+        raise NotImplementedError()
+
+    @property
+    def ip_addr(self):
+        return self.get_ip_addr()
+
+    @abstractmethod
+    def get_ip_addr(self):
+        """[ABSTRACT] Returns a `str` of IP address"""
+        raise NotImplementedError()
+
+    @cached_property
+    def name(self):
+        """The container name"""
+        return self.get_name()
+
+    @abstractmethod
+    def get_name(self):
+        """[ABSTRACT] Returns the name of the container"""
+        raise NotImplementedError()
+
+    @property
+    def hostname(self):
+        """Return hostname of the container"""
+        return self.get_hostname()
+
+    @abstractmethod
+    def get_hostname(self):
+        """[ABSTRACT] Returns hostname of the container"""
+        raise NotImplementedError()
+
+    @cached_property
+    def host(self):
+        """The host that hosts the container"""
+        return self.get_host()
+
+    @abstractmethod
+    def get_host(self):
+        raise NotImplementedError()
+
+    @property
+    def aliases(self):
+        """The list of aliases of the container hostname"""
+        return self.get_aliases()
+
+    @abstractmethod
+    def get_aliases(self):
+        """[ABSTRACT] Returns a list of hostname alises of the container"""
+        raise NotImplementedError()
+
+    @property
+    def env(self):
+        return self.get_env()
+
+    @abstractmethod
+    def get_env(self):
+        """[ABSTRACT] Returns `env` from the container configuration"""
+        raise NotImplementedError()
 
     @cached_property
     def ldmsd_spec(self):
@@ -1442,7 +955,7 @@ class LDMSDContainer(DockerClusterContainer):
 
         # apply cluster-level env
         w = env_dict(dspec.get("env", []))
-        v = env_dict(self.svc.spec.get("env", []))
+        v = env_dict(self.cluster.spec.get("env", []))
         v.update(w) # dspec precede svc_spec
         dspec["env"] = v
         dspec.setdefault("log_file", "/var/log/ldmsd.log")
@@ -1579,7 +1092,7 @@ class LDMSDContainer(DockerClusterContainer):
     def prep_slurm_conf(self):
         """Prepare slurm configurations"""
         self.write_file("/etc/slurm/cgroup.conf", "CgroupAutomount=yes")
-        self.write_file("/etc/slurm/slurm.conf", self.svc.slurm_conf)
+        self.write_file("/etc/slurm/slurm.conf", self.cluster.slurm_conf)
 
     def start_slurm(self):
         """Start slurmd in all sampler nodes, and slurmctld on svc node"""
@@ -1703,21 +1216,7 @@ class LDMSDContainer(DockerClusterContainer):
                       auth=_auth,
                   )
         D.cmd = cmd
-        rc, sock = self.exec_run(cmd, stdin=True, socket=True)
-        sock = sock._sock
-        sock.setblocking(True)
-        sock.send(sio.getvalue().encode())
-        sock.shutdown(socket.SHUT_WR)
-        D.ret = ret = sock.recv(8192)
-        if len(ret) == 0:
-            rc = 0
-            output = ''
-        else:
-            output = ret[8:].decode()
-            rc = ret[0]
-            if rc == 1: # OK
-                rc = 0
-        return rc, output
+        return self.pipe(cmd, sio.getvalue())
 
     @cached_property
     def ldmsd_version(self):
@@ -1729,18 +1228,48 @@ class LDMSDContainer(DockerClusterContainer):
         ver = tuple(map(int, m.groups()))
         return ver
 
-BaseCluster = DockerCluster
+    def chmod(self, mode, path):
+        """chmod `mode` `path`"""
+        cmd = "chmod {:o} {}".format(int(mode), path)
+        rc, output = self.exec_run(cmd)
+        if rc:
+            raise RuntimeError("Error {} {}".format(rc, output))
 
-class LDMSDCluster(BaseCluster):
+    def chown(self, owner, path):
+        """chown `owner` `path`"""
+        cmd = "chown {} {}".format(owner, path)
+        rc, output = self.exec_run(cmd)
+        if rc:
+            raise RuntimeError("Error {} {}".format(rc, output))
+
+    def proc_environ(self, pid):
+        """Returns environment (dict) of process `pid`"""
+        _env = self.read_file("/proc/{}/environ".format(pid))
+        _env = _env.split('\x00')
+        _env = dict( v.split('=', 1) for v in _env if v )
+        return _env
+
+    def files_exist(self, files, timeout=None, interval=0.1):
+        t0 = time.time()
+        if type(files) == str:
+            files = [ files ]
+        cmd = " && ".join( "test -e {}".format(s) for s in files)
+        while timeout is None or time.time() - t0 < timeout:
+            rc, out = self.exec_run(cmd)
+            if rc == 0:
+                return True
+            time.sleep(interval)
+        return False
+
+# ---------------------------------------------------------- LDMSDContainer -- #
+
+
+class LDMSDCluster(ABC):
     """LDMSD Cluster - a virtual cluster for LDMSD
 
-    LDMSDCluster extends DockerCluster. Similarly to
-    DockerCluster, `create()` class method creates the virtual cluster,
-    and `get()` class method obtains the existing virtual cluster (and
-    optionally creates it if `create=True` is given), but LDMSDCluster receives
-    `spec` instead of long list of keyword arguments (see `get()` and
-    `create()`). The containers in LDMSDCluster is wrapped by LDMSDContainer to
-    provide ldmsd-specific utilities.
+    Get or optionally create the virtual cluster:
+    >>> cluster = LDMSDCluster.get(name, create=True, spec= spec)
+
     """
     @classmethod
     def create(cls, spec):
@@ -1986,103 +1515,125 @@ class LDMSDCluster(BaseCluster):
                 ],
             }
         """
-        kwargs = cls.spec_to_kwargs(Spec(spec))
-        wrap = super(LDMSDCluster, cls).create(**kwargs)
-        lc = LDMSDCluster(wrap.obj)
-        lc.make_ovis_env()
-        return lc
+        _cls = get_cluster_class()
+        cluster = _cls._create(spec)
+        cluster.make_ovis_env()
+        return cluster
+
+    @classmethod
+    @abstractmethod
+    def _create(cls, spec):
+        """[ABSTRACT] Create the virtual cluster according to `spec`.
+
+        The subclass shall implement virtual cluster creation in this method.
+
+        Returns
+        -------
+        obj: An object of LDMSDCluster subclass representing a virtual cluster
+        """
+        raise NotImplementedError()
 
     @classmethod
     def get(cls, name, create = False, spec = None):
         """Obtain an existing ldmsd virtual cluster (or create if `create=True`)"""
-        d = docker.from_env()
+        _cls = get_cluster_class()
         try:
-            wrap = super(LDMSDCluster, cls).get(name)
-            cluster = LDMSDCluster(wrap.obj)
+            cluster = _cls._get(name)
             if spec and Spec(spec) != cluster.spec:
                 raise RuntimeError("spec mismatch")
             return cluster
-        except docker.errors.NotFound:
+        except LookupError:
             if not create:
                 raise
-            return LDMSDCluster.create(spec)
+            return _cls.create(spec)
 
     @classmethod
-    def spec_to_kwargs(cls, spec):
-        """Convert `spec` to kwargs for DockerCluster.create()"""
-        name = spec["name"]
-        nodes = spec["nodes"]
-        mounts = []
-        prefix = spec.get("ovis_prefix")
-        _PYTHONPATH = None
-        if prefix:
-            mounts += ["{}:/opt/ovis:ro".format(prefix)]
-            # handling python path
-            pp = glob.glob(prefix+'/lib*/python*/site-packages')
-            pp = [ p.replace(prefix, '/opt/ovis', 1) for p in pp ]
-            _PYTHONPATH = ':'.join(pp)
-        if not _PYTHONPATH:
-            _PYTHONPATH = "/opt/ovis/lib/python3.6/site-packages:" \
-                          "/opt/ovis/lib64/python3.6/site-packages"
-        mounts += spec.get("mounts", [])
-        cap_add = spec.get("cap_add", [])
-        cap_drop = spec.get("cap_drop", [])
-        # assign daemons to containers using node_aliases
-        node_aliases = {}
-        hostnames = [ node["hostname"] for node in nodes ]
-        host_binds = { node["hostname"]: node["binds"] \
-                    for node in nodes if node.get("binds") }
-        for node in nodes:
-            a = node.get("aliases")
-            if a:
-                node_aliases[node["hostname"]] = a
-        # starts with OVIS env
-        env = {
-                "PATH" : ":".join([
-                        "/opt/ovis/bin",
-                        "/opt/ovis/sbin",
-                        "/usr/local/bin",
-                        "/usr/local/sbin",
-                        "/usr/bin",
-                        "/usr/sbin",
-                        "/bin",
-                        "/sbin",
-                    ]),
-                "LD_LIBRARY_PATH" : "/opt/ovis/lib:/opt/ovis/lib64",
-                "ZAP_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms:/opt/ovis/lib/ovis-lib:/opt/ovis/lib64/ovis-lib",
-                "LDMSD_PLUGIN_LIBPATH" : "/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
-                "PYTHONPATH" : _PYTHONPATH
-            }
-        env.update(env_dict(spec.get("env", {})))
-        kwargs = dict(
-                    name = name,
-                    image = spec.get("image", "ovis-centos-build"),
-                    mounts = mounts,
-                    nodes = hostnames,
-                    env = env,
-                    labels = { "LDMSDCluster.spec": json.dumps(spec) },
-                    node_aliases = node_aliases,
-                    cap_add = cap_add,
-                    cap_drop = cap_drop,
-                    subnet = spec.get("subnet"),
-                    host_binds = host_binds,
-                 )
-        return kwargs
+    @abstractmethod
+    def _get(cls, name):
+        """[ABSTRACT] Obtain a handle to a running virtual cluster with `name`.
+
+        Returns
+        -------
+        obj:  An object of LDMSDCluster subclass representing a virtual cluster
+              if the cluster of given `name` existed.
+
+        Raises
+        ------
+        LookupError: If the `name` cluster does not exist.
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def remove(self):
+        """[ABSTRACT] Remove the cluster"""
+        raise NotImplementedError()
+
+    @cached_property
+    def name(self):
+        return self.get_name()
+
+    @abstractmethod
+    def get_name(self):
+        """[ABSTRACT] Returns the name of the cluster"""
+        raise NotImplementedError()
+
+    @cached_property
+    def containers(self):
+        """A list of containers wrapped by DockerClusterContainer"""
+        return self.get_containers()
+
+    @abstractmethod
+    def get_containers(self, timeout = 10):
+        """[ABSTRACT] Returns a list of LDMSDContainer subclass objects in the cluster"""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def get_container(self, name):
+        """[ABSTRACT] Returns the matching container in the cluster"""
+        raise NotImplementedError()
 
     @cached_property
     def spec(self):
-        return json.loads(self.labels["LDMSDCluster.spec"])
+        return self.get_spec()
 
-    @property
-    def containers(self):
-        s = super(LDMSDCluster, self)
-        return [ LDMSDContainer(c.obj, self) for c in s.containers ]
+    @abstractmethod
+    def get_spec(self):
+        """[ABSTRACT] Yield the spec used to create the cluster"""
+        raise NotImplementedError()
 
-    def get_container(self, name):
-        cont = super(LDMSDCluster, self).get_container(name)
-        if cont:
-            cont = LDMSDContainer(cont.obj, self)
-        return cont
+    def build_etc_hosts(self, node_aliases = {}):
+        """Returns the generated `/etc/hosts` content"""
+        if not node_aliases:
+            node_aliases = self.node_aliases
+        sio = StringIO()
+        sio.write("127.0.0.1 localhost\n")
+        for cont in self.containers:
+            name = cont.hostname
+            ip_addr = cont.ip_addr
+            sio.write("{0.ip_addr} {0.hostname}".format(cont))
+            alist = node_aliases.get(name, [])
+            if type(alist) == str:
+                alist = [ alist ]
+            for a in alist:
+                sio.write(" {}".format(a))
+            sio.write("\n")
+        return sio.getvalue()
+
+    def update_etc_hosts(self, node_aliases = {}):
+        """Update entries in /etc/hosts"""
+        etc_hosts = self.build_etc_hosts(node_aliases = node_aliases)
+        conts = self.get_containers()
+        for cont in conts:
+            cont.write_file("/etc/hosts", etc_hosts)
+
+    @cached_property
+    def node_aliases(self):
+        return self.get_node_aliases()
+
+    @abstractmethod
+    def get_node_aliases(self):
+        """[ABSTRACT] Returns a dict of { NODE_NAME: [ ALIASES ] }"""
+        raise NotImplementedError()
 
     def start_ldmsd(self):
         """Start ldmsd in each node in the cluster"""
@@ -2191,34 +1742,35 @@ class LDMSDCluster(BaseCluster):
         hosts = reduce(lambda x,y: x+y,
                          ([c.hostname, c.ip_addr] + c.aliases \
                                              for c in self.containers) )
-        cmd = "ssh-keyscan " + " ".join(hosts)
+        cmd = "ssh-keyscan " + " ".join(hosts) + " 2>/dev/null"
         cont = self.containers[-1]
-        rc, out = cont.exec_run(cmd, stderr=False)
+        rc, out = cont.exec_run(cmd)
         return out
 
     def make_known_hosts(self):
         """Make `/root/.ssh/known_hosts` in all nodes"""
         ks = self.ssh_keyscan()
         for cont in self.containers:
-            cont.exec_run("mkdir -p /root/.ssh")
+            cont.exec_run("mkdir -m 0700 -p /root/.ssh")
             cont.write_file("/root/.ssh/known_hosts", ks)
 
     def make_ssh_id(self):
         """Make `/root/.ssh/id_rsa` and authorized_keys"""
         cont = self.containers[-1]
-        cont.exec_run("mkdir -p /root/.ssh/")
-        cont.exec_run("rm -f id_rsa id_rsa.pub", workdir="/root/.ssh/")
+        cont.exec_run("mkdir -m 0700 -p /root/.ssh/")
+        cont.exec_run("rm -f /root/.ssh/id_rsa id_rsa.pub")
         cont.exec_run("ssh-keygen -q -N '' -f /root/.ssh/id_rsa")
         D.id_rsa = id_rsa = cont.read_file("/root/.ssh/id_rsa")
         D.id_rsa_pub = id_rsa_pub = cont.read_file("/root/.ssh/id_rsa.pub")
         for cont in self.containers:
-            cont.exec_run("mkdir -p /root/.ssh/")
+            cont.exec_run("mkdir -m 0700 -p /root/.ssh/")
             cont.write_file("/root/.ssh/id_rsa", id_rsa)
             cont.exec_run("chmod 600 /root/.ssh/id_rsa")
             cont.write_file("/root/.ssh/id_rsa.pub", id_rsa_pub)
             cont.write_file("/root/.ssh/authorized_keys", id_rsa_pub)
+            cont.exec_run("chmod 600 /root/.ssh/authorized_keys")
 
-    def exec_run(self, *args, **kwargs):
+    def exec_run(self, cmd, env=None):
         """A pass-through to last_cont.exec_run()
 
         The `last_cont` is the last container in the virtual cluster, which does
@@ -2227,7 +1779,7 @@ class LDMSDCluster(BaseCluster):
         where slurmctld is running.
         """
         cont = self.containers[-1]
-        return cont.exec_run(*args, **kwargs)
+        return cont.exec_run(cmd, env=env)
 
     def sbatch(self, script_path):
         """Submits slurm batch job, and returns job_id on success
@@ -2250,8 +1802,7 @@ class LDMSDCluster(BaseCluster):
         """
         _base = os.path.basename(script_path)
         _dir = os.path.dirname(script_path)
-        rc, out = self.exec_run("bash -c \"sbatch {}\"".format(_base),
-                                workdir = _dir)
+        rc, out = self.exec_run("bash -c \"cd {} && sbatch {}\"".format(_dir, _base))
         if rc:
             raise RuntimeError("sbatch error, rc: {}, output: {}"\
                                     .format(rc, out))
@@ -2355,10 +1906,9 @@ class LDMSDCluster(BaseCluster):
                 )
             cont.write_file("/etc/profile.d/pssh.sh", pssh_profile)
 
-    def pgrepc(self, prog):
-        """Perform `cont.pgrepc(prog)` for cont in self.containers"""
-        return { cont.hostname : cont.pgrepc(prog) \
-                                    for cont in self.containers }
+    def all_pgrepc(self, prog):
+        """Perform `cont.pgrepc(prog)` for each cont in self.containers"""
+        return { cont.hostname : cont.pgrepc(prog) for cont in self.containers }
 
     def start_daemons(self):
         """Start daemons according to spec"""
@@ -2366,7 +1916,7 @@ class LDMSDCluster(BaseCluster):
             cont.start_daemons()
 
     def all_exec_run(self, cmd):
-        return { c.hostname: c.exec_run(cmd) for c in self.containers }
+        return { c.hostname : c.exec_run(cmd) for c in self.containers }
 
     @cached_property
     def ldmsd_version(self):
@@ -2374,6 +1924,33 @@ class LDMSDCluster(BaseCluster):
         _drop, _ver = out.splitlines()[0].split(': ')
         ver = tuple( int(v) for v in _ver.split('.') )
         return ver
+
+    @classmethod
+    def list(cls):
+        _cls = get_cluster_class()
+        return _cls._list()
+
+    @classmethod
+    @abstractmethod
+    def _list(cls):
+        """Returns a list of LDMSDCluster subclass objects of running clusters"""
+        raise NotImplementedError()
+
+    def files_exist(self, files, timeout=None, interval=0.1):
+        t0 = time.time()
+        if type(files) == str:
+            files = [ files ]
+        cmd = " && ".join( "test -e {}".format(s) for s in files)
+        while timeout is None or time.time() - t0 < timeout:
+            for _cont in self.containers:
+                rc, out = _cont.exec_run(cmd)
+                if rc:
+                    break
+            else: # loop does not break
+                return True
+            time.sleep(interval)
+        return False
+# ------------------------------------------------------------ LDMSDCluster -- #
 
 def read_msg(_file):
     """Read a message "\x01...\x03" from `_file` file handle"""
@@ -2414,7 +1991,7 @@ def ldmsd_version(prefix):
     """Get LDMSD version from the installation prefix"""
     try:
         _cmd = "strings {}/sbin/ldmsd | grep 'LDMSD_VERSION '".format(prefix)
-        out = subprocess.check_output(_cmd, shell = True).decode()
+        out = sp.check_output(_cmd, shell = True).decode()
     except:
         out = ""
     m = LDMSD_STR_VER_RE.match(out)
@@ -2422,7 +1999,7 @@ def ldmsd_version(prefix):
         # try `ldmsd -V`
         try:
             _cmd = "{}/sbin/ldmsd -V | grep 'LDMSD Version: '".format(prefix)
-            out = subprocess.check_output(_cmd, shell = True).decode()
+            out = sp.check_output(_cmd, shell = True).decode()
         except:
             out = ""
         m = LDMSD_EXE_VER_RE.match(out)
@@ -2465,11 +2042,11 @@ class Munged(object):
     def _prep_dom(self):
         cont = self.cont
         _dir = "/munge/{}".format(self.dom) if self.dom else "/run/munge"
-        rc, out = cont.exec_run("mkdir -p {}".format(_dir))
+        rc, out = cont.exec_run("mkdir -m 0755 -p {}".format(_dir))
         if rc:
             raise RuntimeError("Cannot create directory '{}', rc: {}, out: {}"\
                                .format(_dir, rc, out))
-        self.cont.chown("munge:munge", _dir)
+        self.cont.chown("root:root", _dir)
 
     def _prep_key_file(self):
         _key = self.key
@@ -2478,7 +2055,7 @@ class Munged(object):
             if rc == 0: # file existed, and no key given .. use existing key
                 return
             _key = "0"*4096 # use default key if key_file not existed
-        self.cont.write_file(self.key_file, _key, user = "munge")
+        self.cont.write_file(self.key_file, _key)
         self.cont.chmod(0o600, self.key_file)
 
     def get_pid(self):
@@ -2500,6 +2077,7 @@ class Munged(object):
         """Start the daemon"""
         if self.is_running():
             return # do nothing
+        self.cont.exec_run("chown -R root:root /var/log/munge/ /var/lib/munge/ /etc/munge/")
         self._prep_dom()
         self._prep_key_file()
         cmd = "munged"
@@ -2507,7 +2085,7 @@ class Munged(object):
             cmd += " -S {sock} --pid-file {pid} --key-file {key}"\
                    .format( sock = self.sock_file, pid = self.pid_file,
                             key = self.key_file )
-        rc, out = self.cont.exec_run(cmd, user = "munge")
+        rc, out = self.cont.exec_run(cmd)
         if rc:
             raise RuntimeError("`{}` error, rc: {}, out: {}"\
                                .format(cmd, rc, out))
@@ -2517,46 +2095,6 @@ class Munged(object):
         pid = self.get_pid()
         self.cont.exec_run("kill {}".format(pid))
 
-
-class ContainerTTY(object):
-    """A utility to communicate with a process inside a container"""
-    EOT = b'\x04' # end of transmission (ctrl-d)
-
-    def __init__(self, sockio):
-        self.sockio = sockio
-        self.sock = sockio._sock
-        self.sock.setblocking(False) # use non-blocking io
-
-    def read(self, idle_timeout = 1):
-        bio = BytesIO()
-        active = 1
-        while True:
-            try:
-                buff = self.sock.recv(1024)
-                if not buff:
-                    break
-                bio.write(buff)
-                active = 1 # stay active if read succeed
-            except BlockingIOError as e:
-                if e.errno != errno.EAGAIN:
-                    raise
-                if not active: # sock stays inactive > idle_timeout
-                    break
-                active = 0
-                time.sleep(idle_timeout)
-        val = bio.getvalue()
-        return val.decode() if val else None
-
-    def write(self, data):
-        if type(data) == str:
-            data = data.encode()
-        self.sock.send(data)
-
-    def term(self):
-        if self.sock:
-            self.sock.send(self.EOT)
-            self.sock = None
-            self.sockio.close()
 
 # control sequence regex
 CS_RE = re.compile("""
@@ -2570,6 +2108,16 @@ CS_RE = re.compile("""
 def cs_rm(s):
     """Remove control sequences from the string `s`"""
     return CS_RE.sub("", s)
+
+def cond_timedwait(cond, timeout=10, interval=0.1):
+    """Check `cond` in interval, return True when `cond` is True; return False
+       if timeout"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if cond():
+            return True
+        time.sleep(interval)
+    return False
 
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())

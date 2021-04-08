@@ -6,7 +6,6 @@ import pwd
 import sys
 import json
 import time
-import docker
 import argparse
 import TADA
 import logging
@@ -185,7 +184,7 @@ spec = {
     "cpu_per_node" : 4,
     "oversubscribe" : "FORCE",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [

@@ -5,7 +5,6 @@ import re
 import sys
 import json
 import time
-import docker
 import argparse
 import subprocess
 import TADA
@@ -183,7 +182,7 @@ spec = {
     ],
 
     "cap_add": [ "SYS_PTRACE" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [

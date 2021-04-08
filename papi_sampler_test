@@ -6,7 +6,6 @@ import pwd
 import sys
 import json
 import time
-import docker
 import argparse
 import TADA
 import logging
@@ -134,7 +133,7 @@ spec = {
     "cpu_per_node" : 4,
     "oversubscribe" : "FORCE",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [
@@ -205,7 +204,7 @@ def submit_job(name, num_tasks, duration = 10, subscriber_data = {}):
 def submit_papi_job(name, num_tasks, papi_config, duration = 10):
     global cluster
     conf_file = "/db/{}.papi.json".format(name)
-    cont = cluster.get_container("headnode")
+    cont = cluster.get_container("node-1")
     cont.write_file(conf_file, json.dumps(papi_config))
     subscriber_data = { "papi_sampler": {"file": conf_file} }
     return submit_job(name, num_tasks, duration, subscriber_data)
@@ -224,12 +223,13 @@ cont.exec_run("rm -f /db/*.out")
 #### Start ####
 test.start()
 
+exit_code = -1
 @atexit.register
 def cleanup():
     # cleanup at exit
     log.info("-- Finishing Test --")
     test.finish()
-    if args.debug:
+    if args.debug and exit_code:
         return # do not cleanup files/cluster when --debug is given
     log.info("-- Cleaning up files --")
     _list = [ "bad.json", "bad_config.sh", "missing_cfg_attr.sh", "no_papi.sh",
@@ -409,7 +409,7 @@ while True: # will break
     subscriber_data = { "papi_sampler": { "file": "/db/bad.json" } }
     jobid9 = submit_job( "bad_config", num_tasks = 2,
                         duration = 2, subscriber_data = subscriber_data )
-    time.sleep(2)
+    time.sleep(5)
     rc, out = cont.exec_run("grep 'configuration file syntax error' /var/log/ldmsd.log")
     msg = out.split('ERROR', 1)[-1].strip()
     test.assert_test(9, rc == 0, msg)
@@ -428,4 +428,5 @@ while True: # will break
     break
 
 #### Finish ####
-sys.exit(0) # see cleanup() function
+exit_code = 0
+sys.exit(exit_code) # see cleanup() function

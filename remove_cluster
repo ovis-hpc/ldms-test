@@ -5,7 +5,7 @@ import sys
 import docker
 import argparse
 
-from LDMS_Test import DockerCluster
+from LDMS_Test import LDMSDCluster
 
 parser = argparse.ArgumentParser(description = "Remove virtual clusters")
 parser.add_argument("clusters", metavar = "CLUSTER", type=str, nargs="+",
@@ -14,10 +14,10 @@ parser.add_argument("clusters", metavar = "CLUSTER", type=str, nargs="+",
 args = parser.parse_args()
 for name in args.clusters:
     try:
-        cluster = DockerCluster.get(name = name)
-    except docker.errors.NotFound:
+        cluster = LDMSDCluster.get(name = name)
+    except LookupError:
         print("'{}' not found".format(name))
         continue
-    print("Removing {} ...".format(name))
+    print("Removing {} ...".format(name), end='')
     cluster.remove()
-    print(" ... done")
+    print(" done")

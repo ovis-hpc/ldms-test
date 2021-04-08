@@ -1,0 +1,35 @@
+#!/usr/bin/python3
+
+import os
+import sys
+import pdb
+import socket
+
+from argparse import ArgumentParser
+
+from LDMS_Test import G, process_config_file, bash_items, LDMSDCluster
+from runtime.singularity import SContainer, SCluster, process_config, _inst_list
+
+clusters = SCluster.list()
+ap = ArgumentParser("singularity utility script for ldms-test")
+ap.add_argument("--config", help="The path to the configuration file.")
+ap.add_argument("inst", metavar="INSTANCE", nargs=1,
+                help="The name of the singularity container instance.")
+
+args = ap.parse_args()
+conf = process_config_file(args.config)
+
+insts = _inst_list()
+for inst in insts:
+    if inst["instance"] == args.inst[0]:
+        break
+else: # not found
+    print("ERROR: container", args.inst[0], "not found")
+    sys.exit(-1)
+
+_local = socket.gethostname()
+cmd_args = []
+if inst["ssh_host"] not in [ "localhost", _local ]:
+	cmd_args += ["/bin/ssh", "-t", inst["ssh_host"], "-p", str(inst["ssh_port"])]
+cmd_args += [ "singularity", "exec", "instance://{}".format(args.inst[0]), "su", "-"]
+os.execlp(cmd_args[0], *cmd_args)

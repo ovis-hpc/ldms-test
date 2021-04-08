@@ -6,21 +6,19 @@ import sys
 import pwd
 import json
 import time
-import docker
 import argparse
 import logging
 
 import TADA
 
 from LDMS_Test import LDMSDCluster, LDMSDContainer, \
-                      add_common_args, process_args
+                      add_common_args, process_args, cond_timedwait
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
 
 log = logging.getLogger(__name__)
 
-dc = docker.from_env()
 USER = pwd.getpwuid(os.geteuid())[0]
 
 CPU_PER_NODE = 4
@@ -220,6 +218,7 @@ if __name__ == "__main__":
 
     COMMIT_ID = args.commit_id
     spec["name"] = args.clustername
+    spec["image"] = args.image
 
     test = TADA.Test(test_suite = "Slurm_Plugins",
                      test_type = "FVT",
@@ -284,6 +283,7 @@ if __name__ == "__main__":
     except:
         pass
     cluster = LDMSDCluster.get(spec["name"], create=True, spec = spec)
+    cluster.start_sshd()
 
     log.info("-- Cleanup output --")
     remove_job_out(cluster)
@@ -309,10 +309,13 @@ if __name__ == "__main__":
     j1 = submit_job(cluster, num_tasks = 4)
     j2 = submit_job(cluster, num_tasks = 4)
     j3 = submit_job(cluster, num_tasks = 4)
-    time.sleep(10)
 
     jobs_verified = True
     tasks = [ (j, i) for j in [j0, j1, j2, j3] for i in range(0, 4) ]
+    rc = cont.files_exist(('/db/slurm_env_{j}.{i}.out'.format(j=j, i=i) \
+                              for j, i in tasks), timeout=60 )
+    if rc == False:
+        log.info("File checking timed out")
     for j, i in tasks:
         out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
                              .format(jobid = j, procid=i))
@@ -361,6 +364,10 @@ if __name__ == "__main__":
     assert_no = 0
     cont = cluster.get_container("headnode")
     _nodes = []
+    rc = cont.files_exist(('/db/slurm_env_{j}.{p}.out'.format(j=jobid, p=procid) \
+                     for procid in range(0, num_tasks)), timeout = 60)
+    if rc == False:
+        log.info("File checking timed out")
     for procid in range(0, num_tasks): # 8 procs span 2 nodes
         out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
                              .format(jobid = jobid, procid=procid))
@@ -408,7 +415,13 @@ if __name__ == "__main__":
     node_events = []
     all_events = []
     for cont in slurmd_containers:
-        data = cont.read_file('/db/spank_stream_{node}.out'.format(node=cont.hostname))
+        rc = cont.files_exist('/db/spank_stream_{}.out'.format(cont.hostname), timeout=60)
+        if rc == False:
+            log.info("File checking timed out")
+    for cont in slurmd_containers:
+        f = '/db/spank_stream_{node}.out'.format(node=cont.hostname)
+        cmd = 'grep -v \'^ERROR\' {}'.format(f)
+        rc, data = cont.exec_run(cmd)
         events = data.split('EVENT:')
         event_list = []
         for event in events:
@@ -472,6 +485,10 @@ if __name__ == "__main__":
 
     cont = cluster.get_container("headnode")
     assert_no = 51
+    rc = cont.files_exist(('/db/crash_env_{}.{}.out'.format(jobid, procid) \
+                        for procid in (0, 1)), timeout=60 )
+    if rc == False:
+        log.info("File checking timed out")
     for procid in [ 0, 1 ]:
         out = cont.read_file('/db/crash_env_{0}.{1}.out'.format(jobid, procid))
         d = make_dict_from_out(out)

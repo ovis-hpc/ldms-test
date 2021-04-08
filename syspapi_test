@@ -6,7 +6,6 @@ import pwd
 import sys
 import json
 import time
-import docker
 import argparse
 import TADA
 import logging
@@ -162,7 +161,7 @@ spec = {
 
     #"image": "ovis-centos-build:slurm",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ], # for debugging
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "mounts": [
         "{}:/db:rw".format(DB),

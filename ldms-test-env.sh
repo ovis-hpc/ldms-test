@@ -4,8 +4,9 @@ add_path() {
         local NAME=$1
         local VAL=$2
         [[ *:${!NAME}:* == *:${VAL}:* ]] ||
-                eval "export ${NAME}=\"${!NAME}:${VAL}\""
+                eval "export ${NAME}=\"${VAL}:${!NAME}\""
 }
 
-PREFIX=/opt/ldms-test
+PREFIX=/home/narate/projects/ldms-test
 add_path PATH $PREFIX
+add_path PYTHONPATH $PREFIX

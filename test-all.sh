@@ -1,19 +1,40 @@
 #!/bin/bash
 #
-# Usage: ./test-all.sh         # or
-#        OVIS_PREFIX=/my/ovis LOG=/my/log ./test-all.sh
+# Usage: [NAME=VAUE ...] ./test-all.sh
 #
-# If OVIS_PREFIX environment variable is not specified, `/opt/ovis` is used.
+# Environment variables:
+# - OVIS_PREFIX: The path to ovis installation prefix. If not specified,
+#                `/opt/ovis` is used.
+# - LOG: Path to the log file. ${HOME}/test-all.log is the default.
 #
-# The output is printed to STDOUT and is also logged to a log file pointed to by
-# LOG environment varaible. The default LOG is ${HOME}/test-all.log.
+# - SKIP_PAPI: set to non-empty string (e.g. 'y') to skip tests that use PAPI.
+# - FAIL_FAST: set to non-empty string (e.g. 'y') to fail immediately if a test
+#              failed.
 
 # Use /opt/ovis by default
-OVIS_PREFIX=${OVIS_PREFIX:-/opt/ovis}
+_default=$( which ldmsd 2>/dev/null )
+_default=${_default%/sbin/ldmsd}
+_default=${_default:-/opt/ovis}
+OVIS_PREFIX=${OVIS_PREFIX:-${_default}}
 LOG=${LOG:-${HOME}/test-all.log}
 
+echo "LOG: ${LOG}"
+echo "OVIS_PREFIX: ${OVIS_PREFIX}"
+
+[[ -z "${SKIP_PAPI}" ]] && {
+	PAPI_LIST=(
+		agg_slurm_test
+		papi_sampler_test
+		papi_store_test
+		store_app_test
+		syspapi_test
+	)
+} || {
+	PAPI_LIST=
+}
+
 LIST=(
-agg_slurm_test
+${PAPI_LIST[*]}
 agg_test
 ldmsd_auth_ovis_test
 ldmsd_auth_test
@@ -22,14 +43,10 @@ ldmsd_stream_test
 maestro_cfg_test
 mt-slurm-test
 ovis_ev_test
-papi_sampler_test
-papi_store_test
 set_array_test
 setgroup_test
 slurm_stream_test
 spank_notifier_test
-store_app_test
-syspapi_test
 )
 
 [[ -d "${OVIS_PREFIX}" ]] || {
@@ -46,10 +63,13 @@ syspapi_test
 	exit -1
 }
 
+[[ -z "${FAIL_FAST}" ]] || set -e
+
 for T in ${LIST[*]}; do
 	echo "======== ${T} ========"
 	CMD="./${T} --prefix ${OVIS_PREFIX} $@"
 	echo ${CMD}
 	${CMD}
+	sleep 10 # allow some clean-up break between tests
 	echo "----------------------------------------------"
 done 2>&1 | tee ${LOG}

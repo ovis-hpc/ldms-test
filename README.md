@@ -12,6 +12,11 @@ TOC
 
 * [Overview](#overview)
 * [SYNOPSIS](#synopsis)
+* [Singularity Cluster Setup](#singularity-cluster-setup)
+  * [Singularity network with macvlan and fakeroot](#singularity-network-with-macvlan-and-fakeroot)
+  * [making a singularity image for ldms-test](#making-a-singularity-image-for-ldms-test)
+  * [ldms-test.conf and Singularity](#ldms-testconf-and-singularity)
+  * [Convenient singularity container shell access](#convenient-singularity-container-shell-access)
 * [Docker Host Cluster Setup](#docker-host-cluster-setup)
 * [Docker Setup](#docker-setup)
   * [dockerd network port](#dockerd-network-port)
@@ -47,15 +52,16 @@ talk to each other via dockerd swarm members). A virtual cluster has exactly one
 network. The hostname of each container must be defined in the `node`
 specification and must be unique (within the virtual cluster).
 
-`DockerCluster` implements basic routines for handling the virtual cluster (e.g.
-create, remove), and the `DockerClusterContainer` implements basic routines for
+`LDMSDCluster` implements basic routines for handling the virtual cluster (e.g.
+create, remove), and the `LDMSDContainer` implements basic routines for
 interacting with each of the containers (e.g. getting aliases of the virtual
-node). The `LDMSDCluster` extends `DockerCluster` and `LDMSDContainer` extends
-`DockerClusterContainer` to provide ldmsd-specific routines (e.g. start ldmsd,
-perform `ldms_ls`). Please see [Python Module Usage
-Guide](#python-module-usage-guide) for a guideline on how to use the virtual
-cluster in Python. For full details of the APIs, please see in-line Python
-documentation in the module.
+node). `LDMSDCluster` and `LDMSDContainer` are abstract classes that get
+implemented by the runtime plugins (singularity or docker; see
+[runtime](runtime) directory). The runtime selection can be specified in
+[ldms-test.conf](ldms-test.conf) configuration file. Please see [Python Module
+Usage Guide](#python-module-usage-guide) for a guideline on how to use the
+virtual cluster in Python. For full details of the APIs, please see in-line
+Python documentation in the module.
 
 In this document, we will use our bare-metal cluster "cygnus" (hostnames:
 cygnus-01..08) as an example on how to deploy and run the test infrastructure.
@@ -63,6 +69,10 @@ Cygnus cluster runs on CentOS 7.6.1810.
 
 SYNOPSIS
 ========
+
+Please see [ldms-test.conf](ldms-test.conf) for the configuration file. Users
+can specify which runtime to use (singularity vs docker), which image to use,
+etc.
 
 The following is a synopsis of how to use the utilities in the module.
 
@@ -103,6 +113,131 @@ rc, output = cont.exec_run("some_program some_param")
 
 # destroy the cluster
 cluster.remove()
+```
+
+
+Singularity Cluster Setup
+=========================
+
+Note: A *host* means a machine (virtual or physical) that runs *containers*.
+
+`plugin/singularity.py` implementation has the following requirements:
+1. all hosts must have `singularity` installed (obviously),
+2. User's home directory is shared over the network on each host (e.g. NFS
+   mounted).
+3. password-free ssh among hosts (e.g. using public key), and
+4. configurable network interface from within the container.
+
+1-3 are quite standard in cluster environment and the guides are quite easy to
+find. The following subsection describe how to achieve 4.
+
+
+Singularity network with macvlan and fakeroot
+---------------------------------------------
+
+To enable a network to a non-privileged singularity container (`-n` option), as
+of Singularity version 3.7.1, a `--fakeroot` is required. The fakeroot mode maps
+the current user to UID 0 under a new namespace and requires `/etc/subuid` and
+`/etc/subgid` setup. Please see Singularity administrator guide
+[here](https://sylabs.io/guides/3.7/admin-guide/user_namespace.html#fakeroot-feature)
+on how to set them up.
+
+For the non-root singularity instance with network and fakeroot, singularity
+will use settings in `/etc/singularity/network/40_fakeroot.conflist` to setup
+the container network interface. As of version 3.7.1 singularity uses
+[CNI](https://github.com/containernetworking/cni) for network virtualization and
+only supports: bridge, ptp, ipvlan, macvlan, and none. The system administrator
+can use any of them (except none) as long as a container on one host can talk to
+another container on another host, and the IP address of the interface can be
+set from within the container (part of the virtual cluster setup). We found that
+using `macvlan` is effective and requires little setup.
+
+Example `/etc/singularity/network/40_fakeroot.conflist`:
+```json
+{
+    "cniVersion": "0.4.0",
+    "name": "fakeroot",
+    "plugins": [
+        {
+            "type": "macvlan",
+            "master": "enp0s3",
+            "ipam": { }
+        }
+    ]
+}
+```
+
+making a singularity image for ldms-test
+----------------------------------------
+
+Use [singularity/make-ovis-centos-build.sh](singularity/make-ovis-centos-build.sh)
+script to build a singularity image. For example:
+
+```sh
+$ ./singularity/make-ovis-centos-build.sh
+# This will build `ovis-centos-build` image (directory) right in the current
+# directory.
+
+# Or specify the path of the output image as follows:
+$ ./singularity/make-ovis-centos-build.sh IMAGE=/path/to/image
+```
+
+
+ldms-test.conf and Singularity
+------------------------------
+
+When using singularity runtime, one must specify `runtime=singularity` in
+`[ldms-test]` section. In addition, in `[singularity]` section, the following
+parameters must be specified:
+- `hosts`: specifies a list of hosts to run the singularity containers. Please
+  note that the user home directory on each host must be network mounted to the
+  same place and the user must be able to ssh to these hosts w/o password (e.g.
+  using public keys). Bash braces expansion is supported (e.g. node-{011..099})
+  and the list can span multiple lines.
+- `ip_addr_space`: a subnet for the container network interfaces.
+- `ip_addr_db`: the path to a regular file used for maintaining IP address
+  assignments.
+
+Example:
+```ini
+[ldms-test]
+runtime = singularity
+
+[singularity]
+hosts = node-{0000..0025} node-0030
+        node-{0099..0155}
+ip_addr_space = 10.100.0.0/16
+ip_addr_db = sing_addr.db
+
+```
+
+Please see [ldms-test.conf](ldms-test.conf) for all available options and their
+explanations.
+
+
+Convenient singularity container shell access
+---------------------------------------------
+
+Instead of figuring out which host to SSH to and execute `singularity shell`,
+[sing-shell](sing-shell) is a convenient script to do that. The following
+example uses [`list_cluster -l`](list_cluster) to list clusters and their
+containers, then it uses [sing-shell](sing-shell) to invoke an interactive shell
+in `user-agg_test-d58ee27-headnode` container.
+
+```sh
+$ ./list_cluster -l
+user-agg_test-d58ee27
+  containers:
+    user-agg_test-d58ee27-agg-11 (on host host-1)
+    user-agg_test-d58ee27-agg-12 (on host host-2)
+    user-agg_test-d58ee27-agg-2 (on host host-3)
+    user-agg_test-d58ee27-headnode (on host host-4)
+    user-agg_test-d58ee27-node-1 (on host host-5)
+    user-agg_test-d58ee27-node-2 (on host host-6)
+    user-agg_test-d58ee27-node-3 (on host host-7)
+    user-agg_test-d58ee27-node-4 (on host host-8)
+
+$ ./sing-shell user-agg_test-d58ee27-headnode
 ```
 
 

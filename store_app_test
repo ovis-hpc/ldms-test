@@ -6,7 +6,6 @@ import pwd
 import sys
 import json
 import time
-import docker
 import argparse
 import TADA
 import logging
@@ -30,6 +29,7 @@ exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
 
 def dprompt(msg):
     """Show prompt if TADA.DEBUG flag (`--debug` CLI option) is set"""
+    return
     if TADA.DEBUG and sys.flags.interactive:
         input(msg)
 
@@ -252,7 +252,7 @@ spec = {
     "slurm_loglevel" : "debug2",
     "oversubscribe" : "FORCE",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [

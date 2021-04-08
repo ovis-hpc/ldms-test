@@ -30,7 +30,6 @@ import pwd
 import sys
 import json
 import time
-import docker
 import argparse
 import TADA
 import logging
@@ -349,7 +348,7 @@ spec = {
     "slurm_loglevel" : "debug2",
     "oversubscribe" : "FORCE",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : { "FOO": "BAR" },
     "mounts": [
@@ -448,6 +447,9 @@ export SUBSCRIBER_DATA='{ "papi_sampler": { "file": "/db/jobpapi.json" } }'
 srun /db/prog
 """
 cont.write_file("/db/job.sh", code)
+
+cont.exec_run("sync")
+cluster.files_exist(["/db/syspapi.json", "/db/jobpapi.json", "/db/prog.c"])
 
 log.info("-- Start daemons --")
 cluster.start_daemons()

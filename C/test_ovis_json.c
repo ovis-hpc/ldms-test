@@ -132,7 +132,7 @@ static json_entity_t *CREATE_EXPECTED_ENTITY(enum value_e type)
 	for (i = first; i <= last; i++) {
 		switch (i) {
 		case INT_VALUE:
-			exp[i] = json_entity_new(JSON_INT_VALUE, 1);
+			exp[i] = json_entity_new(JSON_INT_VALUE, 1L);
 			break;
 		case BOOL_FALSE_VALUE:
 			exp[i] = json_entity_new(JSON_BOOL_VALUE, 0);
@@ -152,7 +152,7 @@ static json_entity_t *CREATE_EXPECTED_ENTITY(enum value_e type)
 			break;
 		case LIST_VALUE:
 			exp[i] = json_entity_new(JSON_LIST_VALUE);
-			json_item_add(exp[i], json_entity_new(JSON_INT_VALUE, 1));
+			json_item_add(exp[i], json_entity_new(JSON_INT_VALUE, 1L));
 			json_item_add(exp[i], json_entity_new(JSON_BOOL_VALUE, 0));
 			json_item_add(exp[i], json_entity_new(JSON_FLOAT_VALUE, 1.1));
 			json_item_add(exp[i], json_entity_new(JSON_STRING_VALUE, "foo"));
@@ -162,7 +162,7 @@ static json_entity_t *CREATE_EXPECTED_ENTITY(enum value_e type)
 			break;
 		case DICT_VALUE:
 			exp[i] = json_entity_new(JSON_DICT_VALUE);
-			json_attr_add(exp[i], "int", json_entity_new(JSON_INT_VALUE, 1));
+			json_attr_add(exp[i], "int", json_entity_new(JSON_INT_VALUE, 1L));
 			json_attr_add(exp[i], "bool",
 					json_entity_new(JSON_BOOL_VALUE, 12));
 			json_attr_add(exp[i], "float",
@@ -173,7 +173,7 @@ static json_entity_t *CREATE_EXPECTED_ENTITY(enum value_e type)
 			json_attr_add(exp[i], "list",
 					json_entity_new(JSON_LIST_VALUE));
 			json_item_add(json_value_find(exp[i], "list"),
-					json_entity_new(JSON_INT_VALUE, 1));
+					json_entity_new(JSON_INT_VALUE, 1L));
 			json_item_add(json_value_find(exp[i], "list"),
 					json_entity_new(JSON_BOOL_VALUE, 0));
 			json_item_add(json_value_find(exp[i], "list"),
@@ -716,12 +716,12 @@ static void test_dict_build(test_t suite)
 	assert(a);
 
 	d = json_dict_build(NULL,
-			JSON_INT_VALUE, "int", 1,
+			JSON_INT_VALUE, "int", 1L,
 			JSON_BOOL_VALUE, "bool", 1,
 			JSON_FLOAT_VALUE, "float", 1.1,
 			JSON_STRING_VALUE, "string", "foo",
 			JSON_LIST_VALUE, "list",
-				JSON_INT_VALUE, 1,
+				JSON_INT_VALUE, 1L,
 				JSON_BOOL_VALUE, 0,
 				JSON_FLOAT_VALUE, 1.1,
 				JSON_STRING_VALUE, "foo",
@@ -742,14 +742,14 @@ static void test_dict_build(test_t suite)
 			"expected == json_dict_build(...)");
 
 	/* add & replace more attributes */
-	json_attr_add(exp[DICT_VALUE], "int", json_entity_new(JSON_INT_VALUE, 2));
+	json_attr_add(exp[DICT_VALUE], "int", json_entity_new(JSON_INT_VALUE, 2L));
 	a = json_entity_new(JSON_DICT_VALUE);
 	json_attr_add(a, "a", json_entity_new(JSON_STRING_VALUE, "a"));
 	json_attr_add(a, "b", json_entity_new(JSON_STRING_VALUE, "b"));
 	json_attr_add(exp[DICT_VALUE], "new_1", a);
 
 	d = json_dict_build(d,
-			JSON_INT_VALUE, "int", 2,
+			JSON_INT_VALUE, "int", 2L,
 			JSON_DICT_VALUE, "new_1",
 				JSON_STRING_VALUE, "a", "a",
 				JSON_STRING_VALUE, "b", "b",
@@ -771,12 +771,12 @@ static void test_dict_merge(test_t suite)
 
 	d2 = json_dict_build(NULL,
 			/* replace */
-			JSON_INT_VALUE, "int", 2,
+			JSON_INT_VALUE, "int", 2L,
 			JSON_NULL_VALUE, "bool",
 			JSON_FLOAT_VALUE, "float", 2.2,
 			JSON_STRING_VALUE, "string", "bar",
 			JSON_LIST_VALUE, "list",
-				JSON_INT_VALUE, 1,
+				JSON_INT_VALUE, 1L,
 				JSON_STRING_VALUE, "haha",
 				-2,
 			JSON_DICT_VALUE, "dict",
@@ -784,7 +784,7 @@ static void test_dict_merge(test_t suite)
 				-2,
 
 			/* new */
-			JSON_INT_VALUE, "int_1", 3,
+			JSON_INT_VALUE, "int_1", 3L,
 			JSON_BOOL_VALUE, "bool_1", 0,
 			JSON_FLOAT_VALUE, "float_1", 3.3,
 			JSON_STRING_VALUE, "string_1", "333",
