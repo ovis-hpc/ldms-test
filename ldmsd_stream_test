@@ -250,7 +250,7 @@ def start_publisher(cont, host, port, stream_type, fin):
 
 def subscriber_output_check(fout, fin, t, count):
     LEAD_FMT='EVENT:{{"type":"{0}","size":{1},"event":'
-    
+
     def consume(f, e, lead_str):
         """Consume expected string `e` from the file `f`"""
         # Consume lead string first
@@ -498,3 +498,4 @@ for t in STREAM_TYPES:
         ldmsd_case(pub_cont, samplerd_cont, agg_cont, t, sz)
 
 test.finish()
+cluster.remove()
