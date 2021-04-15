@@ -403,7 +403,7 @@ expect = set(["node-{}/{}".format(i, name) \
                     for i in [1,2,3,4] \
                     for name in ["meminfo"]])
 if sets == expect:
-    test.assert_test(4, True, "see all sets")
+    test.assert_test(4, True, "see only meminfo")
 else:
     test.assert_test(4, False, "result({}) != expect({})".format(sets, expect))
 
