@@ -12,7 +12,8 @@ import logging
 import TADA
 
 from LDMS_Test import LDMSDCluster, LDMSDContainer, \
-                      add_common_args, process_args, cond_timedwait
+                      add_common_args, process_args, cond_timedwait, \
+                      debug_prompt
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -203,6 +204,7 @@ def undrain():
     cont = cluster.get_container("headnode")
     cont.exec_run("scontrol update node=node-[1-8] state=down reason=undrain")
     cont.exec_run("scontrol update node=node-[1-8] state=resume")
+    time.sleep(10)
 
 
 if __name__ == "__main__":
@@ -285,15 +287,36 @@ if __name__ == "__main__":
     cluster = LDMSDCluster.get(spec["name"], create=True, spec = spec)
     cluster.start_sshd()
 
+    def _slurm_running():
+        # test if slurmd/slurmctld is running on all containers
+        for cont in cluster.containers:
+            rc, out = cont.exec_run("pgrep slurm")
+            if rc:
+                return False
+        return True
+
+    def _no_slurm_running():
+        # test if no slurmd/slurmctld is running
+        # and slurmctld (6817) port and slurmd (6818) port are free
+        for cont in cluster.containers:
+            rc, out = cont.exec_run("pgrep slurm")
+            if rc == 0:
+                return False
+            rc, out = cont.exec_run("grep ':1aa1\\>\\|1aa2\\>' /proc/net/tcp")
+            if rc == 0:
+                return False
+        return True
+
     log.info("-- Cleanup output --")
     remove_job_out(cluster)
 
     log.info("-- Test bad plugstack config --")
     # manually start slurmctld + slurmd
-    cont = cluster.get_container("headnode")
-    cont.start_munged()
-    cont.prep_slurm_conf()
-    cont.exec_run("slurmctld")
+    log.info("Starting slurm ...")
+    headnode = cluster.get_container("headnode")
+    headnode.start_munged()
+    headnode.prep_slurm_conf()
+    headnode.exec_run("slurmctld")
     for i in range(1, NUM_NODES + 1):
         name = "node-{}".format(i)
         cont = cluster.get_container(name)
@@ -303,6 +326,11 @@ if __name__ == "__main__":
                 "required {libdir}/ovis-ldms/libslurm_notifier.so foo=bar" \
                 .format(libdir=args.libdir))
         cont.exec_run("slurmd")
+    if not cond_timedwait(_slurm_running, timeout=20):
+        log.info("Starting slurm ... timed out")
+    else:
+        log.info("Starting slurm ... OK")
+    time.sleep(10)
     undrain()
 
     j0 = submit_job(cluster, num_tasks = 4)
@@ -312,12 +340,12 @@ if __name__ == "__main__":
 
     jobs_verified = True
     tasks = [ (j, i) for j in [j0, j1, j2, j3] for i in range(0, 4) ]
-    rc = cont.files_exist(('/db/slurm_env_{j}.{i}.out'.format(j=j, i=i) \
-                              for j, i in tasks), timeout=60 )
+    rc = headnode.files_exist(('/db/slurm_env_{j}.{i}.out'.format(j=j, i=i) \
+                              for j, i in tasks), timeout=60, interval=1 )
     if rc == False:
         log.info("File checking timed out")
     for j, i in tasks:
-        out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
+        out = headnode.read_file('/db/slurm_env_{jobid}.{procid}.out' \
                              .format(jobid = j, procid=i))
         d = make_dict_from_out(out)
         jobid = int(d.get('SLURM_JOBID', -1))
@@ -327,15 +355,23 @@ if __name__ == "__main__":
             break
     test.assert_test(60, jobs_verified, 'jobs verified')
 
+    log.info("Killin slurm ...")
     for cont in cluster.containers:
         cont.exec_run("pkill slurm") # this kills both slurmd and slurmctld
 
-
+    if not cond_timedwait(_no_slurm_running, timeout=20):
+        log.info("Killin slurm ... timed out")
+    else:
+        log.info("Killin slurm ... OK")
+    time.sleep(20)
     log.info("-- Start daemons --")
     cluster.start_daemons()
-    time.sleep(2)
+    if not cond_timedwait(_slurm_running, timeout=10):
+        log.info("Starting slurm ... timed out")
+    else:
+        log.info("Starting slurm ... OK")
+    time.sleep(10)
     undrain()
-    time.sleep(2)
 
     # Test Strategy:
     #
@@ -362,14 +398,13 @@ if __name__ == "__main__":
 
     # Read the environment file to confirm that the job ran
     assert_no = 0
-    cont = cluster.get_container("headnode")
     _nodes = []
-    rc = cont.files_exist(('/db/slurm_env_{j}.{p}.out'.format(j=jobid, p=procid) \
+    rc = headnode.files_exist(('/db/slurm_env_{j}.{p}.out'.format(j=jobid, p=procid) \
                      for procid in range(0, num_tasks)), timeout = 60)
     if rc == False:
         log.info("File checking timed out")
     for procid in range(0, num_tasks): # 8 procs span 2 nodes
-        out = cont.read_file('/db/slurm_env_{jobid}.{procid}.out' \
+        out = headnode.read_file('/db/slurm_env_{jobid}.{procid}.out' \
                              .format(jobid = jobid, procid=procid))
         d = make_dict_from_out(out)
         _nodes.append(d.get('SLURM_TOPOLOGY_ADDR'))
@@ -465,12 +500,11 @@ if __name__ == "__main__":
     test.assert_test(50, mt_found, 'Multi-tenant jobs found')
 
     # Run a job that crashes the stream listener while the job is running
-    cont = cluster.get_container("headnode")
-    cont.write_file('/db/crash_stream_listener.sh',
+    headnode.write_file('/db/crash_stream_listener.sh',
                     '#!/bin/bash\n'\
                     'pkill ldmsd_stream_subscriber\n'\
                     'env | grep SLURM > /db/crash_env_${SLURM_JOBID}.${SLURM_PROCID}.out\n')
-    cont.write_file('/db/spank_job_2.sh',
+    headnode.write_file('/db/spank_job_2.sh',
                     '#!/bin/bash\n'\
                     '#SBATCH -N 2\n'\
                     '#SBATCH --output spank_test.out\n'\
@@ -483,14 +517,13 @@ if __name__ == "__main__":
     log.info("  jobid = {0}".format(jobid))
     time.sleep(10) # enough time for the job to run
 
-    cont = cluster.get_container("headnode")
     assert_no = 51
-    rc = cont.files_exist(('/db/crash_env_{}.{}.out'.format(jobid, procid) \
+    rc = headnode.files_exist(('/db/crash_env_{}.{}.out'.format(jobid, procid) \
                         for procid in (0, 1)), timeout=60 )
     if rc == False:
         log.info("File checking timed out")
     for procid in [ 0, 1 ]:
-        out = cont.read_file('/db/crash_env_{0}.{1}.out'.format(jobid, procid))
+        out = headnode.read_file('/db/crash_env_{0}.{1}.out'.format(jobid, procid))
         d = make_dict_from_out(out)
         test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
         assert_no += 1
