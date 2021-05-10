@@ -469,7 +469,7 @@ def bash_items(exp):
                  echo ${{A[$I]}}
              done
     """.format(exp)
-    out = sp.check_output(cmd, shell=True)
+    out = sp.check_output(cmd, shell=True, executable="/bin/bash")
     return out.decode().splitlines()
 
 class Spec(dict):
@@ -1991,7 +1991,7 @@ def ldmsd_version(prefix):
     """Get LDMSD version from the installation prefix"""
     try:
         _cmd = "strings {}/sbin/ldmsd | grep 'LDMSD_VERSION '".format(prefix)
-        out = sp.check_output(_cmd, shell = True).decode()
+        out = sp.check_output(_cmd, shell = True, executable="/bin/bash").decode()
     except:
         out = ""
     m = LDMSD_STR_VER_RE.match(out)
@@ -1999,7 +1999,7 @@ def ldmsd_version(prefix):
         # try `ldmsd -V`
         try:
             _cmd = "{}/sbin/ldmsd -V | grep 'LDMSD Version: '".format(prefix)
-            out = sp.check_output(_cmd, shell = True).decode()
+            out = sp.check_output(_cmd, shell = True, executable="/bin/bash").decode()
         except:
             out = ""
         m = LDMSD_EXE_VER_RE.match(out)

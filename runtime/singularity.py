@@ -104,7 +104,8 @@ def ssh(host, cmd='', input=None, interactive=False, wait=True, port=22, **kwarg
     -------
     obj(Popen): a Popen object for the ssh process
     """
-    _kwargs = dict(shell = True, stdout = PIPE, stdin = PIPE, stderr = STDOUT)
+    _kwargs = dict(shell = True, stdout = PIPE, stdin = PIPE, stderr = STDOUT,
+                   executable = "/bin/bash")
     _kwargs.update(kwargs)
     p = Popen("ssh -T {} -p {} {}".format(host, port, cmd), **_kwargs)
     p.stdin = p.stdin.detach() # don't use buffer
@@ -465,7 +466,8 @@ def _inst_list():
         cmd = _ssh + "singularity instance list --json"
         # cmd = "ssh -T {} -p {} singularity instance list --json".format(host, port)
         logger.debug("(_inst_list) ssh to {}".format(host))
-        p = Popen(cmd, stdout=PIPE, stderr=STDOUT, shell=True)
+        p = Popen(cmd, stdout=PIPE, stderr=STDOUT, shell=True,
+                  executable="/bin/bash")
         logger.debug("(_inst_list) -- background")
         items.append( (host, port, p) )
     for host, port, p in items:
@@ -615,7 +617,8 @@ class SContainer(LDMSDContainer):
         """Retreive the first non loopback IP address from /proc/PID/net/fib_trie"""
         addrs = set()
         cmd = self._ssh + " cat /proc/{}/net/fib_trie".format(self.pid)
-        p = run(cmd, shell=True, stdout=PIPE, stderr=STDOUT)
+        p = run(cmd, shell=True, stdout=PIPE, stderr=STDOUT,
+                executable="/bin/bash")
         if p.returncode:
             raise RuntimeError(p.stdout)
         for l in STR(p.stdout).splitlines():
@@ -673,7 +676,7 @@ class SContainer(LDMSDContainer):
             return p
         scmd = self._prep_scmd("bash -l", ssh=self._ssh)
         p = Popen(scmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT,
-                  preexec_fn = os.setpgrp)
+                  preexec_fn = os.setpgrp, executable="/bin/bash")
         p.stdin = p.stdin.detach() # don't use buffer
         p.stdout = p.stdout.detach()
         os.set_blocking(p.stdout.fileno(), False)
@@ -734,7 +737,8 @@ class SContainer(LDMSDContainer):
         """Execute `cmd` as `user` (with `env`) in the instance and returns"""
         logger.debug("(SContainer._exec_run) BEGIN")
         scmd = self._prep_scmd(cmd, env, user, self._ssh)
-        p = Popen(scmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT)
+        p = Popen(scmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=STDOUT,
+                  executable="/bin/bash")
         if in_data is not None:
             p.stdin.write(BYTES(in_data))
         p.stdin.close()
@@ -830,10 +834,11 @@ class SContainer(LDMSDContainer):
                 ip_addr=shlex.quote(ip_addr)) \
            .encode()
         sh = self._ssh if self._ssh else "/bin/bash"
-        p = run(sh, shell=True, stdout=PIPE, stderr=STDOUT, input=cmds)
+        p = run(sh, shell=True, stdout=PIPE, stderr=STDOUT, input=cmds,
+                executable="/bin/bash")
         if p.returncode:
             raise RuntimeError(p.stdout)
-        p = run(sh, shell=True, stdout=PIPE, stderr=STDOUT,
+        p = run(sh, shell=True, stdout=PIPE, stderr=STDOUT, executable="/bin/bash",
                 input=BYTES("singularity instance list --json " + self.instance))
         objs = json.loads(STR(p.stdout))
         sing_json = objs["instances"][0]
@@ -844,7 +849,8 @@ class SContainer(LDMSDContainer):
 
     def stop(self):
         cmd = self._ssh + " singularity instance stop {}".format(self.instance)
-        p = run(cmd, shell=True, stdout=PIPE, stderr=STDOUT)
+        p = run(cmd, shell=True, stdout=PIPE, stderr=STDOUT,
+                executable="/bin/bash")
         if p.returncode:
             raise RuntimeError(p.stdout)
 
