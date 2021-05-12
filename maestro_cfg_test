@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+
+# Synopsis: Test configuration for 2 levels of aggregators with 8 samplers
+# First level has 3 aggregators, 2nd level has 1 aggregator
+
+import argparse
+import json
+import logging
+import os
+import TADA
+import tempfile
+import time
+import sys
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, cs_rm
+
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test for ldmsd configuration with maestro_ctrl"
+ap = argparse.ArgumentParser(description = "Configuration tests for agg with 2 samplers")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### -------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+NUM_COMPUTE = 8
+STORE_ROOT = "/store" # path inside container (aggs)
+CFG_PREFIX = "headnode"
+AGG_PORT = 10010
+SMPLR_PORT = 10002
+HEADNODE_PORT = 10104
+STORE_PATH = "/db/containers"
+LDMS_CFG_FILE = "/db/ldms_cfg.yaml"
+ETCD_FILE = "/db/etcd.yaml"
+
+
+# Edit etcd to run
+ETCD_YAML = """cluster: %(cfg_prefix)s
+members: 
+  - host: localhost
+    port: 2379
+
+""" % { "cfg_prefix" : CFG_PREFIX }
+MAESTRO_CFG = """hosts:
+  - names : &sampler-hosts "node-[1-8]-[%(smplr_port)s]"
+    hosts : "node-[1-8]"
+    ports : &sampler-ports "[%(smplr_port)s]"
+    xprt : sock
+
+  - names : &l1-agg-hosts "agg-[1-3]"
+    hosts : "agg-[1-3]"
+    ports : "[%(agg_port)s]"
+    xprt : sock
+
+  - names : &l2-agg-hosts "agg-4"
+    hosts : "headnode"
+    ports: "%(headnode_port)s"
+    xprt : sock
+
+aggregators:
+  - names : *l1-agg-hosts
+    hosts : *l1-agg-hosts
+    group : l1-agg
+
+  - names : *l2-agg-hosts
+    hosts : *l2-agg-hosts
+    group : l2-agg
+
+producers:
+# This informs the L1 load balance group what is being distributed across
+# the L1 aggregator nodes
+  - names     : *sampler-hosts
+    hosts     : *sampler-hosts
+    group     : l1-agg
+    reconnect : 20s
+    type      : active
+    updaters  :
+      - l1-all
+
+  - names     : *l1-agg-hosts
+    hosts     : *l1-agg-hosts
+    group     : l2-agg
+    reconnect : 20s
+    type      : active
+    updaters  :
+      - l2-all
+
+samplers:
+  - names       : *sampler-hosts
+    config :
+      - name        : meminfo # Variables can be specific to plugin
+        interval    : "1.0s:0ms" # Interval:offset format. Used when starting the sampler plugin
+        perm        : "0777"
+
+updaters:
+- name  : all           # must be unique within group
+  group : l1-agg
+  interval : "1.0s:0ms"
+  sets :
+    - regex : .*        # regular expression matching set name or schema
+      field : inst      # 'instance' or 'schema'
+  producers :
+    - regex : .*        # regular expression matching producer name
+                        # this is evaluated on the Aggregator, not
+                        # at configuration time'
+- name  : all           # must be unique within group
+  group : l2-agg
+  interval : "1.0s:0ms"
+  sets :
+    - regex : meminfo        # regular expression matching set name or schema
+      field : inst      # 'instance' or 'schema'
+  producers :
+    - regex : .*
+
+stores :
+  - name      : sos-meminfo
+    group     : l2-agg
+    container : ldms_data
+    schema    : meminfo
+    plugin :
+      name   : store_sos
+      config : { path : %(store_path)s }
+""" % { "smplr_port" : SMPLR_PORT, "agg_port" : AGG_PORT,
+        "headnode_port" : HEADNODE_PORT, "store_path" : STORE_PATH }
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "type" : "ldmsd",
+                    "listen" : [
+                        { "port" : SMPLR_PORT, "xprt" : "sock" }
+                    ]                    
+                }
+            ]
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        }
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-{}".format(i),
+            "component_id" : i,
+            "!extends" : "compute-node",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                }
+            ]
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
+        
+        {
+            "hostname" : "agg-{}".format(j),
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg-{}".format(j),
+                    "type" : "ldmsd",
+                    "listen" : [
+                        { "port" : AGG_PORT, "xprt" : "sock" },
+                    ]
+                } 
+            ]
+        } for j in [1, 2, 3]
+    ] + [
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "etcd",
+                    "type" : "etcd"
+                },
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg-4",
+                    "type" : "ldmsd",
+                    "listen" : [
+                        { "port" : HEADNODE_PORT, "xprt" : "sock" }
+                    ]
+                }
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : { 
+        "FOO": "BAR",
+         },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_maestro_cfg",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "load maestro etcd cluster")
+test.add_assertion(2, "config ldmsd cluster with maestro")
+
+#### Helper Functions ####
+def ldms_ls(host, port = SMPLR_PORT, l = False):
+    try:
+        args = "-l -v" if l else ""
+        rc, out = headnode.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     -h {host} 2>/dev/null'" \
+                                    .format(host=host, port=port, args=args))
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        return None
+
+#### start ####
+test.start()
+
+if not os.path.isdir(DB+"/containers"):
+    os.mkdir(DB+"/containers")
+
+### Write test config files ###
+etcd_cfg = open(DB+"/etcd.yaml", "w")
+ldms_cfg = open(DB+"/ldms_cfg.yaml", "w")
+etcd_cfg.write(ETCD_YAML)
+ldms_cfg.write(MAESTRO_CFG)
+print("---Wait for config to write to file---")
+time.sleep(10)
+etcd_cfg.close()
+ldms_cfg.close()
+
+log.info("-- Get or create cluster --")
+cluster = LDMSDCluster.get(spec['name'], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+node3 = cluster.get_container("node-3")
+node4 = cluster.get_container("node-4")
+node5 = cluster.get_container("node-5")
+node6 = cluster.get_container("node-6")
+node7 = cluster.get_container("node-7")
+node8 = cluster.get_container("node-8")
+agg1 = cluster.get_container("agg-1")
+agg2 = cluster.get_container("agg-2")
+agg3 = cluster.get_container("agg-3")
+
+log.info("-- Start daemons --")
+try:
+    cluster.start_daemons()
+    cluster.make_known_hosts()
+
+    log.info("... make sure ldmsd's are up")
+    time.sleep(5)
+
+    # Test 1 test.add_assertion(1, "load maestro etcd cluster")
+    cmd = "maestro_ctrl --cluster "+ETCD_FILE+ " --ldms_config "+LDMS_CFG_FILE+" --prefix "+CFG_PREFIX  
+    rc, out = headnode.exec_run(cmd, environment=spec["env"])
+    expected_out = "LDMS aggregator configuration saved to etcd cluster.\n"
+    if expected_out == out:
+        test.assert_test(1, True, "etcd cluster loaded successfully")
+    else:
+        test.assert_test(1, False, "Unexpected output: {}".format(out))
+except Exception as e:
+    a, b, c = sys.exc_info()
+    print(str(e)+str(c.tb_lineno))
+    if cluster:
+        cluster.remove()
+    sys.exit()
+
+# Test 2 start maestro and configure ldmsd's
+cmd = "maestro --cluster "+ETCD_FILE+" --prefix "+CFG_PREFIX
+maestro = headnode.exec_interact(cmd)
+out = maestro.read(idle_timeout=20)
+expected_out = "Rebalance cluster...\r\nAdding sampler plugins to sampler node-1-10002\r\n"\
+               "node-1-10002 configured. Starting... meminfo\r\nAdding sampler plugins to sampler "\
+               "node-2-10002\r\nnode-2-10002 configured. Starting... meminfo\r\nAdding sampler "\
+               "plugins to sampler node-3-10002\r\nnode-3-10002 configured. Starting... meminfo\r\n"\
+               "Adding sampler plugins to sampler node-4-10002\r\nnode-4-10002 configured. "\
+               "Starting... meminfo\r\nAdding sampler plugins to sampler node-5-10002\r\n"\
+               "node-5-10002 configured. Starting... meminfo\r\nAdding sampler plugins to sampler "\
+               "node-6-10002\r\nnode-6-10002 configured. Starting... meminfo\r\nAdding sampler "\
+               "plugins to sampler node-7-10002\r\nnode-7-10002 configured. Starting... meminfo\r\n"\
+               "Adding sampler plugins to sampler node-8-10002\r\nnode-8-10002 configured. "\
+               "Starting... meminfo\r\nAdding 8 producers to agg agg-1\r\nAdding 8 producers to "\
+               "agg agg-2\r\nAdding 8 producers to agg agg-3\r\nAdding 3 producers to agg agg-4\r\n"\
+               "Starting agg agg-1 3 producers\r\nStopping agg agg-1 0 producers\r\nStarting agg "\
+               "agg-2 3 producers\r\nStopping agg agg-2 0 producers\r\nStarting agg agg-3 2 "\
+               "producers\r\nStopping agg agg-3 0 producers\r\nStarting agg agg-4 3 producers\r\n"\
+               "Stopping agg agg-4 0 producers\r\nFinished load balancing.\r\n"
+
+if expected_out == out:
+    test.assert_test(2, True, "Maestro ldmsd configuration successful")
+else:
+    test.assert_test(2, False, "Unexpected output: {}".format(out))
+
+test.finish()
+os.remove(DB+"/etcd.yaml")
+os.remove(DB+"/ldms_cfg.yaml")
+cluster.remove()

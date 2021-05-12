@@ -166,7 +166,7 @@ test = TADA.Test(test_suite = "LDMSD",
 test.add_assertion(1, "ldmsd_controller interactive session")
 test.add_assertion(2, "ldmsctl interactive session")
 test.add_assertion(3, "ldmsd_controller start bogus producer")
-test.add_assertion(4, "ldmscl start bogus producer")
+test.add_assertion(4, "ldmsctl start bogus producer")
 test.add_assertion(5, "ldmsd_controller bogus command")
 test.add_assertion(6, "ldmsctl bogus command")
 test.add_assertion(7, "ldmsd_controller load bogus plugin")
