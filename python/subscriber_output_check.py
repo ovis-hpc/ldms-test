@@ -29,7 +29,7 @@ count = int(sys.argv[4])
 fi = open(fin)
 fo = open(fout)
 in_str = fi.read()
-lead_str = LEAD_FMT.format(t, len(in_str))
+lead_str = LEAD_FMT.format(t, len(in_str)+1) # '\0' terminated
 
 for i in range(0, count):
     consume(fo, in_str, lead_str)
