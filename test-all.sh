@@ -30,6 +30,7 @@ echo "LOG: ${LOG}"
 LIST=(
 ${PAPI_LIST[*]}
 agg_test
+failover_test
 ldmsd_auth_ovis_test
 ldmsd_auth_test
 ldmsd_ctrl_test
