@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-# This is a test for failover aggregation. 
+# This is a test for failover aggregation.
 # Please see "ldmsd_failover.man" in ovis-hpc/ovis repo. for more information.
 
 import os
@@ -141,11 +141,11 @@ spec = {
                 "updtr_add name=all interval=1000000 offset=%offset%",
                 "updtr_prdcr_add name=all regex=.*",
                 "updtr_start name=all",
-                "failover_config host=agg-12 port=10000 xprt=sock type=active interval=1000000 timeout_factor=2", 
+                "failover_config host=agg-12 port=10000 xprt=sock type=active interval=1000000 timeout_factor=2",
                 "failover_start"]
             }
 
- 
+
     }, # templates
     "nodes" : [
         {
@@ -360,7 +360,7 @@ while True:
 
 log.info("-- Resurrecting ldmsd on agg-11 --")
 agg11.start_ldmsd()
-time.sleep(5)
+time.sleep(20)
 
 #test.add_assertion(7, "agg-11 ldmsd revived, sets removed from agg-12")
 #test.add_assertion(8, "agg-11 ldmsd revived, all sets running on agg-2")
@@ -369,7 +369,7 @@ while True:
     if not c:
         log.warn("ldmsd on agg-11 was not up")
         break
-    
+
     # agg-12
     lst = set(ldms_ls("agg-12"))
     expect = set([ "node-{}/{}".format(i, s) \
@@ -431,7 +431,7 @@ while True:
 
 log.info("-- Resurrecting ldmsd on agg-12 --")
 agg12.start_ldmsd()
-time.sleep(5)
+time.sleep(20)
 
 #test.add_assertion(13, "agg-11 ldmsd revived, sets removed from agg-12")
 #test.add_assertion(14, "agg-11 ldmsd revived, all sets running on agg-2")
@@ -440,7 +440,7 @@ while True:
     if not c:
         log.warn("ldmsd on agg-12 was not up")
         break
-    
+
     # agg-11
     lst = set(ldms_ls("agg-11"))
     expect = set([ "node-{}/{}".format(i, s) \
