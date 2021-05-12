@@ -38,7 +38,7 @@ from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls
 
 if __name__ != "__main__":
-    raise RuntimeError("This should not be impoarted as a module.")
+    raise RuntimeError("This should not be imported as a module.")
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)

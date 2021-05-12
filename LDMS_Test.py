@@ -1369,6 +1369,7 @@ class LDMSDContainer(DockerClusterContainer):
         self.svc = svc
         super(LDMSDContainer, self).__init__(obj, svc)
         self.DAEMON_TBL = {
+            "etcd": self.start_etcd,
             "ldmsd": self.start_ldmsd,
             "sshd": self.start_sshd,
             "munged": self.start_munged,
@@ -1385,6 +1386,20 @@ class LDMSDContainer(DockerClusterContainer):
         """Reurn the number from `pgrep -c {prog}`"""
         rc, out = self.pgrep("-c", prog)
         return int(out)
+
+    def check_etcd(self):
+        """Check if etcd is running"""
+        rc, out = self.exec_run("pgrep -c etcd")
+        return rc == 0
+
+    def start_etcd(self, spec_overrid = {}, **kwargs):
+        """Start etcd in the container"""
+        if self.check_etcd():
+            return
+        out = self.exec_interact("etcd")
+        if not out:
+            raise RuntimeError("sshd failed, rc: {}, output: {}" \
+                              .format(rc, out))
 
     def check_ldmsd(self):
         """Check if ldmsd is running"""
@@ -1805,8 +1820,8 @@ class LDMSDCluster(BaseCluster):
         The daemon in `spec["nodes"][X]["daemons"]` is a dictionary describing
         supported daemons with the following common attributes:
           - "name" is the name of the daemon.
-          - "type" is the type of the supported daemons, which are "sshd",
-            "munged", "slurmctld", "slurmd", and "ldmsd".
+          - "type" is the type of the supported daemons, which are "etcd",
+            "sshd", "munged", "slurmctld", "slurmd", and "ldmsd".
 
         "sshd", "munged" and "slurmd" daemons do not have extra attributes other
         than the common daemon attributes described above.
