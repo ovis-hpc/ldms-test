@@ -21,7 +21,7 @@ yum -y install which openssh-server gdb gdb-gdbserver iproute \
                openssl openssl-devel vim readline-devel \
 	       perl-ExtUtils-MakeMaker pam-devel mariadb-devel libcurl-devel \
 	       python3-devel papi-devel libpfm-devel tmux \
-	       bzip2-devel \
+	       bzip2-devel etcd \
 	       ; \
 yum -y group install "Development Tools" ; \
 yum clean all ; \
@@ -61,6 +61,7 @@ yes | pip3 install Cython ; \
 yes | pip3 install numpy ; \
 yes | pip3 install etcd3 ; \
 yes | pip3 install PyYAML ; \
+yes | pip3 install ipython ; \
 '
 
 RUN /bin/echo >/etc/tmux.conf -e "\
