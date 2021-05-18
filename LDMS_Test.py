@@ -2533,6 +2533,8 @@ class ContainerTTY(object):
         while True:
             try:
                 buff = self.sock.recv(1024)
+                if not buff:
+                    break
                 bio.write(buff)
                 active = 1 # stay active if read succeed
             except BlockingIOError as e:
