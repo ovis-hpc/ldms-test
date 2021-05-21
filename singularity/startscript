@@ -24,6 +24,7 @@ mkdir -m 0755 -p munge
 mkdir -p etc/slurm
 mkdir -p etc/profile.d
 mkdir -p store
+mkdir -p var/lib/etcd
 
 # prep files
 touch etc/ldmsd.conf

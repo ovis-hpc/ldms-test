@@ -818,8 +818,9 @@ class LDMSDContainer(ABC):
         """Start etcd in the container"""
         if self.check_etcd():
             return
-        out = self.exec_interact("etcd")
-        if not out:
+        cmd = "bash -c 'etcd --data-dir /var/lib/etcd/default.etcd >/var/log/etcd.log 2>&1 &'"
+        rc, out = self.exec_run(cmd)
+        if rc:
             raise RuntimeError("sshd failed, rc: {}, output: {}" \
                               .format(rc, out))
 

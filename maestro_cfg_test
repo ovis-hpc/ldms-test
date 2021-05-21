@@ -65,7 +65,7 @@ ETCD_FILE = "/db/etcd.yaml"
 
 # Edit etcd to run
 ETCD_YAML = """cluster: %(cfg_prefix)s
-members: 
+members:
   - host: localhost
     port: 2379
 
@@ -174,7 +174,7 @@ spec = {
                     "type" : "ldmsd",
                     "listen" : [
                         { "port" : SMPLR_PORT, "xprt" : "sock" }
-                    ]                    
+                    ]
                 }
             ]
         },
@@ -198,7 +198,7 @@ spec = {
             ]
         } for i in range(1, NUM_COMPUTE+1)
     ] + [
-        
+
         {
             "hostname" : "agg-{}".format(j),
             "daemons" : [
@@ -212,7 +212,7 @@ spec = {
                     "listen" : [
                         { "port" : AGG_PORT, "xprt" : "sock" },
                     ]
-                } 
+                }
             ]
         } for j in [1, 2, 3]
     ] + [
@@ -241,7 +241,7 @@ spec = {
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
     "image": "ovis-centos-build",
     "ovis_prefix": PREFIX,
-    "env" : { 
+    "env" : {
         "FOO": "BAR",
          },
     "mounts": [
@@ -318,22 +318,27 @@ try:
     time.sleep(5)
 
     # Test 1 test.add_assertion(1, "load maestro etcd cluster")
-    cmd = "maestro_ctrl --cluster "+ETCD_FILE+ " --ldms_config "+LDMS_CFG_FILE+" --prefix "+CFG_PREFIX  
-    rc, out = headnode.exec_run(cmd, environment=spec["env"])
+    cmd = "maestro_ctrl --cluster "+ETCD_FILE+ \
+            " --ldms_config " +LDMS_CFG_FILE+ \
+            " --prefix "+CFG_PREFIX + " 2>/dev/null"
+    cmd = "bash -c '{}'".format(cmd)
+    rc, out = headnode.exec_run(cmd)
     expected_out = "LDMS aggregator configuration saved to etcd cluster.\n"
     if expected_out == out:
         test.assert_test(1, True, "etcd cluster loaded successfully")
     else:
         test.assert_test(1, False, "Unexpected output: {}".format(out))
 except Exception as e:
+    raise
     a, b, c = sys.exc_info()
     print(str(e)+str(c.tb_lineno))
     if cluster:
         cluster.remove()
-    sys.exit()
+    sys.exit(-1)
 
 # Test 2 start maestro and configure ldmsd's
-cmd = "maestro --cluster "+ETCD_FILE+" --prefix "+CFG_PREFIX
+cmd = "maestro --cluster "+ETCD_FILE+" --prefix "+CFG_PREFIX + " 2>/dev/null"
+cmd = "bash -c '{}'".format(cmd)
 maestro = headnode.exec_interact(cmd)
 out = maestro.read(idle_timeout=20)
 expected_out = "Rebalance cluster...\r\nAdding sampler plugins to sampler node-1-10002\r\n"\
