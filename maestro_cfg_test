@@ -280,6 +280,17 @@ def ldms_ls(host, port = SMPLR_PORT, l = False):
 #### start ####
 test.start()
 
+# Check maestro + maestro_ctrl
+_m = [ args.prefix+"/bin/maestro", args.prefix+"/sbin/maestro" ]
+_m_ctrl = [ args.prefix+"/bin/maestro_ctrl", args.prefix+"/sbin/maestro_ctrl" ]
+
+_m_exists = (os.path.exists(_m[0]) or os.path.exists(_m[1])) and \
+            (os.path.exists(_m_ctrl[0]) or os.path.exists(_m_ctrl[1]))
+if not _m_exists:
+    log.info("maestro and/or maestro_ctrl not found, skipping tests")
+    test.finish()
+    sys.exit(0) # skipping != failed
+
 if not os.path.isdir(DB+"/containers"):
     os.mkdir(DB+"/containers")
 
