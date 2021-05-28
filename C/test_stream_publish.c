@@ -105,8 +105,8 @@ static int stream_publish_file(const char *stream, const char *type,
 		memcpy(&buf[buf_off], buffer, data_len);
 		buf_off += data_len;
 	}
-
-	rc = ldmsd_stream_publish(x, stream, stream_type, buf, buf_off);
+	buf[buf_off] = '\0';
+	rc = ldmsd_stream_publish(x, stream, stream_type, buf, buf_off+1);
 	return rc;
 }
 
