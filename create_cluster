@@ -95,7 +95,9 @@ spec = {
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+cluster.make_ssh_id()
 cluster.start_daemons()
+cluster.make_known_hosts()
 log.info("DONE")
 log.info("cluster: {}".format(cluster.name))
 for cont in cluster.containers:
