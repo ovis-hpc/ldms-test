@@ -131,11 +131,36 @@ l3_list = LDMSD_L3.allDaemons()
 aggs = l1_list + l2_list + l3_list
 daemons = { a.name: a for a in samp_list + l1_list + l2_list + l3_list }
 
+# Controller
+ctrl = Control()
 
 if True: # The data generation part (w/ ldms dir verification)
     # stop + cleanup first
     stop_all()
     cleanup()
+
+    logger.info("{} samplers on {} hosts ({} samplers per host)"
+                .format(
+                    len(SAMP_HOSTS)*SAMP_PER_HOST,
+                    len(SAMP_HOSTS),
+                    SAMP_PER_HOST
+                )
+            )
+    logger.info("{} L1 agg on {} hosts ({} agg per host)"
+                .format(
+                    len(L1_HOSTS)*L1_PER_HOST,
+                    len(L1_HOSTS),
+                    L1_PER_HOST
+                )
+            )
+    logger.info("{} L2 agg on {} hosts ({} agg per host)"
+                .format(
+                    len(L2_HOSTS)*L1_PER_HOST,
+                    len(L2_HOSTS),
+                    L2_PER_HOST
+                )
+            )
+    logger.info("1 L3 on {}".format(L3_HOST))
 
     # start all daemons
     start_all()
@@ -160,9 +185,6 @@ if True: # The data generation part (w/ ldms dir verification)
     dir_verify(aggs, 1, [])
     time.sleep(STEADY_WAIT) # so that the steady state includes our probing connections
 
-    # Controller
-    ctrl = Control()
-
     #test.add_assertion(2, "Kill 1/2 samplers of L1 agg and check all aggregators")
     l10 = l1_list[0]
     prdcrs = l10.getPrdcr()
@@ -171,13 +193,17 @@ if True: # The data generation part (w/ ldms dir verification)
     ctrl.stop(prdcrs, timeout=10)
     rm_sets = set(s for d in prdcrs for s in daemons[d].getExpectedDir())
     l3.wait_set_removed(rm_sets = rm_sets, timeout = 60)
+    time.sleep(STEADY_WAIT)
     dir_verify(aggs, 2, rm_sets, rm_level = 0)
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(3, "Resurrect samplers of L1 agg and check all aggregators")
     logger.info("Resurrecting 1/2 of samplers connected to {}".format(l10.name))
     ctrl.start(prdcrs, timeout=10)
     l3.wait_set_restored(timeout = 60)
+    time.sleep(STEADY_WAIT)
     dir_verify(aggs, 3, [])
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(4, "Kill 2nd L1 aggregator and check all aggregators")
     l11 = l1_list[1]
@@ -186,16 +212,20 @@ if True: # The data generation part (w/ ldms dir verification)
     ctrl.stop([l11.name], timeout=10)
     rm_sets = set(l11.getExpectedDir())
     l3.wait_set_removed(rm_sets = rm_sets, timeout = 60)
+    time.sleep(STEADY_WAIT)
     _aggs = [ d for d in aggs if d.name != l11.name ]
     dir_verify(_aggs, 4, rm_sets, rm_level = 1)
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(5, "Resurrect 2nd L1 aggregator and check all aggregators")
     logger.info("resurrecting L1 {}".format(l11.name))
     ctrl.start([l11.name], timeout=10)
     l3.wait_set_restored(timeout = 60)
+    time.sleep(STEADY_WAIT)
     logger.info("Connecting to {}".format(l11.name))
     l11.connect() # reconnect
     dir_verify(aggs, 5, [])
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(6, "Kill 2nd L2 aggregator and check all aggregators")
     l21 = l2_list[1]
@@ -204,28 +234,36 @@ if True: # The data generation part (w/ ldms dir verification)
     ctrl.stop([l21.name], timeout=10)
     rm_sets = set(l21.getExpectedDir())
     l3.wait_set_removed(rm_sets = rm_sets, timeout = 60)
+    time.sleep(STEADY_WAIT)
     _aggs = [ d for d in aggs if d.name != l21.name ]
     dir_verify(_aggs, 6, rm_sets, rm_level = 2)
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(7, "Resurrect 2nd L2 aggregator and check all aggregators")
     logger.info("resurrecting L2 {}".format(l21.name))
     ctrl.start([l21.name], timeout=10)
     l3.wait_set_restored(timeout = 60)
+    time.sleep(STEADY_WAIT)
     l21.connect()
     dir_verify(aggs, 7, [])
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(8, "Kill the L3 aggregator and check all aggregators")
     logger.info("killing L3 {}".format(l3.name))
     l3.disconnect()
     ctrl.stop([l3.name], timeout = 10)
     _aggs = [ d for d in aggs if d.name != l3.name ]
+    time.sleep(STEADY_WAIT)
     dir_verify(_aggs, 8, [], rm_level = 3)
+    time.sleep(STEADY_WAIT)
 
     #test.add_assertion(9, "Resurrect the L3 aggregator and check all aggregators")
     logger.info("resurrecting L3 {}".format(l3.name))
     ctrl.start([l3.name], timeout = 10)
+    time.sleep(STEADY_WAIT)
     l3.connect()
     l3.wait_set_restored(timeout = 60)
+    time.sleep(STEADY_WAIT)
     dir_verify(aggs, 9, [])
 
     logger.info("Wait a bit to capture the last steady state")
