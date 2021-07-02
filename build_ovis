@@ -129,7 +129,7 @@ set -e
 [[ -f /opt/ovis/bin/sos_cmd ]] || {{
     pushd {SOS_SRC}
     ./autogen.sh
-    mkdir /db/sos-build
+    mkdir -p /db/sos-build
     rm -rf /db/sos-build/*
     pushd /db/sos-build
     {SOS_SRC}/configure --prefix=/opt/ovis CFLAGS='-ggdb3 -O0'
@@ -161,6 +161,7 @@ OPTIONS=(
 	--enable-tutorial-store
 	--enable-app-sampler
 	--enable-papi
+        --enable-rdma
 )
 {SRC}/configure ${{OPTIONS[*]}} CFLAGS="${{CFLAGS[*]}}"
 make
