@@ -680,7 +680,17 @@ class Spec(dict):
         return _ret
 
     def _subst_str(self, val):
-        return self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), val)
+        # string substitution may refer to another variable. So, we have to keep
+        # substituting it, with a limit, until there are no more variables left.
+        count = 0
+        s0 = self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), val)
+        s1 = self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), s0)
+        while s0 != s1:
+            if count > 128: # 128 level of substitution should suffice
+                raise ValueError("Too many level of substitutions")
+            s0 = s1
+            s1 = self.VAR_RE.sub(lambda m: str(self.VAR[m.group(1)]), s0)
+        return s0
 
 def get_cluster_class():
     from importlib import import_module
