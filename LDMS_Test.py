@@ -1,13 +1,22 @@
 import os
 import re
+import io
 import pdb
 import sys
 import pwd
 import json
 import time
 import shlex
+import errno
 import socket
+import signal
 import subprocess as sp
+import logging
+
+import fcntl
+from array import array
+import struct
+import ipaddress
 
 import TADA
 
@@ -26,6 +35,8 @@ D = Debug()
 # `G` being the convenient global object holder
 class Global(object): pass
 G = Global()
+
+logger = logging.getLogger()
 
 #############
 #  Helpers  #
@@ -699,6 +710,88 @@ def get_cluster_class():
     rt_mod = import_module(rt)
     return rt_mod.get_cluster_class()
 
+def get_iface_addrs():
+    global G
+    if hasattr(G, "iface_addrs") and G.iface_addrs:
+        return G.iface_addrs
+    # Use ioctl to request SIOCGIFCONF on our socket
+    SIOCGIFCONF = 0x8912 # from <sys/ioctl.h>
+    IF_NAMESIZE = 16 # <net/if.h>
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    buff = array("B", b'\0' * 4096)
+    buff_ptr, buff_len = buff.buffer_info()
+    ifconf = struct.Struct("iL") # struct ifconf in <net/if.h>
+    ifin = ifconf.pack(buff_len, buff_ptr)
+    ifout = fcntl.ioctl(sock.fileno(), SIOCGIFCONF, ifin)
+    _len, _ptr = ifconf.unpack(ifout)
+    D.ifreq = ifreq = struct.Struct(">16sHHL") # <net/if.h>
+    iface_addrs = []
+    for off in range(0, _len, 40): # sizeof(struct ifreq) == 40
+        iface, family, port, addr = ifreq.unpack(buff[off:off+ifreq.size])
+        iface = iface.strip(b'\0').decode()
+        addr = ipaddress.ip_address(addr)
+        iface_addrs.append((iface, addr))
+    D.buff = buff
+    G.iface_addrs = iface_addrs
+    return iface_addrs
+
+def get_local_addrs():
+    global G
+    if hasattr(G, "local_addrs") and G.local_addrs:
+        return G.local_addrs
+    G.local_addrs = set( a for i, a in get_iface_addrs() )
+    return G.local_addrs
+
+def is_remote(host):
+    """Check if `host` is a remote host"""
+    addr = socket.gethostbyname(host)
+    addr = ipaddress.ip_address(addr)
+    return addr not in get_local_addrs()
+
+def BYTES(x):
+    if type(x) == bytes:
+        return x
+    if type(x) == str:
+        return x.encode()
+    return bytes(x)
+
+def bash(_input):
+    """Execute `_input` in bash, and return (rc, output)"""
+    p = sp.Popen("/bin/bash", shell=True, stdin=sp.PIPE, stdout=sp.PIPE,
+                 stderr=sp.STDOUT)
+    # don't use buffer
+    p.stdin = p.stdin.detach()
+    p.stdout = p.stdout.detach()
+    if _input:
+        p.stdin.write(BYTES(_input))
+        p.stdin.close()
+    bio = io.BytesIO()
+    while True:
+        out = p.stdout.read()
+        if len(out) == 0 and p.poll() is not None:
+            break
+        bio.write(out)
+    return (p.returncode, bio.getvalue().decode())
+
+def ssh(host, _input=None, port=22):
+    """Similar to $ echo _input | ssh -p port"""
+    cmd = "ssh -q -p {} {}".format(port, host)
+    p = sp.Popen(cmd, shell=True, stdin=sp.PIPE, stdout=sp.PIPE,
+                 stderr=sp.STDOUT)
+    # don't use buffer
+    p.stdin = p.stdin.detach()
+    p.stdout = p.stdout.detach()
+    if _input:
+        p.stdin.write(BYTES(_input))
+        p.stdin.close()
+    bio = io.BytesIO()
+    while True:
+        out = p.stdout.read()
+        if len(out) == 0 and p.poll() is not None:
+            break
+        bio.write(out)
+    return (p.returncode, bio.getvalue().decode())
+
 ################################################################################
 
 
@@ -982,68 +1075,7 @@ class LDMSDContainer(ABC):
 
     def get_ldmsd_config(self, spec):
         """Generate ldmsd config `str` from given spec"""
-        sio = StringIO()
-        # process `auth`
-        for auth in spec.get("auth", []):
-            _a = auth.copy() # shallow copy
-            cfgcmd = "auth_add name={}".format(_a.pop("name")) \
-                     +"".join([" {}={}".format(k, v) for k,v in _a.items()])\
-                     +"\n"
-            sio.write(cfgcmd)
-        # process `listen`
-        for listen in spec.get("listen", []):
-            _l = listen.copy() # shallow copy
-            cfgcmd = "listen " \
-                     +"".join([" {}={}".format(k, v) for k,v in _l.items()])\
-                     +"\n"
-            sio.write(cfgcmd)
-        # process `samplers`
-        for samp in spec.get("samplers", []):
-            plugin = samp["plugin"]
-            interval = samp.get("interval", 2000000)
-            if interval != "":
-                interval = "interval={}".format(interval)
-            offset = samp.get("offset", "")
-            if offset != "":
-                offset = "offset={}".format(offset)
-            if self.ldmsd_version >= (4,100,0):
-                samp_temp = \
-                    "load name={plugin}\n" \
-                    "config name={plugin} {config}\n"
-                if samp.get("start"):
-                    samp_temp += \
-                        "smplr_add name={plugin}_smplr instance={plugin} " \
-                        "          {interval} {offset}\n" \
-                        "smplr_start name={plugin}_smplr\n"
-            else:
-                samp_temp = \
-                    "load name={plugin}\n" \
-                    "config name={plugin} {config}\n"
-                if samp.get("start"):
-                    samp_temp += "start name={plugin} {interval} {offset}\n"
-            samp_cfg = samp_temp.format(
-                plugin = plugin, config = " ".join(samp["config"]),
-                interval = interval, offset = offset
-            )
-
-            # replaces all %VAR%
-            samp_cfg = re.sub(r'%(\w+)%', lambda m: samp[m.group(1)], samp_cfg)
-            sio.write(samp_cfg)
-        # process `prdcrs`
-        for prdcr in spec.get("prdcrs", []):
-            prdcr = deep_copy(prdcr)
-            prdcr_add = "prdcr_add name={}".format(prdcr.pop("name"))
-            for k, v in prdcr.items():
-                prdcr_add += " {}={}".format(k, v)
-            sio.write(prdcr_add)
-            sio.write("\n")
-        # process `config`
-        cfg = spec.get("config")
-        if cfg:
-            for x in cfg:
-                sio.write(x)
-                sio.write("\n")
-        return sio.getvalue()
+        return get_ldmsd_config(spec, ver = self.ldmsd_version)
 
     @cached_property
     def ldmsd_cmd(self):
@@ -2107,6 +2139,404 @@ class Munged(object):
         self.cont.exec_run("kill {}".format(pid))
 
 
+class Proc(object):
+    """Local/Remote process interaction base class"""
+
+    def __init__(self, pid_file, host, ssh_port=22, env=None):
+        self.pid_file = pid_file
+        self._pid = None
+        self.host = host
+        self.ssh_port = ssh_port
+        self.is_remote = is_remote(host)
+        self.env = env
+        self.env_cmd = self.getEnvCmd()
+        # setup self._exec(_input)
+        self._exec = bash if not self.is_remote else \
+                     lambda _input: ssh(host=host, port=ssh_port, _input=_input)
+
+    @classmethod
+    def fromSpec(cls, data_root, spec):
+        _type = spec.get("type")
+        if _type == "ldmsd":
+            return LDMSDProc(data_root, spec)
+        if _type == "munged":
+            return MungedProc(data_root, spec)
+        if _type == None:
+            raise TypeError("'type' not specified")
+        raise TypeError("Unknown type: {}".format(_type))
+
+    def comm_validate(self, comm):
+        raise NotImplementedError()
+
+    def cmdline_validate(self, cmdline):
+        raise NotImplementedError()
+
+    def start(self):
+        raise NotImplementedError()
+
+    def _remote_stop(self):
+        script = """
+            if ! test -f {pid_file}; then
+                echo "pid file not found {pid_file}"
+                exit -1
+            fi
+            PID=$(cat {pid_file})
+            if ! test -d /proc/${{PID}}; then
+                echo "process not running"
+                exit -1
+            fi
+            kill ${{PID}}
+        """.format(**vars(self))
+        rc, out = ssh(self.host, port=self.ssh_port, _input=script)
+        if rc != 0:
+            raise RuntimeError("remote stop error: {}, msg: {}".format(rc, out))
+
+    def stop(self):
+        if self.is_remote:
+            return self._remote_stop()
+        # otherwise, do it locally
+        _pid = self.getpid()
+        if not _pid:
+            logger.info("{} not running".format(self.name))
+            return # already running
+        os.kill(_pid, signal.SIGTERM)
+
+    def cleanup(self):
+        raise NotImplementedError()
+
+    @property
+    def pid(self):
+        if not self._pid:
+            self._pid = self.getpid()
+        return self._pid
+
+    def _get_remote_pid(self):
+        script = """
+            if ! test -f {pid_file}; then
+                echo "pid file not found {pid_file}"
+                exit -1
+            fi
+            PID=$(cat {pid_file})
+            if ! test -d /proc/${{PID}}; then
+                echo "process not running"
+                exit -1
+            fi
+            echo ${{PID}}
+            cat /proc/${{PID}}/comm
+            cat /proc/${{PID}}/cmdline
+        """.format(**vars(self))
+        rc, out = ssh(self.host, port=self.ssh_port, _input=script)
+        if rc:
+            return None
+        pid, _comm, _cmdline = out.split("\n", 2)
+        _comm = _comm.strip()
+        _cmdline = _cmdline.strip()
+        if not self.comm_validate(_comm) or \
+                not self.cmdline_validate(_cmdline):
+            logger.warn("stale pidfile: {}".format(self.pid_file))
+            return None
+        return int(pid)
+
+    def getpid(self):
+        if self.is_remote:
+            return self._get_remote_pid()
+        _pid = None
+        if not os.path.exists(self.pid_file):
+            return None
+        try:
+            f = open(self.pid_file)
+            _pid = int(f.read())
+            f.close()
+            _comm = open("/proc/{}/comm".format(_pid)).read().strip()
+            _cmdline = open("/proc/{}/cmdline".format(_pid)).read().strip()
+            if not self.comm_validate(_comm) or \
+                    not self.cmdline_validate(_cmdline):
+                logger.warn("stale pidfile: {}".format(self.pid_file))
+                return None
+        except:
+            return None
+        return _pid
+
+    def getEnvCmd(self):
+        if not self.env:
+            return ""
+        sio = io.StringIO()
+        for k, v in self.env.items():
+            sio.write('export {k}="{v}"\n'.format(**locals()))
+        return sio.getvalue()
+
+
+class LDMSDProc(Proc):
+    """LDMS Daemon Handler"""
+    def __init__(self, data_root, spec):
+        self.data_root = data_root
+        if spec.get("type") != "ldmsd":
+            raise ValueError("Expecting a spec with 'type': 'munged'.")
+        lstn = spec.get("listen")
+        if not lstn:
+            raise KeyError("LDMSD spec requires `listen: [ {LISTEN_OBJ} ]` configuration")
+        if type(lstn) != list:
+            raise ValueError("`listen` must be a `list` of {LISTEN_OBJ}")
+        lstn = lstn[0]
+        self.spec = spec
+        self.host = lstn.get("host")
+        if not self.host:
+            raise ValueError("Listen objects must specify `host`")
+        self.port = lstn.get("port")
+        if not self.port:
+            raise ValueError("Listen objects must specify `port`")
+        self.xprt = lstn.get("xprt", "sock")
+        self.name = "{host}-{port}".format(**vars(self))
+        _pid_file = "{data_root}/pid/{host}/{name}.pid".format(**vars(self))
+        self.ssh_port = spec.get("ssh_port", 22)
+        super().__init__(_pid_file, self.host, ssh_port = self.ssh_port, env = spec.get("env"))
+        self.conf_file = "{data_root}/conf/{host}/{name}.conf".format(**vars(self))
+        self.log_file = "{data_root}/log/{host}/{name}.log".format(**vars(self))
+        self.log_level = spec.get("log_level", "ERROR")
+        self._conn = None # the LDMS connection
+        mem = spec.get("memory")
+        self.mem_opt = " -m {}".format(mem) if mem else ""
+        self.ldmsd_config = get_ldmsd_config(self.spec)
+
+    def comm_validate(self, comm):
+        return comm == "ldmsd"
+
+    def cmdline_validate(self, cmdline):
+        return cmdline.find(self.name) >= 0
+
+    def _remote_start(self):
+        rc, out = ssh(self.host, port = self.ssh_port, _input = """
+            if test -f {pid_file}; then
+                PID=$(cat {pid_file})
+                if test -d /proc/${{PID}}; then
+                    if [[ $(cat /proc/${{PID}}/comm) == ldmsd ]]; then
+                        echo "{name} already running (pid ${{PID}})"
+                        exit 114 # EALREADY
+                    fi
+                fi
+            fi
+            mkdir -p $(dirname {conf_file})
+            mkdir -p $(dirname {pid_file})
+            mkdir -p $(dirname {log_file})
+            cat >{conf_file} <<EOF\n{ldmsd_config}\nEOF
+            {env_cmd}
+            ldmsd -c {conf_file} -r {pid_file} -l {log_file} \
+                    -v {log_level} {mem_opt}
+        """.format(**vars(self)))
+        if rc == errno.EALREADY:
+            logger.info(out)
+            return
+        if rc:
+            raise RuntimeError("remote start error {}, msg: {}".format(rc, out))
+        pass
+
+    def start(self):
+        if self.is_remote:
+            return self._remote_start()
+        _pid = self.getpid()
+        if _pid:
+            logger.info("{} already running (pid {})".format(self.name, _pid))
+            return # already running
+        ret = bash("""
+            mkdir -p $(dirname {conf_file})
+            mkdir -p $(dirname {pid_file})
+            mkdir -p $(dirname {log_file})
+            cat >{conf_file} <<EOF\n{ldmsd_config}\nEOF
+            {env_cmd}
+            ldmsd -c {conf_file} -r {pid_file} -l {log_file} -v {log_level} {mem_opt}
+        """.format(**vars(self)))
+
+    def _remote_cleanup(self):
+        rc, out = ssh(self.host, port = self.ssh_port, script = """
+            if test -f {pid_file}; then
+                PID=$(cat {pid_file})
+                if test -d /proc/${{PID}}; then
+                    if [[ $(cat /proc/${{PID}}/comm) == ldmsd ]]; then
+                        echo "{name} still running (pid ${{PID}})"
+                        exit 16 # EBUSY
+                    fi
+                fi
+            fi
+            rm -f {conf_file} {pid_file} {log_file}
+        """.format(**vars(self)))
+        if rc:
+            raise RuntimeError("remote cleanup error {}, msg: {}".format(rc, out))
+
+    def cleanup(self):
+        if self.is_remote:
+            return self._remote_cleanup()
+        _pid = self.getpid()
+        if _pid:
+            raise RuntimeError("Cannot cleanup, {} is running (pid: {})"\
+                               .format(self.name, _pid))
+        for f in [ self.conf_file, self.pid_file, self.log_file ]:
+            try:
+                os.unlink(f)
+            except:
+                pass
+
+    def connect(self, auth=None, auth_opts=None):
+        from ovis_ldms import ldms
+        if self._conn:
+            self._conn.close()
+        self._conn = ldms.Xprt(self.xprt, auth=auth, auth_opts=auth_opts)
+        self._conn.connect(host=self.host, port=self.port)
+
+    def disconnect(self):
+        if self._conn:
+            self._conn.close()
+            self._conn = None
+
+    def getMaxRecvLen(self):
+        # to make it work with LDMSD_Request
+        return self._conn.msg_max
+
+    def send_command(self, cmd):
+        # to make it work with LDMSD_Request
+        rc = self._conn.send(cmd)
+        if rc != None:
+            raise RuntimeError("Failed to send the command. %s" % os.strerror(rc))
+
+    def receive_response(self, recv_len = None):
+        # to make it work with LDMSD_Request
+        return self._conn.recv()
+
+    def req(self, cmd_line):
+        """Form LDMSD_Request according to `cmd_line` and send.
+
+        Returns the response received from the daemon.
+        """
+        if not self._conn:
+            raise RuntimeError("Error: no LDMS connection")
+        verb, args = ( cmd_line.split(" ", 1) + [None] )[:2]
+        attr_list = []
+        from ldmsd.ldmsd_request import LDMSD_Request, LDMSD_Req_Attr
+        if args:
+            attr_s = []
+            attr_str_list = args.split()
+            for attr_str in attr_str_list:
+                name = None
+                value = None
+                [name, value] = (attr_str.split("=", 1) + [None])[:2]
+                if (verb == "config" and name != "name") or (verb == "env"):
+                    attr_s.append(attr_str)
+                elif (verb == "auth_add" and name not in ["name", "plugin"]):
+                    attr_s.append(attr_str)
+                else:
+                    try:
+                        attr = LDMSD_Req_Attr(value = value, attr_name = name)
+                    except KeyError:
+                        attr_s.append(attr_str)
+                    except Exception:
+                        raise
+                    else:
+                        attr_list.append(attr)
+            if len(attr_s) > 0:
+                attr_str = " ".join(attr_s)
+                attr = LDMSD_Req_Attr(value = attr_str, attr_id = LDMSD_Req_Attr.STRING)
+                attr_list.append(attr)
+        request = LDMSD_Request(command = verb, attrs = attr_list)
+        request.send(self)
+        resp = request.receive(self)
+        return resp
+
+    def prdcr_status(self):
+        resp = self.req("prdcr_status")
+        prdcrs = json.loads(resp['msg'])
+        for p in prdcrs:
+            sets = p['sets']
+            prdcr_set_states = ['START', 'LOOKUP', 'READY', 'UPDATING', 'DELETED']
+            counts = { k: 0 for k in prdcr_set_states }
+            for s in sets:
+                counts[s['state']] += 1
+            p['set_state_summary'] = counts
+        return prdcrs
+
+    def prdcr_set_status(self):
+        resp = self.req("prdcr_set_status")
+        sets = json.loads(resp['msg'])
+        prdcr_set_states = ['START', 'LOOKUP', 'READY', 'UPDATING', 'DELETED']
+        counts = { k: 0 for k in prdcr_set_states }
+        for s in sets:
+            counts[s['state']] += 1
+        return { 'sets': sets, 'set_state_summary': counts }
+
+    def dir(self):
+        if not self._conn:
+            self.connect()
+        return self._conn.dir()
+
+
+class MungedProc(Proc):
+    def __init__(self, data_root, spec):
+        # spec should contain "host", "dom", and "key"
+        if spec.get("type") != "munged":
+            raise ValueError("Expecting a spec with 'type': 'munged'.")
+        self.host = spec.get("host")
+        if not self.host:
+            raise ValueError("spec['host'] is required")
+        self.ssh_port = spec.get("ssh_port", 22)
+        self.dom = spec.get("dom", "domain0")
+        self.key = spec.get("key", "0"*128)
+        self.name = "munged-{host}-{dom}".format(**vars(self))
+        self.data_root = data_root
+        self.data_dir = "{data_root}/{host}/{dom}".format(**vars(self))
+        self.key_file = "{data_dir}/key".format(**vars(self))
+        self.pid_file = "{data_dir}/pid".format(**vars(self))
+        self.sock_file = "{data_dir}/sock".format(**vars(self))
+        self.log_file = "{data_dir}/log".format(**vars(self))
+        self.seed_file = "{data_dir}/seed".format(**vars(self))
+        super().__init__(self.pid_file, self.host, ssh_port = self.ssh_port, env = spec.get("env"))
+
+    def comm_validate(self, comm):
+        return comm == "munged"
+
+    def cmdline_validate(self, cmdline):
+        return cmdline.find(self.sock_file) >= 0
+
+    def start(self):
+        script = """
+            if test -f {pid_file}; then
+                PID=$(cat {pid_file})
+                if test -d /proc/${{PID}}; then
+                    if [[ $(cat /proc/${{PID}}/comm) == ldmsd ]]; then
+                        echo "{name} already running (pid ${{PID}})"
+                        exit 114 # EALREADY
+                    fi
+                fi
+            fi
+            umask 0022
+            mkdir -p {data_dir}
+            cat >{key_file} <<EOF\n{key}\nEOF
+            chmod 600 {key_file}
+            touch {log_file}
+            chmod 600 {log_file}
+            {env_cmd}
+            munged -S {sock_file} --pid-file {pid_file} --key-file {key_file} \
+                    --log-file {log_file} --seed-file {seed_file}
+        """.format(**vars(self))
+        rc, out = self._exec(script)
+        if rc != 0:
+            raise RuntimeError("start error {}, output: {}".format(rc, out))
+
+    def cleanup(self):
+        script = """
+            if test -f {pid_file}; then
+                PID=$(cat {pid_file})
+                if test -d /proc/${{PID}}; then
+                    if [[ $(cat /proc/${{PID}}/comm) == ldmsd ]]; then
+                        echo "{name} still running (pid ${{PID}})"
+                        exit 16 # EBUSY
+                    fi
+                fi
+            fi
+            rm -f {key_file} {pid_file} {sock_file}
+        """.format(**vars(self))
+        rc, out = self._exec(script)
+        if rc != 0:
+            raise RuntimeError("cleanup error {}, output: {}".format(rc, out))
+
+
 # control sequence regex
 CS_RE = re.compile("""
 (?:
@@ -2129,6 +2559,71 @@ def cond_timedwait(cond, timeout=10, interval=0.1):
             return True
         time.sleep(interval)
     return False
+
+def get_ldmsd_config(spec, ver=None):
+    """Generate ldmsd config `str` from given spec"""
+    sio = StringIO()
+    # process `auth`
+    for auth in spec.get("auth", []):
+        _a = auth.copy() # shallow copy
+        cfgcmd = "auth_add name={}".format(_a.pop("name")) \
+                 +"".join([" {}={}".format(k, v) for k,v in _a.items()])\
+                 +"\n"
+        sio.write(cfgcmd)
+    # process `listen`
+    for listen in spec.get("listen", []):
+        _l = listen.copy() # shallow copy
+        cfgcmd = "listen " \
+                 +"".join([" {}={}".format(k, v) for k,v in _l.items()])\
+                 +"\n"
+        sio.write(cfgcmd)
+    # process `samplers`
+    for samp in spec.get("samplers", []):
+        plugin = samp["plugin"]
+        interval = samp.get("interval", 2000000)
+        if interval != "":
+            interval = "interval={}".format(interval)
+        offset = samp.get("offset", "")
+        if offset != "":
+            offset = "offset={}".format(offset)
+        if ver and ver >= (4,100,0):
+            samp_temp = \
+                "load name={plugin}\n" \
+                "config name={plugin} {config}\n"
+            if samp.get("start"):
+                samp_temp += \
+                    "smplr_add name={plugin}_smplr instance={plugin} " \
+                    "          {interval} {offset}\n" \
+                    "smplr_start name={plugin}_smplr\n"
+        else:
+            samp_temp = \
+                "load name={plugin}\n" \
+                "config name={plugin} {config}\n"
+            if samp.get("start"):
+                samp_temp += "start name={plugin} {interval} {offset}\n"
+        samp_cfg = samp_temp.format(
+            plugin = plugin, config = " ".join(samp["config"]),
+            interval = interval, offset = offset
+        )
+
+        # replaces all %VAR%
+        samp_cfg = re.sub(r'%(\w+)%', lambda m: samp[m.group(1)], samp_cfg)
+        sio.write(samp_cfg)
+    # process `prdcrs`
+    for prdcr in spec.get("prdcrs", []):
+        prdcr = deep_copy(prdcr)
+        prdcr_add = "prdcr_add name={}".format(prdcr.pop("name"))
+        for k, v in prdcr.items():
+            prdcr_add += " {}={}".format(k, v)
+        sio.write(prdcr_add)
+        sio.write("\n")
+    # process `config`
+    cfg = spec.get("config")
+    if cfg:
+        for x in cfg:
+            sio.write(x)
+            sio.write("\n")
+    return sio.getvalue()
 
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())
