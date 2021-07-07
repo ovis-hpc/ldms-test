@@ -165,7 +165,7 @@ spec = {
 
     #"image": "ovis-centos-build:slurm",
     "cap_add": [ "SYS_PTRACE" ],
-    "image": args.image,
+    "image": None,
     "ovis_prefix": "REPLACE_ME",
     "env" : {
         "LD_LIBRARY_PATH": "/data/tada/lib:/opt/ovis/lib:/opt/ovis/lib64",
@@ -258,6 +258,7 @@ if __name__ == "__main__":
         spec["mounts"] += [ "{0}:{0}:ro".format(args.src) ]
     spec["env"]["TADA_USER"] = args.user
     spec["env"]["TADA_ADDR"] = args.tada_addr
+    spec["image"] = args.image
 
     # remove existing files
     rm(args.data_root + "/stream-sampler-1.out")
