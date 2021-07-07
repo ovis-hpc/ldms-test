@@ -38,6 +38,7 @@ ldmsd_stream_test
 maestro_cfg_test
 mt-slurm-test
 ovis_ev_test
+prdcr_subscribe_test
 set_array_test
 setgroup_test
 slurm_stream_test
