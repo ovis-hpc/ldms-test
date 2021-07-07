@@ -1,0 +1,722 @@
+#!/usr/bin/env python3
+
+import re
+import argparse
+import os
+import sys
+import pwd
+import TADA
+import time
+import json
+import logging
+
+from os.path import realpath, dirname
+from io import StringIO
+
+from distutils.spawn import find_executable
+from LDMS_Test import D, G, process_args, add_common_args, read_msg, \
+		      is_ldmsd_version_4, get_ldmsd_config, \
+                      is_remote, ssh, bash, LDMSDProc, MungedProc, Proc, Spec
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+spec = {
+    "name" : "_PALCEHOLDER_", # args.clustername
+
+    # These upper case variables can be overridden by args in main
+    "XPRT" : "sock",
+    "DATA_DIR" : "_PLACEHOLDER_", # args.data_root
+    "SRC_DIR" :  os.path.realpath(os.path.dirname(__file__)),
+    "SAMP1_HOST" : "localhost",
+    "SAMP2_HOST" : "localhost",
+    "AGG1_HOST" : "localhost",
+    "AGG2_HOST" : "localhost",
+    "SAMP1_PORT" : 10001,
+    "SAMP2_PORT" : 10002,
+    "AGG1_PORT" : 10003,
+    "AGG2_PORT" : 10004,
+    "SSH_PORT" : 22,
+    "DOM": "dom0",
+    "KEY": "0"*128,
+    "OVIS_PREFIX" : "_PLACEHOLDER_", # args.prefix
+
+    "description" : "cluster definition for direct_prdcr_subscribe_test",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ENV" : {
+            "LD_LIBRARY_PATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib:%OVIS_PREFIX%/lib64",
+            "LDMSD_PLUGIN_LIBPATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib/ovis-ldms:%OVIS_PREFIX%/lib64/ovis-ldms",
+            "ZAP_LIBPATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib/ovis-ldms:%OVIS_PREFIX%/lib64/ovis-ldms",
+        },
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "!extends" : "munged-base",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "munged-base" : {
+            "name" : "munged",
+            "type" : "munged",
+            "host" : "%hostname%",
+            "dom" : "%DOM%",
+            "key" : "%KEY%",
+            "ssh_port" : "%SSH_PORT%",
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+	    "ldmsd_name" : "%hostname%-%LDMSD_PORT%",
+            "ssh_port" : "%SSH_PORT%",
+            "env" : { "!extends": "ENV" },
+            "auth" : [
+                {
+                    "name": "%DOM%",
+                    "plugin": "munge",
+                    "socket": "%DATA_DIR%/%hostname%/%DOM%/sock",
+                },
+            ],
+	    "listen" : [
+                {
+                    "port" : "%LDMSD_PORT%",
+                    "xprt" : "%XPRT%",
+                    "host" : "%hostname%",
+                    "auth" : "%DOM%",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "test_stream_sampler",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%",
+                        "stream=test_stream",
+                        "output=%DATA_DIR%/%ldmsd_name%.out"
+                    ]
+                },
+            ],
+        },
+        "prdcr" : {
+	    "name" : "%host%-%port%",
+            "host" : "_PLACEHOLDER_",
+            "port" : "_PLACEHOLDER_",
+            "xprt" : "%XPRT%",
+            "type" : "active",
+            "interval" : 1000000,
+            "auth" : "%DOM%",
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "%SAMP1_HOST%",
+            "component_id" : 10001,
+	    "LDMSD_PORT": "%SAMP1_PORT%",
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "%SAMP2_HOST%",
+            "component_id" : 10002,
+	    "LDMSD_PORT": "%SAMP2_PORT%",
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "%AGG1_HOST%",
+            "component_id" : 10003,
+	    "LDMSD_PORT": "%AGG1_PORT%",
+            "daemons" : [
+                { "!extends": "munged-base" },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "!extends" : "prdcr",
+			    "host" : "%SAMP1_HOST%",
+			    "port" : "%SAMP1_PORT%",
+                        },
+                        {
+                            "!extends" : "prdcr",
+			    "host" : "%SAMP2_HOST%",
+			    "port" : "%SAMP2_PORT%",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_subscribe regex=.* stream=test_stream",
+                        "prdcr_start_regex regex=.*",
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "%AGG2_HOST%",
+            "component_id" : 10004,
+	    "LDMSD_PORT": "%AGG2_PORT%",
+            "daemons" : [
+                { "!extends": "munged-base" },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "test_stream_sampler",
+                            "interval" : 1000000,
+                            "offset" : 0,
+                            "config" : [
+                                "component_id=%component_id%",
+                                "instance=%ldmsd_name%/%plugin%",
+                                "producer=%hostname%",
+                                "stream=test_stream",
+                                "output=%DATA_DIR%/%ldmsd_name%.out"
+                            ]
+                        },
+                    ],
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "!extends" : "prdcr",
+			    "host" : "%AGG1_HOST%",
+			    "port" : "%AGG1_PORT%",
+                        },
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "prdcr_subscribe regex=.* stream=test_stream",
+                        "prdcr_start_regex regex=.*",
+                    ],
+                },
+            ]
+        },
+        {
+            # For munged, so that we can talk with ldmsd's
+            "hostname" : "localhost",
+            "daemons" : [
+                { "!extends": "munged-base" },
+            ],
+        },
+    ],
+
+    "ovis_prefix": "%OVIS_PREFIX%",
+    "env" : { "!extends": "ENV" },
+}
+
+def rm(path):
+    if os.path.exists(path):
+        os.remove(path)
+
+def prdcr_start_regex(agg, regex_str):
+    if is_ldmsd_version_4(agg.ldmsd_version):
+        txt = "prdcr_start_regex regex={}".format(regex_str)
+    else:
+        obj = { "request": "update",
+                "id": 1,
+                "schema": "prdcr",
+                "enabled": True,
+                "re": [regex_str]}
+        txt = "json " + json.dumps(obj)
+    return agg.config_ldmsd([txt])
+
+def prdcr_stop_regex(agg, regex_str):
+    if is_ldmsd_version_4(agg.ldmsd_version):
+        txt = "prdcr_stop_regex regex={}".format(regex_str)
+    else:
+        obj = { "request": "update",
+                "id": 1,
+                "schema": "prdcr",
+                "enabled": False,
+                "re": [regex_str]}
+        txt = "json " + json.dumps(obj)
+    return agg.config_ldmsd([txt])
+
+def prdcr_unsubscribe(node, regex, stream):
+    """Tells ldmsd on `node` to prdcr_unsubscribe regex=`regex` stream=`stream`"""
+    if is_ldmsd_version_4(node.ldmsd_version):
+        txt = "prdcr_unsubscribe regex={} stream={}".format(regex, stream)
+    else:
+        raise NotImplementedError("prdcr_unsubscribe is not supported (yet) in v5")
+    return node.config_ldmsd([txt])
+
+def stream_client_dump(ldmsd):
+    """Dump stream clients in ldmsd on node as a list of (stream_name, cb_fn, cb_ctxt) tuples"""
+    ret = ldmsd.req("stream_client_dump")
+    if ret['errcode']:
+        raise RuntimeError("stream_client_dump error({errcode}): {msg}".format(**ret))
+    obj = json.loads(ret['msg'])
+    lst = [ (s["name"], c["cb_fn"], c["ctxt"]) \
+                    for s in obj["streams"] \
+                    for c in s["clients"] ]
+    return lst
+
+def verify_msg(test, assert_no, msg, json_data, err_text):
+    if msg["type"] == "json":
+        if msg["obj"] != json_data:
+            test.assert_test(assert_no, False, err_text)
+            return False
+    elif msg["type"] == "string":
+        if msg["text"] != json.dumps(json_data):
+            test.assert_test(assert_no, False, err_text)
+            return False
+    else:
+        test.assert_test(assert_no, False,
+                         "Unknown message type: {}".format(msg["type"]))
+        return False
+    return True
+
+def verify_samp_out(assert_ids, json_data, text_data, samp_out):
+    for i in range(2):
+        msg = read_msg(samp_out)
+        if msg["type"] == "json":
+            test.assert_test(assert_ids[0], msg["obj"] == json_data, "verify JSON data")
+        elif msg["type"] == "string":
+            test.assert_test(assert_ids[1], msg["text"] == text_data, "verify STRING data")
+        else:
+            raise RuntimeError("Bad message type")
+
+def verify_agg_out(assert_id, json_data, text_data, agg_out, n=2):
+    text_count = 0
+    json_count = 0
+    for x in range(0, 2*n):
+        msg = read_msg(agg_out)
+        if msg["type"] == "string":
+            text_count += 1
+            if msg["text"] != text_data:
+                test.assert_test(assert_id, False, "text_data mismatch")
+                return
+        elif msg["type"] == "json":
+            json_count += 1
+            if msg["obj"] != json_data:
+                test.assert_test(assert_id, False, "json_data mismatch")
+                return
+        else:
+            test.assert_test(assert_id, False, "Bad message type: {}".format(msg["type"]))
+            return
+    if text_count != n or json_count != n:
+        test.assert_test(assert_id, False, "Message mismatch")
+        return
+    test.assert_test(assert_id, True, "agg2 stream data verified")
+
+def publish(ldmsd, data, _type = "json"):
+    """Publish `data` to `ldmsd` (using ldmsd.host)"""
+    _vars = dict(globals())
+    _vars = dict(locals())
+    _vars.update(spec)
+    _vars.update(vars(ldmsd))
+    script = """
+        {{ cat <<EOF\n{data}\nEOF
+        }} | sed -z 's/\\n$//' |
+        {DATA_DIR}/tada/lib/test_stream_publish -h {host} -x {xprt} \
+            -p {port} -a munge -A socket={DATA_DIR}/{host}/{DOM}/sock \
+            -s test_stream -t {_type}
+    """.format(**_vars)
+    if is_remote(ldmsd.host):
+        rc, out = ssh(ldmsd.host, port=ldmsd.ssh_port, _input = script)
+    else:
+        rc, out = bash(_input = script)
+    if rc:
+        raise RuntimeError("publish failed ({}): {}".format(rc, out))
+
+def get_output(ldmsd):
+    _vars = dict(globals())
+    _vars.update(locals())
+    cmd = "cat {DATA_DIR}/{ldmsd.name}.out".format(**_vars)
+    if is_remote(ldmsd.host):
+        rc, out_txt = ssh(ldmsd.host, port=ldmsd.ssh_port, _input = cmd)
+    else:
+        rc, out_txt = bash(_input = cmd)
+    if rc:
+        raise RuntimeError("error({}): {}".format(rc, out_txt))
+    return out_txt
+
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+    parser = argparse.ArgumentParser(description="ldmsd_stream_publish/subscribe FVT test")
+    add_common_args(parser)
+    args = parser.parse_args()
+    process_args(args)
+
+    clustername = args.clustername
+    COMMIT_ID = args.commit_id
+
+    spec["OVIS_PREFIX"] = args.prefix
+    spec["name"] = clustername
+    spec["templates"]["ENV"]["TADA_USER"] = args.user
+    spec["templates"]["ENV"]["TADA_ADDR"] = args.tada_addr
+    spec["DATA_DIR"] = args.data_root
+
+    # Update spec according to config file
+    _keys = ["{}_{}".format(a, b) for b in ["HOST", "PORT"]
+                                  for a in ["SAMP1", "SAMP2", "AGG1", "AGG2"]]
+    _keys.append("XPRT")
+    for k in _keys:
+        v = G.conf.get("direct_prdcr_subscribe_test", k, fallback=None)
+        if v:
+            spec[k] = v
+
+    # Expand / substitute values in spec
+    spec = Spec(spec)
+
+    DATA_DIR = spec["DATA_DIR"]
+
+    # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
+    test = TADA.Test(test_suite = "LDMSD",
+                     test_type = "SVT",
+                     test_name = "prdcr_subscribe_test",
+                     test_desc = "LDMSD stream system verification test",
+                     test_user = args.user,
+                     commit_id = COMMIT_ID,
+                     tada_addr = args.tada_addr)
+    test.add_assertion(0, 'ldmsd_stream_publish of JSON data to stream-sampler-1 succeeds')
+    test.add_assertion(1, 'ldmsd_stream_publish of STRING data to stream-sampler-1 succeeds')
+    test.add_assertion(2, 'ldmsd_stream_publish to JSON data to stream-sampler-2 succeeds')
+    test.add_assertion(3, 'ldmsd_stream_publish of STRING data to stream-sampler-2 succeeds')
+    test.add_assertion(4, 'ldmsd_stream data check on agg-2')
+
+    test.add_assertion(5, 'Stopping the producers succeeds')
+    test.add_assertion(6, 'Restarting the producers succeeds')
+
+    test.add_assertion(7, 'JSON stream data resumes after producer restart on stream-sampler-1')
+    test.add_assertion(8, 'STRING stream data resumes after producer rerestart on stream-sampler-1')
+    test.add_assertion(9, 'JSON stream data resumes after producer restart on stream-sampler-2')
+    test.add_assertion(10, 'STRING stream data resumes after producer rerestart on stream-sampler-2')
+    test.add_assertion(11, 'ldmsd_stream data resume check on agg-2')
+
+    test.add_assertion(12, 'stream-sampler-1 is not running')
+    test.add_assertion(13, 'stream-sampler-1 has restarted')
+    test.add_assertion(14, 'JSON stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(15, 'STRING stream data resumes after stream-sampler-1 restart')
+    test.add_assertion(16, 'ldmsd_stream data check on agg-2 after stream-sampler-1 restart')
+
+    test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
+    test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
+
+    test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
+
+    # Tell the TADA infrastructure that the test is starting
+    test.start()
+
+    # Create the containers required to ruyn the test
+    bash("""
+        umask 0022
+        mkdir -p {DATA_DIR}
+    """.format(**spec))
+
+    # Build libtada and libtest_stream_sampler before starting ldmsd
+    rc, out = bash("make -C {SRC_DIR}/C BUILDDIR={DATA_DIR}/tada/lib".format(**spec))
+    if rc:
+        raise RuntimeError("libtada build failed, output: {}".format(out))
+
+    class Object(object): pass
+
+    nodes = list()
+
+    # munged and ldmsd handles
+    for node_spec in spec["nodes"]:
+        node = Object()
+        nodes.append(node)
+        node.hostname = node_spec["hostname"]
+        node.daemons = list()
+        for daemon_spec in node_spec["daemons"]:
+            d = Proc.fromSpec(spec["DATA_DIR"], daemon_spec)
+            node.daemons.append(d)
+            if type(d) == LDMSDProc:
+                node.ldmsd = d
+            elif type(d) == MungedProc:
+                node.munged = d
+
+    n0, n1, n2, n3, n_local = nodes
+    ldmsds = samp1, samp2, agg1, agg2 = [ n0.ldmsd, n1.ldmsd, n2.ldmsd, n3.ldmsd ]
+
+    # remove existing files
+    rm("{DATA_DIR}/{samp1.name}.out".format(**locals()))
+    rm("{DATA_DIR}/{samp2.name}.out".format(**locals()))
+    rm("{DATA_DIR}/{agg2.name}.out".format(**locals()))
+
+    def stop_all():
+        global nodes
+        for n in nodes:
+            if n.munged.getpid():
+                log.info("stopping munged on {}".format(n.hostname))
+                n.munged.stop()
+            if getattr(n, "ldmsd", None) and n.ldmsd.getpid():
+                log.info("stopping ldmsd on {}".format(n.hostname))
+                n.ldmsd.stop()
+
+    def start_all():
+        global nodes
+        # start all munged first
+        for n in nodes:
+            if not n.munged.getpid():
+                log.info("starting munged on {}".format(n.hostname))
+                n.munged.start()
+        # then start all ldmsd
+        for n in nodes:
+            if getattr(n, "ldmsd", None) and not n.ldmsd.getpid():
+                log.info("starting ldmsd on {}".format(n.hostname))
+                n.ldmsd.start()
+
+    start_all()
+
+    # Give the daemons a few seconds to start
+    time.sleep(5)
+
+    # Create the test data
+    data = { "gen" : 1,
+             "schema" : "stream_test",
+             "timestamp" : 1559242264,
+             "data" : {
+                 "id" : 12345,
+                 "list" : [ 1, 2, 3, 4 ]
+             }
+         }
+    text_data = json.dumps(data)
+
+    assert_no = 0
+    cmds = list()
+    for d in [samp1, samp2]:
+        publish(d, _type="json", data=text_data)
+        publish(d, _type="string", data=text_data)
+
+    # data verification
+
+    samp1_out_txt = get_output(samp1)
+    samp2_out_txt = get_output(samp2)
+    agg2_out_txt = get_output(agg2)
+
+    samp1_out = StringIO(samp1_out_txt)
+    samp2_out = StringIO(samp2_out_txt)
+    agg2_out = StringIO(agg2_out_txt)
+
+    # Verify samp1
+    verify_samp_out([0, 1], data, text_data, samp1_out)
+    # Verify samp2
+    verify_samp_out([2, 3], data, text_data, samp2_out)
+
+    # Verify agg2
+    verify_agg_out(4, data, text_data, agg2_out)
+
+
+    agg1.connect(auth="munge", auth_opts={"socket":n_local.munged.sock_file})
+    ret = agg1.req("prdcr_stop_regex regex=.*")
+    test.assert_test(5, ret['errcode'] == 0, "agg-1 producers stopped")
+
+    time.sleep(1)
+
+    ret = agg1.req("prdcr_start_regex regex=.*")
+    test.assert_test(6, ret['errcode'] == 0, "agg-1 producers started")
+
+
+    # give them time to reconnect before publishing new data
+    time.sleep(5)
+
+    # second set of data
+    data = { "gen" : 2,
+             "schema" : "stream_test",
+             "timestamp" : 1559242274,
+             "data" : {
+                 "id" : 23456,
+                 "list" : [ 1, 2, 3, 4, 5, 6 ]
+             }
+         }
+    text_data = json.dumps(data)
+
+    for d in [samp1, samp2]:
+        publish(d, _type="json", data=text_data)
+        publish(d, _type="string", data=text_data)
+
+    samp1_out_txt2 = get_output(samp1)
+    samp2_out_txt2 = get_output(samp2)
+    agg2_out_txt2 = get_output(agg2)
+
+    samp1_out = StringIO(samp1_out_txt2)
+    samp2_out = StringIO(samp2_out_txt2)
+    agg2_out = StringIO(agg2_out_txt2)
+
+    samp1_out.seek(len(samp1_out_txt))
+    samp2_out.seek(len(samp2_out_txt))
+    agg2_out.seek(len(agg2_out_txt))
+
+    # Verify samp1
+    verify_samp_out([7, 8], data, text_data, samp1_out)
+    # Verify samp2
+    verify_samp_out([9, 10], data, text_data, samp2_out)
+
+    # Verify agg2
+    verify_agg_out(11, data, text_data, agg2_out)
+
+    log.info("stopping sampler-1")
+    samp1.stop()
+    time.sleep(1)
+    test.assert_test(12, (samp1.getpid() == None), 'sampler-1 stopped')
+
+    log.info("starting sampler-1")
+    samp1.start()
+    time.sleep(1)
+    test.assert_test(13, (samp1.getpid != None), 'sampler-1 running')
+    log.info("allow some time for prdcr to reconnect ...")
+    time.sleep(5)
+
+    data = { "gen" : 3,
+             "schema" : "stream_test",
+             "timestamp" : 1559250000,
+             "data" : {
+                 "id" : 78910,
+                 "list" : [ 1  ]
+             }
+         }
+    text_data = json.dumps(data)
+
+    publish(samp1, _type="json", data=text_data)
+    publish(samp1, _type="string", data=text_data)
+
+    # samp1 was reset
+    samp1_out_txt3 = get_output(samp1)
+    agg2_out_txt3 = get_output(agg2)
+
+    samp1_out = StringIO(samp1_out_txt3)
+    agg2_out = StringIO(agg2_out_txt3)
+
+    agg2_out.seek(len(agg2_out_txt2))
+
+    # Verify samp1
+    verify_samp_out([14, 15], data, text_data, samp1_out)
+
+    # Verify agg2
+    verify_agg_out(16, data, text_data, agg2_out, n=1)
+
+    #test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
+    ret = agg1.req("prdcr_unsubscribe regex={samp1.name} stream=test_stream".format(**locals()))
+    test.assert_test(17, ret['errcode'] == 0, "unsubscribed")
+
+    #test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
+    samp1_out_txt_pre = get_output(samp1)
+    samp2_out_txt_pre = get_output(samp2)
+    agg2_out_txt_pre = get_output(agg2)
+
+    data = {
+            samp1.name: { "gen" : 4,
+                 "schema" : "stream_test",
+                 "timestamp" : 1559242274,
+                 "data" : {
+                     "id" : 23456,
+                     "list" : [ 1, 1, 1, 1, 1, 1 ]
+                 }
+             },
+            samp2.name: { "gen" : 4,
+                 "schema" : "stream_test",
+                 "timestamp" : 1559242274,
+                 "data" : {
+                     "id" : 23456,
+                     "list" : [ 2, 2, 2, 2, 2, 2 ]
+                 }
+             },
+         }
+
+    for samp in [ samp1, samp2 ]:
+        _data = data[samp.name]
+        text_data = json.dumps(_data)
+        publish(samp, _type="json", data=text_data)
+        publish(samp, _type="string", data=text_data)
+
+    samp1_out_txt_post = get_output(samp1)
+    samp2_out_txt_post = get_output(samp2)
+    agg2_out_txt_post = get_output(agg2)
+
+    samp1_out = StringIO(samp1_out_txt_post)
+    samp2_out = StringIO(samp2_out_txt_post)
+    agg2_out = StringIO(agg2_out_txt_post)
+
+    samp1_out.seek(len(samp1_out_txt_pre))
+    samp2_out.seek(len(samp2_out_txt_pre))
+    agg2_out.seek(len(agg2_out_txt_pre))
+
+    while True: # this will break
+        # samp1
+        _data = data[samp1.name]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(samp1_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-1 data verification failed"):
+            break
+        msg = read_msg(samp1_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-1 data verification failed"):
+            break
+        # samp2
+        _data = data[samp2.name]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(samp2_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-2 data verification failed"):
+            break
+        msg = read_msg(samp2_out)
+        if not verify_msg(test, 18, msg, _data, "stream-sampler-2 data verification failed"):
+            break
+        # agg-2 - expects only 2 messages from samp2
+        _data = data[samp2.name]
+        _text_data = json.dumps(_data)
+        # json and string
+        msg = read_msg(agg2_out)
+        if not verify_msg(test, 18, msg, _data, "agg-2 data verification failed"):
+            break
+        msg = read_msg(agg2_out)
+        if not verify_msg(test, 18, msg, _data, "agg-2 data verification failed"):
+            break
+        if agg2_out.tell() != len(agg2_out_txt_post):
+            test.assert_test(18, False, "agg-2 has extra stream data")
+            break
+        test.assert_test(18, True, "data verified")
+        break
+
+    #test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
+    # Get client dump from stream-sampler-2 before killing agg-1
+    while True: # this will break
+        samp2.connect(auth="munge", auth_opts={"socket":n_local.munged.sock_file})
+        before = stream_client_dump(samp2)
+        # Kill agg-1
+        log.info("stopping agg-1")
+        agg1.stop()
+        time.sleep(5)
+        # Get client dump from stream-sampler-2
+        after = stream_client_dump(samp2)
+        before = set(before)
+        after = set(after)
+        if not (after < before):
+            diff = after - before
+            if diff:
+                test.assert_test(19, False, "Unexpected streams/clients: {}".format(diff))
+            else:
+                test.assert_test(19, False, "streams/clients not removed: {}".format(after))
+            break
+        diff = set(before) - set(after)
+        if len(diff) != 1:
+            test.assert_test(19, False, "Too many terminated clients: {}".format(diff))
+            break
+        stream_name, cb_fn, ctxt = diff.pop()
+        if stream_name != "test_stream":
+            test.assert_test(19, False, "Unexpected stream name: {}".format(stream_name))
+            break
+        if not re.match(r'\S*ldmsd\(', cb_fn):
+            test.assert_test(19, False, "Unexpected cb_fn: {}".format(cb_fn))
+            break
+        test.assert_test(19, True, "verified")
+        break
+    test.finish()
+
+    stop_all()
+    # cleanup data
+    flist = list()
+    for d in [samp1, samp2, agg2]:
+        flist += ["{DATA_DIR}/{d.name}.out".format(**globals())]
+    flist += [ "{DATA_DIR}/tada/" ]
+    rm = "rm -rf " + ( " ".join(flist) )
+    bash(rm)
