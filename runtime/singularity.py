@@ -707,7 +707,9 @@ class SContainer(LDMSDContainer):
             self.shell.write(b'{ cat <<\xFFEOF\n')
             self.shell.write(BYTES(in_data).replace(b'$', b'\\$'))
             self.shell.write(b'\n\xFFEOF\n')
-            self.shell.write(b'} | ')
+            self.shell.write(b'} | sed -z \'s/\\n$//\' | ') # eliminate the '\n'
+                                                            # we inserted right
+                                                            # before '\xFFEOF'
         if env:
             for k, v in env.items():
                 self.shell.write(BYTES(k))
