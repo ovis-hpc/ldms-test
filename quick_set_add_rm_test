@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+
+# Test the scenario of quick set add-remove on the sampler side to see if it
+# created a dangling prdcr_set on the ldmsd aggregator.
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "quick set add-remove test" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+SRC_DIR = os.path.realpath(os.path.dirname(sys.path[0]))
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+            "log_level": "ERROR",
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "agg-1",
+            "!extends" : "compute-node",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "agg_test",
+                 test_desc = "quick set add-remove test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "start samp.py")
+test.add_assertion(2, "verify data")
+test.add_assertion(3, "samp.py adds set1 / verify data")
+test.add_assertion(4, "samp.py removes set1 / verify data")
+test.add_assertion(5, "samp.py quickly adds and removes set2 / verify data")
+test.add_assertion(6, "agg-1 log stays empty")
+
+#### Helper Functions ####
+def ldms_ls(host, port = LDMSD_PORT, l = False):
+    try:
+        args = "-l -v" if l else ""
+        rc, out = headnode.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     -h {host} 2>/dev/null'" \
+                                    .format(host=host, port=port, args=args))
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        return None
+
+def verify_data(assert_no, _sets):
+    _sets = set(_sets)
+    for node_name in ["node-1", "agg-1"]:
+        ls = ldms_ls(node_name, l=True)
+        s = set(ls.keys())
+        if s != _sets:
+            test.assert_test(assert_no, False,
+                             "Expecting '{}' but got '{}' from {}"\
+                                     .format(_sets, s, node_name))
+            return
+        for _set in ls.values():
+            upd_time = float(_set['meta']['update'])
+            if upd_time == 0:
+                test.assert_test(assert_no, False,
+                                "{} has 0 update time".format(_set['name']))
+                return
+            if _set['data'] != { 'x': 0, 'y': 0, 'z': 0 }:
+                test.assert_test(assert_no, False,
+                                 "bad set data: {}".format(_set['data']))
+    # prdcr_set_status
+    rc, out = agg1.config_ldmsd('prdcr_set_status')
+    lines = out.splitlines()
+    _prd_sets = [ l.split(' ')[0] for l in lines[2:] ] # skip 2 header lines
+    _prd_sets = set( _prd_sets )
+    if _prd_sets != _sets:
+        test.assert_test(assert_no, False,
+                         "bad prdcr_sets on agg-1, expecting '{}' got '{}'"\
+                             .format(_sets, _prd_sets))
+        return
+    test.assert_test(assert_no, True, "verified")
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg1 = cluster.get_container("agg-1")
+node1 = cluster.get_container("node-1")
+
+log.info("-- Start samp.py --")
+#test.add_assertion(1, "start samp.py")
+samp = node1.exec_interact(["/usr/bin/python3", "-i", "/tada-src/python/samp.py"])
+time.sleep(5)
+out0 = samp.read(idle_timeout = 0.1) # read the prompt
+test.assert_test(1, out0 == '>>> ', "prompt checked")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+
+#test.add_assertion(2, "verify data")
+verify_data(2, ["node-1/set0"])
+
+#test.add_assertion(3, "samp.py adds set1 / verify data")
+samp.write('add_set(1)\n')
+time.sleep(3)
+out1 = samp.read()
+verify_data(3, ["node-1/set0", "node-1/set1"])
+
+#test.add_assertion(4, "samp.py removes set1 / verify data")
+samp.write('rm_set(1)\n')
+time.sleep(3)
+out2 = samp.read()
+verify_data(4, ["node-1/set0"])
+
+#test.add_assertion(5, "samp.py quickly adds and removes set2 / verify data")
+samp.write('add_set(2); rm_set(2)\n')
+time.sleep(3)
+out3 = samp.read()
+verify_data(5, ["node-1/set0"])
+
+time.sleep(5)
+#test.add_assertion(6, "agg-1 log stays empty")
+out = agg1.read_file('/var/log/ldmsd.log')
+if len(out):
+    test.assert_test(6, False, "log not empty (len:{})".format(len(out)))
+else:
+    test.assert_test(6, True, "verified")
+
+test.finish()
+
+cluster.remove()
