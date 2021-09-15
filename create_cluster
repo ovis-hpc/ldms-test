@@ -85,7 +85,7 @@ spec = {
     ], # nodes
 
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "env" : { "FOO": "BAR" },
     "mounts": [
         "{}:/opt/ovis:rw".format(PREFIX),
