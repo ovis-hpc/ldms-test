@@ -43,6 +43,7 @@ set_array_test
 setgroup_test
 slurm_stream_test
 spank_notifier_test
+ldms_list_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
