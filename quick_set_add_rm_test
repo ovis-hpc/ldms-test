@@ -15,7 +15,8 @@ import logging
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args, jprint, parse_ldms_ls
+                      add_common_args, jprint, parse_ldms_ls, cs_rm, \
+                      debug_prompt
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -223,15 +224,17 @@ log.info("-- Start samp.py --")
 samp = node1.exec_interact(["/usr/bin/python3", "-i", "/tada-src/python/samp.py"])
 time.sleep(5)
 out0 = samp.read(idle_timeout = 0.1) # read the prompt
+out0 = cs_rm(out0)
 test.assert_test(1, out0 == '>>> ', "prompt checked")
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
 cluster.make_known_hosts()
 
+debug_prompt()
+
 log.info("... wait a bit to make sure ldmsd's are up")
 time.sleep(5)
-
 
 #test.add_assertion(2, "verify data")
 verify_data(2, ["node-1/set0"])
@@ -240,18 +243,21 @@ verify_data(2, ["node-1/set0"])
 samp.write('add_set(1)\n')
 time.sleep(3)
 out1 = samp.read()
+out1 = cs_rm(out1)
 verify_data(3, ["node-1/set0", "node-1/set1"])
 
 #test.add_assertion(4, "samp.py removes set1 / verify data")
 samp.write('rm_set(1)\n')
 time.sleep(3)
 out2 = samp.read()
+out2 = cs_rm(out2)
 verify_data(4, ["node-1/set0"])
 
 #test.add_assertion(5, "samp.py quickly adds and removes set2 / verify data")
 samp.write('add_set(2); rm_set(2)\n')
 time.sleep(3)
 out3 = samp.read()
+out3 = cs_rm(out3)
 verify_data(5, ["node-1/set0"])
 
 time.sleep(5)
