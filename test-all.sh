@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Usage: [NAME=VAUE ...] ./test-all.sh
+# Usage: [NAME=VAUE ...] ./test-all.sh [OPTIONS-PASSED-TO-TESTS]
 #
 # Environment variables:
 # - OVIS_PREFIX: The path to ovis installation prefix. If not specified,
@@ -10,6 +10,13 @@
 # - SKIP_PAPI: set to non-empty string (e.g. 'y') to skip tests that use PAPI.
 # - FAIL_FAST: set to non-empty string (e.g. 'y') to fail immediately if a test
 #              failed.
+#
+# Examples:
+# ```sh
+# #### pass `--prefix /opt/ovis` to all test scripts, and stop the batch test
+# #### immediately if a test failed
+# $ LOG=test.log FAIL_FAST=y ./test-all.sh --prefix /opt/ovis
+# ```
 
 LOG=${LOG:-${HOME}/test-all.log}
 
