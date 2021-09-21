@@ -52,6 +52,7 @@ slurm_stream_test
 spank_notifier_test
 ldms_list_test
 quick_set_add_rm_test
+set_array_hang_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
