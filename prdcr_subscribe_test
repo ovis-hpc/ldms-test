@@ -21,6 +21,9 @@ logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
 
 log = logging.getLogger(__name__)
 
+TADA_LIB = "/data/tada/lib"
+TADA_SRC = "/tada-src"
+
 spec = {
     "name" : "REPLACE_ME",
     "description" : "cluster for prdcr_subscribe_test",
@@ -238,6 +241,18 @@ def verify_msg(test, assert_no, msg, json_data, err_text):
         return False
     return True
 
+def start_publisher(cont, host, port, stream_type, fin):
+    cmd = "ldmsd_stream_publish -h {host} -x {xprt} -p {port} -a munge " \
+                               "-s {name} -t {type} -f {fin} 2>&1" \
+          .format( host = host,
+                       xprt = "sock",
+                       port = port,
+                       name = "test_stream",
+                       type = stream_type,
+                       fin = fin)
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError("Failed to start ldmsd_stream_publish. Error {}".format(rc))
 
 if __name__ == "__main__":
     if sys.flags.interactive:
@@ -305,9 +320,11 @@ if __name__ == "__main__":
     # Create the containers required to ruyn the test
     cluster = LDMSDCluster.get(clustername, create = True, spec = spec)
 
-    # Build libtada and libtest_stream_sampler before starting ldmsd
+    # Build libtest_stream_sampler before starting ldmsd
     cont = cluster.get_container("agg-1")
-    rc, out = cont.exec_run("make -C /tada-src/C BUILDDIR=/data/tada/lib")
+    # Cleanup old files
+    rc, out = cont.exec_run("rm -f /data/*.out /data/*.json {}/*".format(TADA_LIB))
+    rc, out = cont.exec_run("make -C {0}/C BUILDDIR={1}".format(TADA_SRC, TADA_LIB))
     if rc:
         raise RuntimeError("libtada build failed, output: {}".format(out))
 
@@ -334,19 +351,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        cmd = "bash -c \"" \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t json -f {fname} & " \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t string -f {fname} & " \
-              "wait" \
-              "\"".format( fname=data_file,
-                           host=host,
-                           xprt=cont.ldmsd_spec["listen_xprt"],
-                           port=cont.ldmsd_spec["listen_port"],
-                           auth=cont.ldmsd_spec["listen_auth"] )
-
-        rc, out = cont.exec_run(cmd)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
     # data verification
     samp1 = cluster.get_container("stream-sampler-1")
@@ -435,19 +441,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        cmd = "bash -c \"" \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t json -f {fname} & " \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t string -f {fname} & " \
-              "wait" \
-              "\"".format( fname=data_file,
-                           host=host,
-                           xprt=cont.ldmsd_spec["listen_xprt"],
-                           port=cont.ldmsd_spec["listen_port"],
-                           auth=cont.ldmsd_spec["listen_auth"] )
-
-        rc, out = cont.exec_run(cmd)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
     samp1_out_txt2 = samp1.read_file("/data/stream-sampler-1.out")
     samp2_out_txt2 = samp2.read_file("/data/stream-sampler-2.out")
@@ -529,18 +524,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        cmd = "bash -c \"" \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t json -f {fname} & " \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t string -f {fname} & " \
-              "wait" \
-              "\"".format( fname=data_file,
-                           host=host,
-                           xprt=cont.ldmsd_spec["listen_xprt"],
-                           port=cont.ldmsd_spec["listen_port"],
-                           auth=cont.ldmsd_spec["listen_auth"] )
-        rc, out = cont.exec_run(cmd)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
     # samp1 was reset
     samp1_out_txt3 = samp1.read_file("/data/stream-sampler-1.out")
@@ -618,19 +603,8 @@ if __name__ == "__main__":
         text_data = json.dumps(_data)
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        cmd = "bash -c \"" \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t json -f {fname} & " \
-              "/data/tada/lib/test_stream_publish -h {host} -x {xprt} -p {port} -a {auth}" \
-              " -s test_stream -t string -f {fname} & " \
-              "wait" \
-              "\"".format( fname=data_file,
-                           host=host,
-                           xprt=cont.ldmsd_spec["listen_xprt"],
-                           port=cont.ldmsd_spec["listen_port"],
-                           auth=cont.ldmsd_spec["listen_auth"] )
-
-        rc, out = cont.exec_run(cmd)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
     samp1_out_txt_post = samp1.read_file("/data/stream-sampler-1.out")
     samp2_out_txt_post = samp2.read_file("/data/stream-sampler-2.out")

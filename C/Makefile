@@ -6,7 +6,6 @@ GCC_COMMON_FLAGS = -ggdb3 -O0
 TARGETS = $(BUILDDIR)/libutil.so \
 	  $(BUILDDIR)/libtada.so \
 	  $(BUILDDIR)/libtest_stream_sampler.so \
-	  $(BUILDDIR)/test_stream_publish \
 	  $(BUILDDIR)/test_ovis_ev \
 	  $(BUILDDIR)/test_ovis_json
 
@@ -52,12 +51,6 @@ else
 	    ${GCC_COMMON_FLAGS}
 	ln -fs $@ $@.0
 endif
-
-$(BUILDDIR)/test_stream_publish: test_stream_publish.c
-	mkdir -p $(BUILDDIR)
-	gcc -I $(OVIS_PREFIX)/include -o $@ \
-		$^ -L$(OVIS_PREFIX)/lib -L$(OVIS_PREFIX)/lib64 \
-		-lldms -lldmsd_stream -lovis_util -pthread ${GCC_COMMON_FLAGS}
 
 $(BUILDDIR)/test_ovis_ev: test_ovis_ev.c
 	mkdir -p $(BUILDDIR)
