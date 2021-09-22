@@ -1297,10 +1297,13 @@ class LDMSDContainer(ABC):
         if type(files) == str:
             files = [ files ]
         cmd = " && ".join( "test -e {}".format(s) for s in files)
+        cmd = "bash -c '" + cmd + "'"
+        count = 0
         while timeout is None or time.time() - t0 < timeout:
             rc, out = self.exec_run(cmd)
             if rc == 0:
                 return True
+            count += 1
             time.sleep(interval)
         return False
 
@@ -1984,6 +1987,8 @@ class LDMSDCluster(ABC):
         if type(files) == str:
             files = [ files ]
         cmd = " && ".join( "test -e {}".format(s) for s in files)
+        cmd = "bash -c '" + cmd + "'"
+        count = 0
         while timeout is None or time.time() - t0 < timeout:
             for _cont in self.containers:
                 rc, out = _cont.exec_run(cmd)
@@ -1991,6 +1996,7 @@ class LDMSDCluster(ABC):
                     break
             else: # loop does not break
                 return True
+            count += 1
             time.sleep(interval)
         return False
 # ------------------------------------------------------------ LDMSDCluster -- #
