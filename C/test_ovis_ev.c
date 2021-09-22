@@ -11,7 +11,7 @@
 
 #define FMT "c:f:l:u:"
 
-#define TIME_DIFF_THRESHOLD 0.000001 /* 1 us */
+#define TIME_DIFF_THRESHOLD 0.001 /* 1 ms */
 #define GENERIC_WORKER_DST	"generic_dst"
 #define GENERIC_WORKER_SRC	"generic_src"
 #define GENERIC_TEST_TYPE	"generic_test_type"
