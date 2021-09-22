@@ -329,7 +329,7 @@ def _lib_avail():
     return files_avail(
             ["libtada.so", "libtest_stream_sampler.so",
              "libtest_stream_sampler.so.0", "libutil.so",
-             "test_ovis_ev", "test_ovis_json", "test_stream_publish"]
+             "test_ovis_ev", "test_ovis_json"]
         )
 
 log.info("waiting for libraries to be available across all containers...")
