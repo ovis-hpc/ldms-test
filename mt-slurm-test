@@ -503,7 +503,7 @@ print("-- Start daemons --")
 cluster.start_daemons()
 
 print("... wait a bit to make sure ldmsd's are up")
-time.sleep(5)
+time.sleep(10)
 
 def verify(num, cond, cond_str):
     a = test.assertions[num]
@@ -610,6 +610,8 @@ deliver_events(events_3_27)
 
 events_4_64 = create_events(4, 64, 10100)
 deliver_events(events_4_64)
+
+time.sleep(2)
 
 
 cont = cluster.get_container('agg-1')
