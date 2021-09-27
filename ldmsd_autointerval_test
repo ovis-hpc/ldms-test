@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+
+# ldmsd_autointerval_test
+# -----------------------
+#
+# Test the automatic update interval in ldmsd. This test uses the following
+# entities:
+# - 1 sampler daemon (samp) with meminfo
+# - 1 L1 aggregator daemon (agg1)
+# - 1 L2 aggregator daemon (agg2) with SOS
+#
+# The test scenario is as follows:
+# - start samp with 3sec sampling interval
+# - start agg1 and agg2
+# - let it run for a while
+# - change samp interval to 1sec
+# - let it run for a while
+# - change samp interval to 2sec
+# - let it run for a while
+# - kill all daemons
+# - verify data interval changes in SOS
+# - also check in the agg2 log that "oversampled" is not recent. The
+#   oversampling could occur when transitioning from higher frequency to lower
+#   frequency sampling, but it should end.
+
+import os
+import re
+import io
+import pwd
+import sys
+import math
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description =
+                            "Test the automatic update interval in ldmsd." )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+STORE_ROOT = "/store" # path inside container (agg-2)
+
+INTERVAL0 = 3000000
+INTERVAL1 = 1000000
+INTERVAL2 = 2000000
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : INTERVAL0,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "log_level" : "INFO",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+            #"listen_port" : LDMSD_PORT,
+            #"listen_xprt" : "sock",
+            #"listen_auth" : "none",
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 auto_interval=true",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            # samp
+            "hostname" : "samp",
+            "component_id" : 1,
+            "!extends" : "compute-node",
+        },
+        {
+            # agg1
+            "hostname" : "agg1",
+            "!extends" : "compute-node",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "samp",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 400000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "agg1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        "load name=store_sos",
+                        "config name=store_sos path={}/sos".format(STORE_ROOT),
+
+                        "strgp_add name=meminfo_store plugin=store_sos" \
+                                 " container=meminfo schema=meminfo",
+                        "strgp_prdcr_add name=meminfo_store regex=.*",
+                        "strgp_start name=meminfo_store",
+
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 auto_interval=true",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ]
+                },
+            ],
+        },
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_autointerval_test",
+                 test_desc = "ldmsd autointerval test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "start all daemons and interactive controller")
+test.add_assertion(2, "verify sampling interval and update hints")
+test.add_assertion(3, "set and verify 2nd sampling interval / update hints")
+test.add_assertion(4, "set and verify 3rd sampling interval / update hints")
+test.add_assertion(5, "verify SOS data")
+test.add_assertion(6, "verify 'oversampled' in the agg2 log")
+
+#### Helper Functions ####
+
+@atexit.register
+def at_exit():
+    test.finish()
+    log.info("-- Removing the cluster --")
+    cluster.remove() # this destroys entire cluster
+
+PROMPT = "sock:localhost:{LDMSD_PORT}> ".format(**vars())
+ctrl_out_debug = io.StringIO()
+
+def ctrl(cmd):
+    global samp_ctrl, PROMPT
+    c = samp_ctrl
+    c.write(cmd+'\n')
+    out = c.read()
+    ctrl_out_debug.write(out)
+    D.out = out
+    # remove the echoed cmd and the prompt after the output
+    assert(out.endswith(PROMPT))
+    assert(out.startswith(cmd))
+    out = out[len(cmd) : - len(PROMPT)] # remove prompt and echoed cmd
+    return out
+
+STATUS_RE = re.compile(r"""
+      .*\s+meminfo\s+sampler\s+(?P<interval>\d+)\s+(?P<offset>\d+)
+""", re.X|re.S)
+
+def get_samp_interval():
+    global STATUS_RE
+    out = ctrl("status")
+    m = STATUS_RE.match(out)
+    if not m:
+        raise RuntimeError("cannot get interval from output:\n{}".format(out))
+    ival, off = m.groups(0)
+    ival = int(ival)
+    off = int(off)
+    return (ival, off)
+
+def set_samp_interval(ival):
+    out1 = ctrl("stop name=meminfo")
+    out1 = out1.strip()
+    out2 = ctrl("start name=meminfo interval={} offset=0".format(ival))
+    out2 = out2.strip()
+    return (out1, out2)
+
+HINT_RE = re.compile(r"""
+      .*"updt_hint_us"="(\d+):(\d+)"
+""", re.X|re.S)
+def get_upd_hint(agg):
+    rc, out = agg.ldms_ls("-x", "sock", "-p", str(LDMSD_PORT), "-v")
+    m = HINT_RE.match(out)
+    if not m:
+        raise RuntimeError("cannot get update hint from output:\n{}".format(out))
+    ival, off = m.groups(0)
+    ival = int(ival)
+    off = int(off)
+    return (ival, off)
+
+def verify_interval(ival, assert_no):
+    global samp, agg1, agg2
+    samp_ival, samp_off = get_samp_interval()
+    agg1_ival, agg1_off = get_upd_hint(agg1)
+    agg2_ival, agg2_off = get_upd_hint(agg2)
+    s = set( [ ival, samp_ival, agg1_ival, agg2_ival ])
+    if len(s) != 1:
+        test.assert_test(assert_no, False,
+            "bad interval values:\n" \
+            "  expected interval: {ival}\n" \
+            "  samp interval: {samp_ival}\n" \
+            "  agg1 interval: {agg1_ival}\n" \
+            "  agg2 interval: {agg2_ival}\n" \
+            .format(**vars()))
+        system.exit(-1)
+    if samp_off >= agg1_off or agg1_off >= agg2_off:
+        test.assert_test(assert_no, False,
+            "bad offset values:\n"\
+            "  samp offset: {samp_off}\n"\
+            "  agg1 offset: {agg1_off}\n"\
+            "  agg2 offset: {agg2_off}\n"\
+            .format(**vars()))
+        system.exit(-1)
+    test.assert_test(assert_no, True, "verified")
+
+
+#### Start! ####
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+agg2 = cluster.get_container("agg2")
+agg1 = cluster.get_container("agg1")
+samp = cluster.get_container("samp")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+#test.add_assertion(1, "start all daemons and interactive controller")
+samp_ctrl = samp.exec_interact("ldmsd_controller --xprt sock --host localhost --port {LDMSD_PORT}".format(**vars()))
+time.sleep(0.5)
+out = samp_ctrl.read()
+if out.endswith("sock:localhost:{LDMSD_PORT}> ".format(**vars())):
+    test.assert_test(1, True, "OK")
+else:
+    test.assert_test(1, False, "Unexpected output: {}".format(out))
+    sys.exit(-1)
+
+#test.add_assertion(2, "verify sampling interval and update hints")
+verify_interval(INTERVAL0, 2)
+log.info("Let them run for a while to collect data ...")
+time.sleep(10)
+
+#test.add_assertion(3, "set and verify 2nd sampling interval / update hints")
+log.info("Setting sample interval to {INTERVAL1} ...".format(**vars()))
+set_samp_interval(INTERVAL1)
+time.sleep(2)
+verify_interval(INTERVAL1, 3)
+log.info("Let them run for a while to collect data ...")
+time.sleep(10)
+
+#test.add_assertion(4, "set and verify 3rd sampling interval / update hints")
+log.info("Setting sample interval to {INTERVAL2} ...".format(**vars()))
+set_samp_interval(INTERVAL2)
+time.sleep(2)
+verify_interval(INTERVAL2, 4)
+log.info("Let them run for a while to collect data ...")
+time.sleep(10)
+
+#test.add_assertion(5, "verify SOS data")
+rc, out = agg2.exec_run("sos_cmd -q -C /store/sos/meminfo -S meminfo -X comp_time_job -f json")
+objs = json.loads(out)
+ts = [ float(o['timestamp']) for o in objs['data'] ]
+dt = [ t1 - t0 for t1, t0 in zip(ts[1:], ts[:-1]) ]
+# round it
+rdt = [ math.floor( t + 0.5 ) for t in dt ]
+srdt = set(rdt)
+expected = set([INTERVAL0//1000000, INTERVAL1//1000000, INTERVAL2//1000000])
+if srdt == expected:
+    test.assert_test(5, True, "timestamp differences in SOS show all 3 intervals")
+else:
+    test.assert_test(5, False, "Expecting {expected} but got {srdt}".format(**vars()))
+    system.exit(-1)
+
+#test.add_assertion(6, "verify 'oversampled' in the agg2 log")
+logs = agg2.read_file("/var/log/ldmsd.log")
+logs = logs.splitlines()
+flogs = [ l for l in logs if l.find("oversampled") >= 0 ]
+if flogs:
+    l = flogs[-1]
+    lts_txt = ':'.join( l.split(':', 3)[:-1] )
+    lts = time.strptime(ts_txt, "%c")
+    lts = time.mktime(lts) # last oversampled timestamp
+    t = ts[-1] # last timestamp from sos
+    if t - lts < INTERVAL2/1e6:
+        test.assert_test(6, False, "'oversampled' appeared to be persisted")
+        system.exit(-1)
+test.assert_test(6, True, "OK")
+
+#time.sleep(10)
+
+# test.finish() in at_exit()
