@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+#
+# direct_ldms_ls_conn_test
+# ------------------------
+# This test script uses `ldms_ls` to perform basic `ldms` connection test. We
+# want to make sure:
+# - `ldms_ls` to a valid `ldmsd` shall list correct sets
+# - `ldms_ls` to a dead `ldmsd` shall show Connection failed/rejected, and not
+#    segmentation fault.
+
+import os
+import re
+import sys
+import pwd
+import TADA
+import time
+import json
+import atexit
+import logging
+import argparse
+
+from os.path import realpath, dirname
+from io import StringIO
+
+from distutils.spawn import find_executable
+from LDMS_Test import D, G, process_args, add_common_args, read_msg, \
+		      is_ldmsd_version_4, get_ldmsd_config, \
+                      is_remote, ssh, bash, LDMSDProc, MungedProc, Proc, Spec, \
+                      parse_ldms_ls
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+spec = {
+    "name" : "_PALCEHOLDER_", # args.clustername
+
+    # These upper case variables can be overridden by args in main
+    "XPRT" : "sock",
+    "DATA_DIR" : "_PLACEHOLDER_", # args.data_root
+    "SRC_DIR" :  os.path.realpath(os.path.dirname(__file__)),
+    "SAMP1_HOST" : "localhost",
+    "SAMP1_PORT" : 10001,
+    "SSH_PORT" : 22,
+    "DOM": "dom0",
+    "KEY": "0"*128,
+    "OVIS_PREFIX" : "_PLACEHOLDER_", # args.prefix
+
+    "description" : "cluster definition for direct_ldms_ls_conn_test",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ENV" : {
+            "LD_LIBRARY_PATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib:%OVIS_PREFIX%/lib64",
+            "LDMSD_PLUGIN_LIBPATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib/ovis-ldms:%OVIS_PREFIX%/lib64/ovis-ldms",
+            "ZAP_LIBPATH": "%DATA_DIR%/tada/lib:%OVIS_PREFIX%/lib/ovis-ldms:%OVIS_PREFIX%/lib64/ovis-ldms",
+        },
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "!extends" : "munged-base",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "requires" : [ "munged" ],
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "munged-base" : {
+            "name" : "munged",
+            "type" : "munged",
+            "host" : "%hostname%",
+            "dom" : "%DOM%",
+            "key" : "%KEY%",
+            "ssh_port" : "%SSH_PORT%",
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+	    "ldmsd_name" : "%hostname%-%LDMSD_PORT%",
+            "ssh_port" : "%SSH_PORT%",
+            "env" : { "!extends": "ENV" },
+            "auth" : [
+                {
+                    "name": "%DOM%",
+                    "plugin": "munge",
+                    "socket": "%DATA_DIR%/%hostname%/%DOM%/sock",
+                },
+            ],
+	    "listen" : [
+                {
+                    "port" : "%LDMSD_PORT%",
+                    "xprt" : "%XPRT%",
+                    "host" : "%hostname%",
+                    "auth" : "%DOM%",
+                },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%",
+                    ]
+                },
+                {
+                    "plugin" : "vmstat",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%",
+                    ]
+                },
+            ],
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "%SAMP1_HOST%",
+            "component_id" : 10001,
+	    "LDMSD_PORT": "%SAMP1_PORT%",
+            "!extends" : "compute-node",
+        },
+        {
+            # For munged, so that we can talk with ldmsd's
+            "hostname" : "localhost",
+            "daemons" : [
+                { "!extends": "munged-base" },
+            ],
+        },
+    ],
+
+    "ovis_prefix": "%OVIS_PREFIX%",
+    "env" : { "!extends": "ENV" },
+}
+
+def rm(path):
+    if os.path.exists(path):
+        os.remove(path)
+
+nodes = list()
+
+def stop_all():
+    global nodes
+    for n in nodes:
+        if n.munged and n.munged.getpid():
+            log.info("stopping munged on {}".format(n.hostname))
+            n.munged.stop()
+        if n.ldmsd and n.ldmsd.getpid():
+            log.info("stopping ldmsd on {}".format(n.hostname))
+            n.ldmsd.stop()
+
+def start_all():
+    global nodes
+    # start all munged first
+    for n in nodes:
+        if n.munged and not n.munged.getpid():
+            log.info("starting munged on {}".format(n.hostname))
+            n.munged.start()
+    # then start all ldmsd
+    for n in nodes:
+        if n.ldmsd and not n.ldmsd.getpid():
+            log.info("starting ldmsd on {}".format(n.hostname))
+            n.ldmsd.start()
+
+@atexit.register
+def at_exit():
+    test.finish()
+    stop_all()
+
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+    parser = argparse.ArgumentParser(description="Test basic ldms connection with ldms_ls")
+    add_common_args(parser)
+    args = parser.parse_args()
+    process_args(args)
+
+    clustername = args.clustername
+    COMMIT_ID = args.commit_id
+
+    spec["OVIS_PREFIX"] = args.prefix
+    spec["name"] = clustername
+    spec["templates"]["ENV"]["TADA_USER"] = args.user
+    spec["templates"]["ENV"]["TADA_ADDR"] = args.tada_addr
+    spec["DATA_DIR"] = args.data_root
+
+    # Update spec according to config file
+    _keys = ["{}_{}".format(a, b) for b in ["HOST", "PORT"]
+                                  for a in ["SAMP1"]]
+    _keys.append("XPRT")
+    for k in _keys:
+        v = G.conf.get("direct_ldms_ls_conn_test", k, fallback=None)
+        if v:
+            spec[k] = v
+
+    # Expand / substitute values in spec
+    spec = Spec(spec)
+
+    DATA_DIR = spec["DATA_DIR"]
+
+    # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
+    test = TADA.Test(test_suite = "LDMSD",
+                     test_type = "SVT",
+                     test_name = "direct_ldms_ls_conn_test",
+                     test_desc = "Test basic ldms connection with ldms_ls",
+                     test_user = args.user,
+                     commit_id = COMMIT_ID,
+                     tada_addr = args.tada_addr)
+    test.add_assertion(0, 'Start ldmsd sampler and munged')
+    test.add_assertion(1, 'ldms_ls to the sampler')
+    test.add_assertion(2, 'Kill the sampler')
+    test.add_assertion(3, 'ldms_ls to the sampler')
+
+    # Tell the TADA infrastructure that the test is starting
+    test.start()
+
+    # Create the containers required to ruyn the test
+    bash("""
+        umask 0022
+        mkdir -p {DATA_DIR}
+    """.format(**spec))
+
+    class Object(object): pass
+
+    # munged and ldmsd handles
+    for node_spec in spec["nodes"]:
+        node = Object()
+        node.ldmsd = node.munged = None
+        nodes.append(node)
+        node.hostname = node_spec["hostname"]
+        node.daemons = list()
+        for daemon_spec in node_spec["daemons"]:
+            d = Proc.fromSpec(spec["DATA_DIR"], daemon_spec)
+            node.daemons.append(d)
+            if type(d) == LDMSDProc:
+                node.ldmsd = d
+            elif type(d) == MungedProc:
+                node.munged = d
+
+    n0, n_local = nodes
+    samp = n0.ldmsd
+
+    #test.add_assertion(0, 'Start ldmsd sampler and munged')
+    try:
+        start_all()
+    except:
+        test.assert_test(0, False,
+            "Failed to start some daemon(s):\n" \
+            "  samp pid: {0}"\
+            "  samp munged pid: {1}"\
+            "  local munged pid: {2}"\
+            .format(samp.getpid(), n0.munged.getpid(), n_local.munged.getpid())
+        )
+        raise
+    else: # good
+        test.assert_test(0, True, "OK")
+
+    # Give the daemons a few seconds to start
+    time.sleep(5)
+
+    #test.add_assertion(1, 'ldms_ls to the sampler')
+    rc, out = bash(
+        "ldms_ls -x {XPRT} -p {SAMP1_PORT} -h {SAMP1_HOST} -l -v "\
+        " -a munge -A socket={DATA_DIR}/localhost/{DOM}/sock"\
+        .format(**spec))
+    while True: # will break
+        if rc:
+            test.assert_test(1, False, "ldms_ls failed, output:\n{}".format(out))
+            raise RuntimeError("ldms_ls rc: {}".format(rc))
+        sets = parse_ldms_ls(out)
+        _keys = set(sets.keys())
+        _exp = set([ "{h}/{name}".format(**vars()) \
+                        for h in [ n0.hostname ] \
+                        for name in ["meminfo", "vmstat"] ])
+        if _exp != _keys:
+            msg = "Expecting {_exp}, but got {_keys}".format(**vars())
+            test.assert_test(1, False, msg)
+            raise RuntimeError(msg)
+        test.assert_test(1, True, "OK")
+        break
+
+    #test.add_assertion(2, 'Kill the sampler')
+    log.info("Stopping sampler daemon ...")
+    samp.stop()
+    time.sleep(5)
+    samp_pid = samp.getpid()
+    if samp_pid:
+        msg = "sampler is still running (pid {samp_pid} on {n0.hostname}" \
+                .format(**vars())
+        test.assert_test(2, False, msg)
+        raise RuntimeError(msg)
+    else:
+        test.assert_test(2, True, "OK")
+
+    #test.add_assertion(3, 'ldms_ls to the sampler')
+    rc, out = bash(
+        "ldms_ls -x {XPRT} -p {SAMP1_PORT} -h {SAMP1_HOST} -l -v "\
+        " -a munge -A socket={DATA_DIR}/localhost/{DOM}/sock"\
+        .format(**spec))
+    _exp = "Connection failed/rejected.\n"
+    if rc == 0 or out != _exp:
+        msg = "Expecting non-zero rc and '{}' output, but got\n" \
+              "  rc: {rc}\n"\
+              "  output: {out}\n"\
+              .format(**vars())
+        test.assert_test(3, False, msg)
+        raise RuntimeError(msg)
+    else:
+        test.assert_test(3, True, "got expected output")
+
+    # see  at_exit()

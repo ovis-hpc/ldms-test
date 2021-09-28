@@ -100,3 +100,16 @@ ip_addr_db = sing_addr.db
 # AGG2_HOST = cygnus-04-iw
 # AGG2_PORT = 10004
 # SSH_PORT = 22
+
+
+[direct_ldms_ls_conn_test]
+# This section is used only by `direct_ldms_ls_conn_test` script. The script
+# requires only one sampler daemon and one remote host. SAMP1_HOST is the host
+# to run the sampler daemon, and SAMP1_PORT is the port of the sampler daemon.
+# The SSH_PORT can be specified to use SSH over a port other than 22 (default).
+#
+# Example:
+# XPRT = rdma
+# SAMP1_HOST = cygnus-01-iw
+# SAMP1_PORT = 10001
+# SSH_PORT = 22
