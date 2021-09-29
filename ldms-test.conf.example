@@ -107,9 +107,14 @@ ip_addr_db = sing_addr.db
 # requires only one sampler daemon and one remote host. SAMP1_HOST is the host
 # to run the sampler daemon, and SAMP1_PORT is the port of the sampler daemon.
 # The SSH_PORT can be specified to use SSH over a port other than 22 (default).
+# The `SAMPX_HOST` is the dead host. A private IP address that is not assigned
+# to any host is recommended. `SAMPX_PORT` is a port value to be used with
+# `SAMPX_HOST` to test the dead-host case with `ldms_ls`.
 #
 # Example:
 # XPRT = rdma
 # SAMP1_HOST = cygnus-01-iw
 # SAMP1_PORT = 10001
 # SSH_PORT = 22
+# SAMPX_HOST = 10.11.12.13
+# SAMPX_PORT = 10001

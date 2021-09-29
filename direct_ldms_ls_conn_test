@@ -42,6 +42,8 @@ spec = {
     "SRC_DIR" :  os.path.realpath(os.path.dirname(__file__)),
     "SAMP1_HOST" : "localhost",
     "SAMP1_PORT" : 10001,
+    "SAMPX_HOST" : "10.11.12.13",
+    "SAMPX_PORT" : 10001,
     "SSH_PORT" : 22,
     "DOM": "dom0",
     "KEY": "0"*128,
@@ -218,7 +220,8 @@ if __name__ == "__main__":
     test.add_assertion(0, 'Start ldmsd sampler and munged')
     test.add_assertion(1, 'ldms_ls to the sampler')
     test.add_assertion(2, 'Kill the sampler')
-    test.add_assertion(3, 'ldms_ls to the sampler')
+    test.add_assertion(3, 'ldms_ls to the dead sampler')
+    test.add_assertion(4, 'ldms_ls to a dead host')
 
     # Tell the TADA infrastructure that the test is starting
     test.start()
@@ -301,7 +304,7 @@ if __name__ == "__main__":
     else:
         test.assert_test(2, True, "OK")
 
-    #test.add_assertion(3, 'ldms_ls to the sampler')
+    #test.add_assertion(3, 'ldms_ls to the dead sampler')
     rc, out = bash(
         "ldms_ls -x {XPRT} -p {SAMP1_PORT} -h {SAMP1_HOST} -l -v "\
         " -a munge -A socket={DATA_DIR}/localhost/{DOM}/sock"\
@@ -317,4 +320,19 @@ if __name__ == "__main__":
     else:
         test.assert_test(3, True, "got expected output")
 
+    #test.add_assertion(4, 'ldms_ls to a dead host')
+    rc, out = bash(
+        "ldms_ls -x {XPRT} -p {SAMPX_PORT} -h {SAMPX_HOST} -l -v "\
+        " -a munge -A socket={DATA_DIR}/localhost/{DOM}/sock"\
+        .format(**spec))
+    _exp = "Connection failed/rejected.\n"
+    if rc == 0 or out != _exp:
+        msg = "Expecting non-zero rc and '{}' output, but got\n" \
+              "  rc: {rc}\n"\
+              "  output: {out}\n"\
+              .format(**vars())
+        test.assert_test(4, False, msg)
+        raise RuntimeError(msg)
+    else:
+        test.assert_test(4, True, "got expected output")
     # see  at_exit()
