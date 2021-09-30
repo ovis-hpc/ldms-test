@@ -358,6 +358,7 @@ def subscriber_case(sub_cont, pub_cont, hostname, stream_type, data_sz):
     D.port = PORTS[stream_type]
 
     start_subscriber(sub_cont, PORTS[stream_type], cont_fout)
+    time.sleep(5)
     log.info("--- Sending stream to ldmsd_stream_subscriber")
     for i in range(0, SAMPLE_SIZES[data_sz]):
         start_publisher(pub_cont, hostname, PORTS[stream_type], stream_type, cont_fin)
