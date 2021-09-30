@@ -20,9 +20,9 @@ clusters = LDMSDCluster.list()
 clusters = [ c for c in clusters if exp.match(c.name) ]
 if not clusters:
     if args.match == '.*':
-        print("-- no cluster running --")
+        print("-- no cluster running --", file=sys.stderr)
     else:
-        print("-- no cluster matching: `{}` --".format(args.match))
+        print("-- no cluster matching: `{}` --".format(args.match), file=sys.stderr)
 for c in clusters:
     print(c.name)
     if args.long:
