@@ -8,6 +8,7 @@ import pwd
 import TADA
 import time
 import json
+import atexit
 import logging
 
 from os.path import realpath, dirname
@@ -209,6 +210,19 @@ spec = {
     "env" : { "!extends": "ENV" },
 }
 
+@atexit.register
+def at_exit():
+    global test, samp1, samp2, agg2
+    test.finish()
+    stop_all()
+    # cleanup data
+    flist = list()
+    for d in [samp1, samp2, agg2]:
+        flist += ["{DATA_DIR}/{d.name}.out".format(**globals())]
+    flist += [ "{DATA_DIR}/tada/" ]
+    rm = "rm -rf " + ( " ".join(flist) )
+    bash(rm)
+
 def rm(path):
     if os.path.exists(path):
         os.remove(path)
@@ -313,7 +327,7 @@ def publish(ldmsd, data, _type = "json"):
     script = """
         {{ cat <<EOF\n{data}\nEOF
         }} | sed -z 's/\\n$//' |
-        {DATA_DIR}/tada/lib/test_stream_publish -h {host} -x {xprt} \
+        ldmsd_stream_publish -h {host} -x {xprt} \
             -p {port} -a munge -A socket={DATA_DIR}/{host}/{DOM}/sock \
             -s test_stream -t {_type}
     """.format(**_vars)
@@ -710,13 +724,4 @@ if __name__ == "__main__":
             break
         test.assert_test(19, True, "verified")
         break
-    test.finish()
-
-    stop_all()
-    # cleanup data
-    flist = list()
-    for d in [samp1, samp2, agg2]:
-        flist += ["{DATA_DIR}/{d.name}.out".format(**globals())]
-    flist += [ "{DATA_DIR}/tada/" ]
-    rm = "rm -rf " + ( " ".join(flist) )
-    bash(rm)
+    # see at_exit() for the cleanup code
