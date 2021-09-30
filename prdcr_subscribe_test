@@ -354,6 +354,8 @@ if __name__ == "__main__":
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
+    time.sleep(2)
+
     # data verification
     samp1 = cluster.get_container("stream-sampler-1")
     samp2 = cluster.get_container("stream-sampler-2")
@@ -444,6 +446,8 @@ if __name__ == "__main__":
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
+    time.sleep(2)
+
     samp1_out_txt2 = samp1.read_file("/data/stream-sampler-1.out")
     samp2_out_txt2 = samp2.read_file("/data/stream-sampler-2.out")
     agg2_out_txt2 = agg2.read_file("/data/agg-2.out")
@@ -527,6 +531,8 @@ if __name__ == "__main__":
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
 
+    time.sleep(2)
+
     # samp1 was reset
     samp1_out_txt3 = samp1.read_file("/data/stream-sampler-1.out")
     agg2_out_txt3 = agg2.read_file("/data/agg-2.out")
@@ -605,6 +611,8 @@ if __name__ == "__main__":
         cont.write_file(data_file, text_data)
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
         start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
+
+    time.sleep(2)
 
     samp1_out_txt_post = samp1.read_file("/data/stream-sampler-1.out")
     samp2_out_txt_post = samp2.read_file("/data/stream-sampler-2.out")
