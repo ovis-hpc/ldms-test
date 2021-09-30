@@ -155,6 +155,7 @@ OPTIONS=(
 	--enable-zaptest
 	--enable-ldms-test
 	--enable-test_sampler
+	--enable-list_sampler
 	--enable-munge
 	--enable-store-app
 	--enable-tutorial-sampler
