@@ -345,7 +345,7 @@ def add_common_args(parser):
     parser.add_argument("--tada_addr", "--tada-addr", type=tada_addr,
             help="The test automation server host and port as host:port.",
             default="tada-host:9862")
-    parser.add_argument("--debug", action="store_true",
+    parser.add_argument("--debug", default=0, type=int,
             help="Turn on TADA.DEBUG flag.")
     parser.add_argument("--mount", action="append",
             metavar = "SRC:DST[:MODE]", default = [],
@@ -372,7 +372,7 @@ def process_config_file(path = None):
                 "src": None,
                 "data_root": None,
                 "tada_addr": "tada-host:9862",
-                "debug": False,
+                "debug": 0,
                 "mount": "",
                 "image": "ovis-centos-build",
                 },
