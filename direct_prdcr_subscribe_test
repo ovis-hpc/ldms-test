@@ -385,7 +385,7 @@ if __name__ == "__main__":
     # test = TADA.Test(args.cfg, args.prefix, args.data_root, args.tada_addr)
     test = TADA.Test(test_suite = "LDMSD",
                      test_type = "SVT",
-                     test_name = "prdcr_subscribe_test",
+                     test_name = "direct_prdcr_subscribe_test",
                      test_desc = "LDMSD stream system verification test",
                      test_user = args.user,
                      commit_id = COMMIT_ID,

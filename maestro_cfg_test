@@ -254,7 +254,7 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "ldmsd_maestro_cfg",
+                 test_name = "maestro_cfg_test",
                  test_desc = DESC,
                  test_user = args.user,
                  commit_id = COMMIT_ID,
