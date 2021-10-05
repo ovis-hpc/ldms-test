@@ -171,6 +171,13 @@ class Test(object):
         self._send(msg)
         log.info("test {} ended".format(self.test_name))
 
+    def exit_code(self):
+        # determine exit code from the current test results
+        for num, msg in self.assertions.items():
+            if msg["test-status"] != Test.PASSED:
+                return -1
+        return 0
+
 class SQLModel(object):
     """SQL data model base class
 

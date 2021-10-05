@@ -258,6 +258,7 @@ def create_suite_from_C_test_results(txt, tada_addr):
             test.assert_test(msg["assert-no"], result, msg["assert-cond"])
 
     test.finish()
+    return test.exit_code()
 
 def env_dict(env):
     """Make env dict(NAME:VALUE) from list(NAME=VALUE) or dict(NAME:VALUE)
