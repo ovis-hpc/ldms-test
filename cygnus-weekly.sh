@@ -25,6 +25,9 @@
 #   image, and you have to be in the /etc/subuid and /etc/subgid list. See
 #   details in "Singularity Cluster Set" section in README.md.
 
+export PATH=/opt/ovis/sbin:/opt/ovis/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
+
 LOG() {
 	echo $( date +"%F %T" ) "$@"
 }
@@ -52,6 +55,8 @@ SCRIPT_DIR=$(realpath $(dirname $0))
 
 WORK_DIR=${WORK_DIR:-/mnt/cygnus/data/$(date +"%F-%H%M%S")}
 WORK_DIR=$(realpath ${WORK_DIR})
+export WORK_DIR
+
 INFO "Purging workdir: ${WORK_DIR}"
 rm -rf ${WORK_DIR}
 DATA_ROOT=${WORK_DIR}/data
@@ -108,6 +113,9 @@ OVIS_BUILD_OPTS=(
 INFO "WORK_DIR: ${WORK_DIR}"
 INFO "LOG: ${LOG}"
 
+pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
+
+./github-report.sh # make a test start report
 
 set -e
 # remove existing clusters
@@ -258,8 +266,8 @@ for K in "${!RCS[@]}"; do
 	echo -e "${K}: ${V}"
 done
 echo "------------------------------------------"
-echo -e "Total tests: $N"
-echo -e "Total passed: $PASSED"
-echo -e "Total failed: $FAILED"
+echo -e "Total tests passed: ${PASSED}/${N}"
 echo "------------------------------------------"
 } | tee ${LOG}
+
+${SCRIPT_DIR}/github-report.sh # make a test end report
