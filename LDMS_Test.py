@@ -252,10 +252,14 @@ def create_suite_from_C_test_results(txt, tada_addr):
 
     test.start()
 
-    for msg in r:
-        if msg["msg-type"] == "assert-status":
-            result = True if (msg["test-status"] == "passed") else False
-            test.assert_test(msg["assert-no"], result, msg["assert-cond"])
+    try:
+        for msg in r:
+            if msg["msg-type"] == "assert-status":
+                result = True if (msg["test-status"] == "passed") else False
+                test.assert_test(msg["assert-no"], result, msg["assert-cond"])
+    except:
+        test.finish()
+        raise
 
     test.finish()
     return test.exit_code()
