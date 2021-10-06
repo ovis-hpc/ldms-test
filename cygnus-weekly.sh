@@ -142,21 +142,7 @@ set -e
 # remove existing clusters
 ./remove_cluster --all
 
-pushd ${WORK_DIR}
-INFO "== Checking out SOS =="
-git clone https://github.com/ovis-hpc/sos
-INFO "== Checking out OVIS =="
-git clone https://github.com/ovis-hpc/ovis
-INFO "== Checkout maestro =="
-git clone https://github.com/ovis-hpc/maestro
-[[ -z "${MAESTRO_COMMIT}" ]] || {
-	INFO "checking out maestro commit id: ${MAESTRO_COMMIT}"
-	pushd maestro
-	git checkout ${MAESTRO_COMMIT}
-	popd
-}
-
-NEW_GIT_SHA=$( cd ovis && git rev-parse HEAD )
+NEW_GIT_SHA=( $( git ls-remote https://github.com/ovis-hpc/ovis OVIS-4 ) )
 OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
 		/opt/ovis/sbin/ldmsd -V | grep git | sed 's/git-SHA: //'
 	} || echo "" )
@@ -164,7 +150,22 @@ OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
 INFO "NEW_GIT_SHA: ${NEW_GIT_SHA}"
 INFO "OLD_GIT_SHA: ${OLD_GIT_SHA}"
 
+pushd ${WORK_DIR}
 if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
+
+	INFO "== Checking out SOS =="
+	git clone https://github.com/ovis-hpc/sos
+	INFO "== Checking out OVIS =="
+	git clone https://github.com/ovis-hpc/ovis
+	INFO "== Checkout maestro =="
+	git clone https://github.com/ovis-hpc/maestro
+	[[ -z "${MAESTRO_COMMIT}" ]] || {
+		INFO "checking out maestro commit id: ${MAESTRO_COMMIT}"
+		pushd maestro
+		git checkout ${MAESTRO_COMMIT}
+		popd
+	}
+
 	INFO "Purging /opt/ovis/"
 	sudo rm -rf /opt/ovis/* # we want to keep the directory, just purge stuff inside
 
