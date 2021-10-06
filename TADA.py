@@ -170,6 +170,7 @@ class Test(object):
               }
         self._send(msg)
         log.info("test {} ended".format(self.test_name))
+        return self.exit_code()
 
     def exit_code(self):
         # determine exit code from the current test results
