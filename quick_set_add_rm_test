@@ -12,6 +12,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
@@ -210,7 +211,15 @@ def verify_data(assert_no, _sets):
     test.assert_test(assert_no, True, "verified")
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -268,6 +277,4 @@ if len(out):
 else:
     test.assert_test(6, True, "verified")
 
-test.finish()
-
-cluster.remove()
+# see at_exit()

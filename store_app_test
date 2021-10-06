@@ -9,6 +9,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from threading import Thread, Event
 
@@ -312,7 +313,15 @@ def ldms_ls(host, port):
 ################################################################################
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -459,7 +468,4 @@ for mname in thr.get_metric_names():
 else:
     test.assert_test(1, True, "sos data is not empty and sos data < ldms_ls data")
 
-test.finish()
-
-dprompt("Press ENTER to REMOVE the cluster, or Ctrl-C to debug")
-cluster.remove()
+# see at_exit()

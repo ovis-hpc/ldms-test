@@ -210,27 +210,14 @@ def submit_papi_job(name, num_tasks, papi_config, duration = 10):
     return submit_job(name, num_tasks, duration, subscriber_data)
 
 
-#### Get or create the cluster ####
-log.info("-- Get or create the cluster --")
-cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
-
-
-#### Cleanup output files ####
-cont = cluster.get_container("headnode")
-cont.exec_run("rm -f /db/*.out")
-
-
 #### Start ####
+cluster = None
 test.start()
 
-exit_code = -1
 @atexit.register
-def cleanup():
-    # cleanup at exit
+def at_exit():
     log.info("-- Finishing Test --")
-    test.finish()
-    if args.debug and exit_code:
-        return # do not cleanup files/cluster when --debug is given
+    rc = test.finish()
     log.info("-- Cleaning up files --")
     _list = [ "bad.json", "bad_config.sh", "missing_cfg_attr.sh", "no_papi.sh",
               "papi0.papi.json", "papi0.sh",
@@ -243,11 +230,28 @@ def cleanup():
               "slurm-6.out",
               "slurm-7.out",
             ]
-    _list = [ "/db/{}".format(x) for x in _list ]
-    cmd = "rm -f " + (" ".join(_list))
-    cluster.exec_run(cmd)
+    _list = [ "/{}/{}".format(DB, x) for x in _list ]
+    def rm_f(lst):
+        for f in lst:
+            try:
+                os.unlink(f)
+            except:
+                pass
+    rm_f(_list)
     log.info("-- Removing the virtual cluster --")
-    cluster.remove()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+
+#### Get or create the cluster ####
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+
+#### Cleanup output files ####
+cont = cluster.get_container("headnode")
+cont.exec_run("rm -f /db/*.out")
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
@@ -428,5 +432,4 @@ while True: # will break
     break
 
 #### Finish ####
-exit_code = 0
-sys.exit(exit_code) # see cleanup() function
+# see at_exit()

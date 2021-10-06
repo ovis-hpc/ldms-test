@@ -4,6 +4,7 @@ import argparse
 import logging
 import os
 import sys
+import atexit
 
 import TADA
 
@@ -64,6 +65,15 @@ spec = {
     ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
 }
 
+rc = -1
+cluster = None
+
+@atexit.register
+def at_exit():
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
 log.info("-- Create the cluster -- ")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
@@ -84,5 +94,5 @@ if rc:
     raise RuntimeError("Failed to run the C test program")
 
 c_test_result = cont.read_file(c_TEST_RESULT_PATH)
-create_suite_from_C_test_results(c_test_result, args.tada_addr)
-cluster.remove()
+rc = create_suite_from_C_test_results(c_test_result, args.tada_addr)
+# see `at_exit()` function

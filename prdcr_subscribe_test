@@ -9,6 +9,8 @@ import TADA
 import time
 import json
 import logging
+import atexit
+import shutil
 
 from io import StringIO
 
@@ -314,8 +316,22 @@ if __name__ == "__main__":
 
     test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
 
+    cluster = None
     # Tell the TADA infrastructure that the test is starting
     test.start()
+
+    @atexit.register
+    def at_exit():
+        rc = test.finish()
+        # cleanup data
+        flist = [ "agg-2.out", "stream-sampler-1.out", "stream-sampler-2.out",
+                  "Stream_Test-data.json", "tada/" ]
+        flist = [ "/{}/{}".format(args.data_root, x) for x in flist ]
+        for f in flist:
+            shutil.rmtree(f, ignore_errors = True)
+        if cluster is not None:
+            cluster.remove()
+        os._exit(rc)
 
     # Create the containers required to ruyn the test
     cluster = LDMSDCluster.get(clustername, create = True, spec = spec)
@@ -695,11 +711,4 @@ if __name__ == "__main__":
         test.assert_test(19, True, "verified")
         break
 
-    test.finish()
-    # cleanup data
-    flist = [ "agg-2.out", "stream-sampler-1.out", "stream-sampler-2.out",
-              "Stream_Test-data.json", "tada/" ]
-    flist = [ "/data/{}".format(x) for x in flist ]
-    rm = "rm -rf " + ( " ".join(flist) )
-    agg2.exec_run(rm)
-    cluster.remove()
+# see at_exit()

@@ -13,6 +13,7 @@ import docker
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
@@ -257,7 +258,15 @@ def ldms_ls(host, port = LDMSD_PORT, l = False):
     except:
         return None
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -457,6 +466,4 @@ while True:
                                        .format(lst, expect))
     break
 
-
-test.finish()
-cluster.remove() # this destroys entire cluster
+# see at_exit()

@@ -33,6 +33,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
@@ -381,7 +382,15 @@ def cleanup_db(cluster):
     cont.exec_run("rm -rf {}".format(" ".join(LST)))
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -600,9 +609,4 @@ else: # loop does not break
         test.assert_test(4, False, "No SYSPAPI data")
     else:
         test.assert_test(4, True, "No data missing")
-
-test.finish()
-if DEBUG and sys.flags.interactive:
-    input("Press ENTER to remove cluster (Ctrl-C to debug)")
-cleanup_db(cluster)
-cluster.remove() # this destroys entire cluster
+# see `at_exit()` function

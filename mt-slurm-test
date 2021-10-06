@@ -7,6 +7,8 @@ import json
 import time
 import argparse
 import subprocess
+import shutil
+import atexit
 import TADA
 
 from distutils.spawn import find_executable
@@ -489,7 +491,16 @@ test.add_assertion(284, "Job 10000 has 3 nodes")
 test.add_assertion(285, "Job 10100 has 4 nodes")
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    shutil.rmtree(DB + "/slurm-test", ignore_errors = True)
+    os._exit(rc)
 
 print("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -691,9 +702,4 @@ rc, out = cont.exec_run("sos_cmd -C /db/slurm-test -qS mt-slurm -X time_job -V n
 
 verify(285, int(out.split('\n')[1]) == 4, "node count 4 correct")
 
-test.finish()
-
-cont.exec_run("rm -rf /db/slurm-test")
-cluster.remove()
-
-print('Test Finished')
+# see at_exit()

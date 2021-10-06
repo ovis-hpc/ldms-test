@@ -137,12 +137,6 @@ def EXPECT(val, expected):
     if val != expected:
         raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
 
-@atexit.register
-def at_exit():
-    test.finish()
-    cluster.remove() # this destroys entire cluster
-
-
 #### test definition ####
 
 test = TADA.Test(test_suite = "LDMSD",
@@ -202,8 +196,16 @@ test.add_assertion(35, "(6th update; list unchanged) check set1 on list_agg.py")
 test.add_assertion(36, "(6th update; list unchanged) check set3_p on list_agg.py")
 test.add_assertion(37, "(6th update; list unchanged) check set3_c on list_agg.py")
 
-
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -498,4 +500,4 @@ test.assert_test(35, True, "OK")
 test.assert_test(36, True, "OK")
 test.assert_test(37, True, "OK")
 
-# test.finish() in at_exit()
+# see at_exit()

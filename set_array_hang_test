@@ -104,12 +104,6 @@ def EXPECT(val, expected, cond_id):
         raise RuntimeError(msg)
     test.assert_test(cond_id, True, "data verified")
 
-@atexit.register
-def at_exit():
-    test.finish()
-    log.info("-- Removing the cluster --")
-    cluster.remove() # this destroys entire cluster
-
 def pycmd(tty, cmd, retry = 3):
     """cmd must be single command w/o new line"""
     sio = io.StringIO()
@@ -154,7 +148,15 @@ test.add_assertion( 4, "sampling 2 times then agg update")
 test.add_assertion( 5, "agg update w/o new sampling")
 test.add_assertion( 6, "sampling 5 times then agg update")
 
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -244,4 +246,4 @@ EXPECT( exp_rec, upd_rec, 6 )
 # NOTE: since s3 has set_array_card=3, with 5 samples, we would expect to see
 #       only the last 2 samples of s3, and the last entry of s1.
 
-# test.finish() in at_exit()
+# see at_exit()

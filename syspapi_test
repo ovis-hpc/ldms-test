@@ -9,6 +9,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from functools import reduce
 
@@ -188,8 +189,15 @@ test.add_assertion(7, "verify cfg_file for many events")
 def verify(num, cond, cond_str):
     test.assert_test(num, cond, cond_str)
 
-
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -535,7 +543,4 @@ verify(7, _verified, "each event has either 'sucees' or 'failed' report")
 log.info(" events succeeded: {}".format(_succeeded))
 log.info(" events failed: {}".format(_failed))
 
-####### end
-test.finish()
-
-cluster.remove() # this destroys entire cluster
+# see at_exit()

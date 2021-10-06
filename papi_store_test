@@ -9,6 +9,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
@@ -207,16 +208,25 @@ test.add_assertion(2, "Every event in every job results in a separate row in the
 test.add_assertion(3, "The schema name in the output matches the event name")
 test.add_assertion(4, "Each rank in the job results in a row per event in the output")
 
+#### Start ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
 #### Get or create the cluster ####
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
 #### Cleanup files ####
 cluster.exec_run("rm -rf /db/sos")
 cluster.exec_run("mkdir -p /db/sos")
 cluster.exec_run("rm -f /db/*.out")
-
-#### Start ####
-test.start()
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
@@ -344,5 +354,5 @@ else: # loop completed
                                    .format(missing, excess))
     else:
         test.assert_test(4, True, "verified")
-test.finish()
-cluster.remove()
+
+# see at_exit()

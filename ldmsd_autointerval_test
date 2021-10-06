@@ -241,12 +241,6 @@ test.add_assertion(6, "verify 'oversampled' in the agg2 log")
 
 #### Helper Functions ####
 
-@atexit.register
-def at_exit():
-    test.finish()
-    log.info("-- Removing the cluster --")
-    cluster.remove() # this destroys entire cluster
-
 PROMPT = "sock:localhost:{LDMSD_PORT}> ".format(**vars())
 ctrl_out_debug = io.StringIO()
 
@@ -325,7 +319,15 @@ def verify_interval(ival, assert_no):
 
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -402,6 +404,4 @@ if flogs:
         system.exit(-1)
 test.assert_test(6, True, "OK")
 
-#time.sleep(10)
-
-# test.finish() in at_exit()
+# see at_exit()

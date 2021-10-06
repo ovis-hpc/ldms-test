@@ -9,6 +9,7 @@ import time
 import argparse
 import TADA
 import logging
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, jprint, \
@@ -299,7 +300,15 @@ test.add_assertion(155, "new job's task replaces oldest slot")
 #test.add_assertion(156, "Job data in each metric set reflects matching text file")
 
 #### Start! ####
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
@@ -520,8 +529,4 @@ verify(156, (results == expected_data), 'ldms_ls == text_file')
 '''
 log.info("-- Test Finished --")
 
-test.finish()
-
-dprompt("Press ENTER to remove the cluster (Ctrl-C to debug)")
-
-cluster.remove()
+# see at_exit()

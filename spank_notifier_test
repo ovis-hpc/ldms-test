@@ -8,6 +8,7 @@ import json
 import time
 import argparse
 import logging
+import atexit
 
 import TADA
 
@@ -268,7 +269,20 @@ if __name__ == "__main__":
     test.add_assertion(52, "Killing stream listener does not affect job execution on node-2")
 
     test.add_assertion(60, "Bad config does not affect jobs")
+
+    cluster = None
     test.start()
+
+    @atexit.register
+    def at_exit():
+        rc = test.finish()
+        if cluster is not None:
+            try:
+                remove_job_out(cluster)
+            except:
+                pass
+            cluster.remove()
+        os._exit(rc)
 
     log.info("-- Create the cluster --")
     spec['ovis_prefix'] = args.prefix
@@ -528,9 +542,4 @@ if __name__ == "__main__":
         test.assert_test(assert_no, 'SLURM_JOB_NAME' in d, 'job output file created')
         assert_no += 1
 
-    test.finish()
-
-    log.info("-- Cleanup output --")
-    remove_job_out(cluster)
-    log.info("-- Removing cluster --")
-    cluster.remove() # this destroys entire cluster
+# see at_exit()

@@ -24,6 +24,7 @@ import os
 import sys
 import TADA
 import time
+import atexit
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, D, process_args, add_common_args, \
@@ -305,7 +306,15 @@ for t in STREAM_TYPES:
             add_assertion(test, "{0}-{1}-{2}".format(sub, t, sz),
                   "{n} receives {sz} {t} streams".format(n=_n, sz=sz, t=t))
 
+cluster = None
 test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
 
 cluster = LDMSDCluster.get(args.clustername, create = True, spec = spec)
 
@@ -473,5 +482,4 @@ for t in STREAM_TYPES:
         subscriber_case(sub_cont, pub_cont, sub_cont.hostname, t, sz)
         ldmsd_case(pub_cont, samplerd_cont, agg_cont, t, sz)
 
-test.finish()
-cluster.remove()
+# see at_exit()
