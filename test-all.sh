@@ -58,11 +58,39 @@ ldmsd_autointerval_test
 
 [[ -z "${FAIL_FAST}" ]] || set -e
 
+{ # printing in this subshell will be logged
+declare -A RCS
 for T in ${LIST[*]}; do
 	echo "======== ${T} ========"
 	CMD="./${T} $@"
 	echo ${CMD}
 	${CMD}
+	RC=$?
+	RCS["$T"]=${RC}
+	echo "EXIT_CODE: ${RC}"
 	sleep 10 # allow some clean-up break between tests
 	echo "----------------------------------------------"
-done 2>&1 | tee ${LOG}
+done
+
+export RED='\033[01;31m'
+export GREEN='\033[01;32m'
+export RESET='\033[0m'
+echo "==== Summary ===="
+N=${#RCS[*]}
+PASSED=0
+FAILED=0
+for K in "${!RCS[@]}"; do
+	V=${RCS["$K"]}
+	if (( $V == 0 )); then
+		PASSED=$((PASSED+1))
+		V="${GREEN}PASSED${RESET}"
+	else
+		FAILED=$((FAILED+1))
+		V="${RED}FAILED${RESET}"
+	fi
+	echo -e "${K}: ${V}"
+done
+echo "------------------------------------------"
+echo -e "Total tests passed: ${PASSED}/${N}"
+echo "------------------------------------------"
+} 2>&1 | tee ${LOG}
