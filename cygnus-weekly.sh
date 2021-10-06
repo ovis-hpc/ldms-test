@@ -18,6 +18,26 @@
 # - run `direct_*_test` test cases
 # - run containerized test cases
 #
+#
+# ENVIRONMENT VARIABLES
+# ---------------------
+# - `FORCE_TEST=0|1`:
+#    By default, if the git SHA of the newly checked out OVIS-4 is
+#    still the same as the installation in /opt/ovis, the script will end
+#    without running the test. To force the test, set environment variable
+#    `FORCE_TEST=1`.
+#
+# - `FORCE_BUILD=0|1`:
+#    By default, if the git SHA of the newly checked out OVIS-4 is still the
+#    same as the installation in /opt/ovis, the script won't build/install the
+#    new binaries.  To force the build, set environment variable
+#    `FORCE_BUILD=1`.
+#
+# - `GITHUB_REPORT=0|1`:
+#   Set `GITHUB_REPORT=0` to skip reporting test results to github (e.g. for
+#   debugging). By default, `GITHUB_REPORT` is 1.
+#
+#
 # REQUIREMENTS
 # ------------
 # - you must be able to `sudo`
@@ -27,6 +47,7 @@
 
 export PATH=/opt/ovis/sbin:/opt/ovis/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
+export GITHUB_REPORT=${GITHUB_REPORT:-1}
 
 LOG() {
 	echo $( date +"%F %T" ) "$@"
@@ -115,7 +136,7 @@ INFO "LOG: ${LOG}"
 
 pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
-./github-report.sh # make a test start report
+[[ "${GITHUB_REPORT}0" -eq 0 ]] || ./github-report.sh # make a test start report
 
 set -e
 # remove existing clusters
@@ -143,7 +164,7 @@ OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
 INFO "NEW_GIT_SHA: ${NEW_GIT_SHA}"
 INFO "OLD_GIT_SHA: ${OLD_GIT_SHA}"
 
-if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]]; then
+if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 	INFO "Purging /opt/ovis/"
 	sudo rm -rf /opt/ovis/* # we want to keep the directory, just purge stuff inside
 
@@ -173,6 +194,12 @@ if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]]; then
 	sudo cp maestro/*.py maestro/maestro* ${PREFIX}/bin
 else
 	INFO "skip building because GIT SHA has not changed: ${OLD_GIT_SHA}"
+fi
+
+if [[  "$NEW_GIT_SHA" == "$OLD_GIT_SHA" ]] && [[ "${FORCE_TEST}0" -eq 0 ]]; then
+	INFO "Skip the test. SHA does not change: ${NEW_GIT_SHA}"
+	INFO "----------------------------------------------"
+	exit 0
 fi
 
 set +e
@@ -270,4 +297,4 @@ echo -e "Total tests passed: ${PASSED}/${N}"
 echo "------------------------------------------"
 } | tee ${LOG}
 
-${SCRIPT_DIR}/github-report.sh # make a test end report
+[[ "${GITHUB_REPORT}0" -eq 0 ]] || ${SCRIPT_DIR}/github-report.sh # make a test end report
