@@ -1793,7 +1793,7 @@ class LDMSDCluster(ABC):
         hosts = reduce(lambda x,y: x+y,
                          ([c.hostname, c.ip_addr] + c.aliases \
                                              for c in self.containers) )
-        cmd = "ssh-keyscan " + " ".join(hosts) + " 2>/dev/null"
+        cmd = "bash -c '" + "ssh-keyscan " + " ".join(hosts) + " 2>/dev/null'"
         cont = self.containers[-1]
         rc, out = cont.exec_run(cmd)
         return out
