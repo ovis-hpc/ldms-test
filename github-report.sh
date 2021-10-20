@@ -52,6 +52,13 @@ export -f assert
 	git clone git@github.com:ldms-test/weekly-report
 }
 
+# Check if the tests have skipped due to unchanged SHA
+if grep 'Skip the test. SHA does not change:' ${WORK_DIR}/cygnus-weekly.log >/dev/null 2>&1; then
+	# If so, don't report
+	INFO "The tests have skipped (SHA does not change). Do not report to github"
+	exit 0
+fi
+
 pushd weekly-report
 git fetch
 git reset --hard origin/master
