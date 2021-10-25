@@ -75,6 +75,7 @@ _META_DATA = r'(?:' + \
              r'(?P<meta_flags>\D+)\s+' + \
              r'(?P<meta_msize>\d+)\s+' + \
              r'(?P<meta_dsize>\d+)\s+' + \
+             r'(?P<meta_hsize>\d+)\s+' + \
              r'(?P<meta_uid>\d+)\s+' + \
              r'(?P<meta_gid>\d+)\s+' + \
              r'(?P<meta_perm>-(?:[r-][w-][x-]){3})\s+' + \
@@ -136,6 +137,7 @@ def parse_ldms_ls(txt):
             "flags"     :  FLAGS,
             "meta_sz"   :  META_SZ,
             "data_sz"   :  DATA_SZ,
+            "heap_sz"   :  HEAP_SZ,
             "uid"       :  UID,
             "gid"       :  GID,
             "perm"      :  PERM,
@@ -183,6 +185,7 @@ def parse_ldms_ls(txt):
                          flags = m["meta_flags"],
                          meta_sz = m["meta_msize"],
                          data_sz = m["meta_dsize"],
+                         heap_sz = m["meta_hsize"],
                          uid = m["meta_uid"],
                          gid = m["meta_gid"],
                          perm = m["meta_perm"],
