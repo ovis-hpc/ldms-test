@@ -136,8 +136,6 @@ INFO "LOG: ${LOG}"
 
 pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
-[[ "${GITHUB_REPORT}0" -eq 0 ]] || ./github-report.sh # make a test start report
-
 set -e
 # remove existing clusters
 ./remove_cluster --all
@@ -202,6 +200,8 @@ if [[  "$NEW_GIT_SHA" == "$OLD_GIT_SHA" ]] && [[ "${FORCE_TEST}0" -eq 0 ]]; then
 	INFO "----------------------------------------------"
 	exit 0
 fi
+
+[[ "${GITHUB_REPORT}0" -eq 0 ]] || ${SCRIPT_DIR}/github-report.sh # test start report
 
 set +e
 INFO "==== OVIS+SOS Installation Completed ===="
