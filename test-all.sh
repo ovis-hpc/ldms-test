@@ -54,6 +54,7 @@ ldms_list_test
 quick_set_add_rm_test
 set_array_hang_test
 ldmsd_autointerval_test
+ldms_record_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e

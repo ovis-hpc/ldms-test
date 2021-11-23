@@ -105,6 +105,7 @@ OVIS_BUILD_OPTS=(
 	--enable-zaptest
 	--enable-test_sampler
 	--enable-list_sampler
+	--enable-record_sampler
 
 	--enable-munge
 
@@ -270,6 +271,7 @@ ldms_list_test
 quick_set_add_rm_test
 set_array_hang_test
 ldmsd_autointerval_test
+ldms_record_test
 )
 
 for T in ${LIST[*]}; do
