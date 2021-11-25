@@ -400,16 +400,16 @@ test.assert_test(25, True, "OK")
 log.info("5th sampling on the sampler...")
 cmd = "".join("""\
 {name}.transaction_begin();\
-{name}[-1].delete(next(iter({name}[-1])));\
+{name}[-2].delete(next(iter({name}[-2])));\
 {name}.transaction_end();\
 """.format(**vars()) for name in names  )
 o = pycmd(isamp, cmd)
 assert( o == '' ) # update OK
 # NOTE: due to transactoin begin/end, we're now in buffer 2
 cmd = """\
-set1_data=gen_data(3);dump1=set1_data[-1][1].pop(0);\
-set3_p_data=gen_data(3);dump2=set3_p_data[-1][1].pop(0);\
-set3_c_data=gen_data(5);dump3=set3_c_data[-1][1].pop(0);\
+set1_data=gen_data(3);dump1=set1_data[-2][1].pop(0);\
+set3_p_data=gen_data(3);dump2=set3_p_data[-2][1].pop(0);\
+set3_c_data=gen_data(5);dump3=set3_c_data[-2][1].pop(0);\
 verify_set(set1, set1_data);\
 verify_set(set3_p, set3_p_data);\
 verify_set(set3_c, set3_c_data);\
@@ -430,9 +430,9 @@ o = pycmd(iagg, cmd)
 assert( o == '' ) # update OK
 # verify
 cmd = """\
-set1_data=gen_data(3);dump1=set1_data[-1][1].pop(0);\
-set3_p_data=gen_data(3);dump2=set3_p_data[-1][1].pop(0);\
-set3_c_data=gen_data(5);dump3=set3_c_data[-1][1].pop(0);\
+set1_data=gen_data(3);dump1=set1_data[-2][1].pop(0);\
+set3_p_data=gen_data(3);dump2=set3_p_data[-2][1].pop(0);\
+set3_c_data=gen_data(5);dump3=set3_c_data[-2][1].pop(0);\
 verify_set(set1, set1_data);\
 verify_set(set3_p, set3_p_data);\
 verify_set(set3_c, set3_c_data);\
@@ -457,9 +457,9 @@ o = pycmd(isamp, cmd)
 assert( o == '' ) # sampling OK
 # verify
 cmd = """\
-set1_data=gen_data(3);dump1=set1_data[-1][1].pop(0);\
-set3_p_data=gen_data(3);dump2=set3_p_data[-1][1].pop(0);\
-set3_c_data=gen_data(5);dump3=set3_c_data[-1][1].pop(0);\
+set1_data=gen_data(3);dump1=set1_data[-2][1].pop(0);\
+set3_p_data=gen_data(3);dump2=set3_p_data[-2][1].pop(0);\
+set3_c_data=gen_data(5);dump3=set3_c_data[-2][1].pop(0);\
 verify_set(set1, set1_data);\
 verify_set(set3_p, set3_p_data);\
 verify_set(set3_c, set3_c_data);\
@@ -480,9 +480,9 @@ o = pycmd(iagg, cmd)
 assert( o == '' ) # update OK
 # verify
 cmd = """\
-set1_data=gen_data(3);dump1=set1_data[-1][1].pop(0);\
-set3_p_data=gen_data(3);dump2=set3_p_data[-1][1].pop(0);\
-set3_c_data=gen_data(5);dump3=set3_c_data[-1][1].pop(0);\
+set1_data=gen_data(3);dump1=set1_data[-2][1].pop(0);\
+set3_p_data=gen_data(3);dump2=set3_p_data[-2][1].pop(0);\
+set3_c_data=gen_data(5);dump3=set3_c_data[-2][1].pop(0);\
 verify_set(set1, set1_data);\
 verify_set(set3_p, set3_p_data);\
 verify_set(set3_c, set3_c_data);\

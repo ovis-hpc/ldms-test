@@ -58,6 +58,12 @@ SCHEMA = ldms.Schema(
                 (        "round", "u32",  1  ),
                 REC_DEF,
                 ( "device_list", "list", ITEM_COUNT * REC_DEF.heap_size() ),
+                dict(
+                    name    = "device_array",
+                    type    = ldms.V_RECORD_ARRAY,
+                    count   = ITEM_COUNT,
+                    rec_def = REC_DEF,
+                ),
             ],
          )
 
@@ -113,6 +119,12 @@ def gen_data(_round):
                 [ (_t, VAL[_t](_round + r)) for _s, _t, _c, _mta in REC_DEF ]
             ) for r in range(ITEM_COUNT)
         ]),
+        (ldms.V_RECORD_ARRAY, [
+            (
+                ldms.V_RECORD_INST,
+                [ (_t, VAL[_t](_round + r + ITEM_COUNT)) for _s, _t, _c, _mta in REC_DEF ]
+            ) for r in range(ITEM_COUNT)
+        ]),
     ]
 
 def update_set(_set, _round):
@@ -131,6 +143,14 @@ def update_set(_set, _round):
             v = VAL[t](_round + i)
             rec[j] = v
         i += 1
+    _arr = _set["device_array"]
+    for rec in _arr:
+        for j in range(len(rec)):
+            t = rec.get_metric_type(j)
+            v = VAL[t](_round + i)
+            rec[j] = v
+        i += 1
+
     _set.transaction_end()
 
 def print_set(s):
@@ -150,6 +170,8 @@ def verify_value(t, m, v):
         verify_record_inst(m, v)
     elif t == ldms.V_RECORD_TYPE:
         pass # application don't use record type directly
+    elif t == ldms.V_RECORD_ARRAY:
+        verify_record_array(m, v)
     else:
         # print("v:", v, "m:", m)
         if type(m) == ldms.MVal:
@@ -159,6 +181,10 @@ def verify_value(t, m, v):
         assert( m == v )
 
 def verify_list(l, d):
+    for (t, v), m in zip(d, iter(l)):
+        verify_value(t, m, v)
+
+def verify_record_array(l, d):
     for (t, v), m in zip(d, iter(l)):
         verify_value(t, m, v)
 
