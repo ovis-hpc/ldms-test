@@ -46,7 +46,6 @@
 #   details in "Singularity Cluster Set" section in README.md.
 
 export PATH=/opt/ovis/sbin:/opt/ovis/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
-export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
 export GITHUB_REPORT=${GITHUB_REPORT:-1}
 
 LOG_MSG() {
@@ -129,6 +128,18 @@ OVIS_BUILD_OPTS=(
 	CFLAGS="-Wall -Werror -O0 -ggdb3"
 )
 
+NEW_GIT_SHA=( $( git ls-remote https://github.com/ovis-hpc/ovis OVIS-4 ) )
+OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
+		/opt/ovis/sbin/ldmsd -V | grep git | sed 's/git-SHA: //'
+	} || echo "" )
+
+INFO "NEW_GIT_SHA: ${NEW_GIT_SHA}"
+INFO "OLD_GIT_SHA: ${OLD_GIT_SHA}"
+
+export NEW_GIT_SHA
+export OLD_GIT_SHA
+export OVIS_GIT_SHA=${NEW_GIT_SHA}
+
 #### subshell that print to both stdout and log file ####
 {
 INFO "WORK_DIR: ${WORK_DIR}"
@@ -139,14 +150,6 @@ pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 set -e
 # remove existing clusters
 ./remove_cluster --all
-
-NEW_GIT_SHA=( $( git ls-remote https://github.com/ovis-hpc/ovis OVIS-4 ) )
-OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
-		/opt/ovis/sbin/ldmsd -V | grep git | sed 's/git-SHA: //'
-	} || echo "" )
-
-INFO "NEW_GIT_SHA: ${NEW_GIT_SHA}"
-INFO "OLD_GIT_SHA: ${OLD_GIT_SHA}"
 
 pushd ${WORK_DIR}
 if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
@@ -191,9 +194,15 @@ if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 
 	INFO "== Installing maestro =="
 	sudo cp maestro/*.py maestro/maestro* ${PREFIX}/bin
+
 else
 	INFO "skip building because GIT SHA has not changed: ${OLD_GIT_SHA}"
 fi
+
+export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
+
+INFO "-- Installation process succeeded --"
+INFO "---------------------------------------------------------------"
 
 if [[  "$NEW_GIT_SHA" == "$OLD_GIT_SHA" ]] && [[ "${FORCE_TEST}0" -eq 0 ]]; then
 	INFO "Skip the test. SHA does not change: ${NEW_GIT_SHA}"

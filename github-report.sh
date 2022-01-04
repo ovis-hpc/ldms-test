@@ -73,13 +73,17 @@ if TP=$(grep 'Total tests passed' test-all.log); then
 		COLOR='red'
 	fi
 	MESSAGE="${TP} tests pased"
-else
+elif grep 'Installation process succeeded' test-all.log 1>/dev/null; then
 	MESSAGE='in progress'
 	COLOR='blue'
+else
+	MESSAGE='build/install failed'
+	COLOR='red'
 fi
 
-OVIS_GIT_SHA=$( ldmsd -V | grep git-SHA ) # git-SHA: abcdef012345...
-OVIS_GIT_SHA_SHORT=${OVIS_GIT_SHA:9:7} # abcdef0
+
+# caller set OVIS_GIT_SHA
+OVIS_GIT_SHA_SHORT=${OVIS_GIT_SHA:0:7} # abcdef0
 
 LABEL="weekly test on ${OVIS_GIT_SHA_SHORT}"
 
