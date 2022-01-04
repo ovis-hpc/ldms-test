@@ -49,18 +49,18 @@ export PATH=/opt/ovis/sbin:/opt/ovis/bin:/usr/local/sbin:/usr/local/bin:/sbin:/b
 export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
 export GITHUB_REPORT=${GITHUB_REPORT:-1}
 
-LOG() {
+LOG_MSG() {
 	echo $( date +"%F %T" ) "$@"
 }
-export -f LOG
+export -f LOG_MSG
 
 ERROR() {
-	LOG "ERROR:" "$@"
+	LOG_MSG "ERROR:" "$@"
 }
 export -f ERROR
 
 INFO() {
-	LOG "INFO:" "$@"
+	LOG_MSG "INFO:" "$@"
 }
 export -f INFO
 
