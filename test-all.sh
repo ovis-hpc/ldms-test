@@ -3,8 +3,6 @@
 # Usage: [NAME=VAUE ...] ./test-all.sh [OPTIONS-PASSED-TO-TESTS]
 #
 # Environment variables:
-# - OVIS_PREFIX: The path to ovis installation prefix. If not specified,
-#                `/opt/ovis` is used.
 # - LOG: Path to the log file. ${HOME}/test-all.log is the default.
 #
 # - SKIP_PAPI: set to non-empty string (e.g. 'y') to skip tests that use PAPI.
