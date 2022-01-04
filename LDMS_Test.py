@@ -61,7 +61,8 @@ class cached_property(object):
             cache[self.name] = val = self.func(obj)
             return val
 
-_META_BEGIN = r'(?P<meta_begin>Schema\s+Instance\s+Flags.*\s+Info)'
+_PRE_META_KV = r'(?:^(?P<pre_meta_key>.*\w)\s+:\s+(?P<pre_meta_val>.*)$)'
+_META_BEGIN = r'(?P<meta_begin>(?:Schema Digest\s+)?Schema\s+Instance\s+Flags.*\s+Info)'
 _META_DASHES = r'(?:^(?P<meta_dashes>[ -]+)$)'
 _META_SUMMARY = '(?:'+ \
                 r'Total Sets: (?P<meta_total_sets>\d+), ' + \
@@ -70,6 +71,7 @@ _META_SUMMARY = '(?:'+ \
                 r'Memory \(kB\):? (?P<mem_sz>\d+(?:\.\d+)?)' + \
                 ')'
 _META_DATA = r'(?:' + \
+             r'(?:(?P<meta_schema_digest>[0-9A-Fa-f]+)\s+)?' + \
              r'(?P<meta_schema>\S+)\s+' + \
              r'(?P<meta_inst>\S+)\s+' + \
              r'(?P<meta_flags>\D+)\s+' + \
@@ -88,6 +90,7 @@ _LS_L_HDR = r'(?:(?P<set_name>[^:]+): .* last update: (?P<ts>.*))'
 _LS_L_DATA = r'(?:(?P<F>.) (?P<type>\S+)\s+(?P<metric_name>\S+)\s+' \
              r'(?P<metric_value>.*))'
 _LS_RE = re.compile(
+            _PRE_META_KV + "|" +
             _META_BEGIN + "|" +
             _META_DASHES + "|" +
             _META_DATA + "|" +
@@ -159,7 +162,7 @@ def parse_ldms_ls(txt):
     D.txt = txt
     D.lines = lines
     itr = iter(lines)
-    meta_section = False
+    section = 0 # 0-pre_meta, 1-meta, 2-data
     for l in itr:
         l = l.strip()
         if not l: # empty line, end of set
@@ -173,14 +176,15 @@ def parse_ldms_ls(txt):
             raise RuntimeError("Bad line format: {}".format(l))
         m = m.groupdict()
         if m["meta_begin"]: # start meta section
-            if meta_section:
+            if section != 0:
                 raise RuntimeError("Unexpected meta info: {}".format(l))
-            meta_section = True
+            section = 1
             continue
         elif m["meta_schema"]: # meta data
-            if not meta_section:
+            if section != 1:
                 raise RuntimeError("Unexpected meta info: {}".format(l))
-            meta = dict( schema = m["meta_schema"],
+            meta = dict( schema_digest = m.get("meta_schema_digest", ""),
+                         schema = m["meta_schema"],
                          instance = m["meta_inst"],
                          flags = m["meta_flags"],
                          meta_sz = m["meta_msize"],
@@ -197,21 +201,23 @@ def parse_ldms_ls(txt):
             _set["meta"] = meta
             _set["name"] = m["meta_inst"]
         elif m["meta_total_sets"]: # the summary line
-            if not meta_section:
+            if section != 1:
                 raise RuntimeError("Unexpected meta info: {}".format(l))
             # else do nothing
             continue
         elif m["meta_dashes"]: # dashes
-            if not meta_section:
+            if section != 1:
                 raise RuntimeError("Unexpected meta info: {}".format(l))
             continue
         elif m["meta_end"]: # end meta section
-            if not meta_section:
+            if section != 1:
                 raise RuntimeError("Unexpected meta info: {}".format(l))
-            meta_section = False
+            section = 2
             continue
         elif m["set_name"]: # new set
-            if meta_section:
+            if section == 0: # we go straight into data (i.e. no -v or -vv)
+                section = 2
+            if section != 2:
                 raise RuntimeError("Unexpected data info: {}".format(l))
             data = dict() # placeholder for metric data
             data_type = dict() # placeholder for metric data type
@@ -221,7 +227,7 @@ def parse_ldms_ls(txt):
             lset["data"] = data
             lset["data_type"] = data_type
         elif m["metric_name"]: # data
-            if meta_section:
+            if section != 2:
                 raise RuntimeError("Unexpected data info: {}".format(l))
             if m["type"] == "char[]":
                 _val = m["metric_value"]
@@ -231,6 +237,10 @@ def parse_ldms_ls(txt):
             mtype = m["type"]
             data[mname] = _TYPE_FN[mtype](_val)
             data_type[mname] = mtype
+        elif m["pre_meta_key"]: # pre-meta (host name stuff)
+            if section != 0:
+                raise RuntimeError("Unexpected pre-meta info: {}".format(l))
+            continue # ignore
         else:
             raise RuntimeError("Unable to process line: {}".format(l))
     return ret
