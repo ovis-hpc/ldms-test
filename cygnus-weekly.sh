@@ -296,6 +296,6 @@ done
 echo "------------------------------------------"
 echo -e "Total tests passed: ${PASSED}/${N}"
 echo "------------------------------------------"
-} | tee ${LOG}
+} |& tee ${LOG}
 
 [[ "${GITHUB_REPORT}0" -eq 0 ]] || ${SCRIPT_DIR}/github-report.sh # make a test end report
