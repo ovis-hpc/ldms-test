@@ -335,6 +335,8 @@ agg1 = cluster.get_container("agg-1")
 agg2 = cluster.get_container("agg-2")
 agg3 = cluster.get_container("agg-3")
 
+headnode.exec_run("mkdir -p {}".format(STORE_PATH))
+
 log.info("-- Start daemons --")
 try:
     cluster.start_daemons()

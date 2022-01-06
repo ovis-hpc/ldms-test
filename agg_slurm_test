@@ -397,6 +397,11 @@ cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 cleanup_db(cluster)
 
 cont = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+
+agg2.exec_run("mkdir -p {}/sos".format(STORE_ROOT))
+agg2.exec_run("mkdir -p {}/papi".format(STORE_ROOT))
+agg2.exec_run("mkdir -p {}/slurm".format(STORE_ROOT))
 
 log.info("-- Preparing syspapi JSON file --")
 papi_json = {
@@ -564,8 +569,6 @@ def check_papi(data):
             check = chk[chk_idx]
         _ret[comp_id] = switches
     return _ret
-
-agg2 = cluster.get_container("agg-2")
 
 slurm = sos_query(agg2, "/{}/slurm/slurm".format(STORE_ROOT), "mt-slurm", "time_job")
 papi_tot_cyc = sos_query(agg2, "/{}/papi/papi".format(STORE_ROOT), "PAPI_TOT_CYC", "time_job")

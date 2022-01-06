@@ -255,6 +255,7 @@ cont.exec_run("rm -f /db/*.out")
 
 log.info("-- Start daemons --")
 cluster.start_daemons()
+time.sleep(5)
 
 cont = cluster.get_container("node-1")
 

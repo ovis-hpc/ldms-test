@@ -336,6 +336,8 @@ agg2 = cluster.get_container("agg2")
 agg1 = cluster.get_container("agg1")
 samp = cluster.get_container("samp")
 
+agg2.exec_run("mkdir -p {}/sos".format(STORE_ROOT))
+
 log.info("-- Start daemons --")
 cluster.start_daemons()
 cluster.make_known_hosts()
