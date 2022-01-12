@@ -306,7 +306,7 @@ def verify_interval(ival, assert_no):
             "  agg1 interval: {agg1_ival}\n" \
             "  agg2 interval: {agg2_ival}\n" \
             .format(**vars()))
-        system.exit(-1)
+        sys.exit(-1)
     if samp_off >= agg1_off or agg1_off >= agg2_off:
         test.assert_test(assert_no, False,
             "bad offset values:\n"\
@@ -314,7 +314,7 @@ def verify_interval(ival, assert_no):
             "  agg1 offset: {agg1_off}\n"\
             "  agg2 offset: {agg2_off}\n"\
             .format(**vars()))
-        system.exit(-1)
+        sys.exit(-1)
     test.assert_test(assert_no, True, "verified")
 
 
@@ -389,7 +389,7 @@ if srdt == expected:
     test.assert_test(5, True, "timestamp differences in SOS show all 3 intervals")
 else:
     test.assert_test(5, False, "Expecting {expected} but got {srdt}".format(**vars()))
-    system.exit(-1)
+    sys.exit(-1)
 
 #test.add_assertion(6, "verify 'oversampled' in the agg2 log")
 logs = agg2.read_file("/var/log/ldmsd.log")
@@ -403,7 +403,7 @@ if flogs:
     t = ts[-1] # last timestamp from sos
     if t - lts < INTERVAL2/1e6:
         test.assert_test(6, False, "'oversampled' appeared to be persisted")
-        system.exit(-1)
+        sys.exit(-1)
 test.assert_test(6, True, "OK")
 
 # see at_exit()
