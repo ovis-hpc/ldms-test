@@ -155,7 +155,7 @@ pushd ${WORK_DIR}
 if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 
 	INFO "== Checking out SOS =="
-	git clone https://github.com/ovis-hpc/sos
+	git clone -b SOS-5 https://github.com/ovis-hpc/sos
 	INFO "== Checking out OVIS =="
 	git clone https://github.com/ovis-hpc/ovis
 	INFO "== Checkout maestro =="
