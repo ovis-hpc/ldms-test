@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+#
+# Test store_sos storing lists of records
+
+import argparse
+import atexit
+import json
+import logging
+import numpy
+import os
+import sys
+import TADA
+
+from collections import namedtuple
+from distutils.spawn import find_executable
+from ovis_ldms import ldms
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, assertion_id_get
+from time import sleep
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+TEST_DESC = "Test store_sos storing lists of records"
+
+#### config variables #### ------------------------------
+LDMSD_PORT = 10001
+LDMSD_XPRT = "sock"
+STORE_ROOT = "/store" # path inside container (agg-2)
+SET_ARRAY_CARD = 10
+SAMP_INTERVAL = 1000000
+SAMP_OFFSET = 0
+RECONNECT_TIME = 5000000
+SCHEMA_NAME = "my_list"
+STRGP_NAME = "list"
+STRGP_CONTAINER = STRGP_NAME
+UPDATE_INTERVAL = 1000000
+UPDATE_OFFSET = 100000
+STORE_SOS_PATH = STORE_ROOT
+
+spec = {
+    "name" : "REPLACE_ME",
+    "description" : "store_sos_list_of_records cluster",
+    "type" : "NA",
+    "templates" : {
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "samplerd",
+                    "!extends" : "ldmsd-sampler",
+                }
+            ]
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ]
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "config" : [
+                "load name=test_sampler",
+                "config name=test_sampler action=list_of_records schema=my_list",
+                "config name=test_sampler action=add_set schema=my_list " \
+                        "producer=%hostname% component_id=%component_id% " \
+                        "instance=%hostname%/my_list",
+                "start name=test_sampler interval={interval} " \
+                        "offset={offset}".format(
+                        interval = SAMP_INTERVAL, offset = SAMP_OFFSET)
+            ]
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "xprt" : LDMSD_XPRT,
+            "port" : LDMSD_PORT,
+            "type" : "active",
+            "interval" : RECONNECT_TIME,
+        },
+        "ldmsd-agg" : {
+            "!extends" : "ldmsd-base",
+            "prdcdrs" : [
+                {
+                    "name" : "sampler-1",
+                    "!extends" : "prdcr"
+                },
+            ]
+        }
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "sampler-1",
+            "component_id" : 1,
+            "!extends" : "compute-node"
+        },
+        {
+            "hostname" : "aggregator",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-agg",
+                    "prdcrs" : [
+                        {
+                            "name" : "sampler-{}".format(i),
+                            "!extends" : "prdcr",
+                        } for i in [1]
+                    ],
+                    "config" : [
+                        "prdcr_start_regex regex=.*",
+                        "load name=store_sos",
+                        "config name=store_sos path={}".format(STORE_SOS_PATH),
+                        "strgp_add name={name} plugin=store_sos " \
+                            "container={cont} schema={schema}".format( \
+                                                    name = STRGP_NAME, \
+                                                    cont = STRGP_CONTAINER, \
+                                                    schema = SCHEMA_NAME),
+                        "strgp_start name={name}".format(name = STRGP_NAME),
+                        "updtr_add name=all " \
+                            "interval={intrvl} offset={offset}".format( \
+                                                    intrvl = UPDATE_INTERVAL, \
+                                                    offset = UPDATE_OFFSET),
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ]
+                }
+            ]
+        }
+    ],
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : None,
+    "ovis_prefix" : "REPLACE_ME",
+    "env" : {},
+    "mounts" : []
+}
+
+def __char(round):
+    return 'a' + (round%26)
+
+def __v8(round):
+    return round & 0xFF
+
+def __v16(round):
+    return round & 0xFFFF
+
+def __v32(round):
+    return roudn & 0xFFFFFFFF
+
+ValueType = namedtuple('ValueType', ['type', 'verify'])
+PRIMITIVE_V_TYPES = {
+    "LDMS_V_CHAR"       : ValueType(ldms.V_CHAR, lambda round, v : v == __char(round)),
+    "LDMS_V_U8"         : ValueType(ldms.V_U8, lambda round, v : v == __v8(round)),
+    "LDMS_V_S8"         : ValueType(ldms.V_S8, lambda round, v : v == __v8(round)),
+    "LDMS_V_U16"        : ValueType(ldms.V_U16, lambda round, v : v == __v16(round)),
+    "LDMS_V_S16"        : ValueType(ldms.V_S16, lambda round, v : v == __v16(round)),
+    "LDMS_V_U32"        : ValueType(ldms.V_U32, lambda round, v : v == __v32(round)),
+    "LDMS_V_S32"        : ValueType(ldms.V_S32, lambda round, v : v == __v32(round)),
+    "LDMS_V_U64"        : ValueType(ldms.V_U64, lambda round, v : v == round),
+    "LDMS_V_S64"        : ValueType(ldms.V_S64, lambda round, v : v == round),
+    "LDMS_V_F32"        : ValueType(ldms.V_F32, lambda round, v : v == round),
+    "LDMS_V_D64"        : ValueType(ldms.V_D64, lambda round, v : v == round),
+    "LDMS_V_CHAR_ARRAY" : ValueType(ldms.V_CHAR_ARRAY, lambda round, v : v == __char(round)*len(v)),
+    "LDMS_V_U8_ARRAY"   : ValueType(ldms.V_U8_ARRAY, lambda round, v : v ==  ":".join(str(a) for a in [__v8(round)] * len(v))),
+    "LDMS_V_S8_ARRAY"   : ValueType(ldms.V_S8_ARRAY, lambda round, v : v == [__v8(round)] * len(v)),
+    "LDMS_V_U16_ARRAY"  : ValueType(ldms.V_U16_ARRAY, lambda round, v : v == [__v16(round)] * len(v)),
+    "LDMS_V_S16_ARRAY"  : ValueType(ldms.V_S16_ARRAY, lambda round, v : v == [__v16(round)] * len(v)),
+    "LDMS_V_U32_ARRAY"  : ValueType(ldms.V_U32_ARRAY, lambda round, v : v == [__v32(round)] * len(v)),
+    "LDMS_V_S32_ARRAY"  : ValueType(ldms.V_S32_ARRAY, lambda round, v : v == [__v32(round)] * len(v)),
+    "LDMS_V_U64_ARRAY"  : ValueType(ldms.V_U64_ARRAY, lambda round, v : v == [round] * len(v)),
+    "LDMS_V_S64_ARRAY"  : ValueType(ldms.V_S64_ARRAY, lambda round, v : v == [round] * len(v)),
+    "LDMS_V_F32_ARRAY"  : ValueType(ldms.V_F32_ARRAY, lambda round, v : v == [round] * len(v)),
+    "LDMS_V_D64_ARRAY"  : ValueType(ldms.V_D64_ARRAY, lambda round, v : v == [round] * len(v)),
+}
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if (not args.debug) and (cluster is not None):
+        cluster.remove()
+    os._exit(rc)
+
+def store_sos_db_get():
+    return "{}/{}".format(STORE_SOS_PATH, STRGP_CONTAINER)
+
+def sos_query(dcont, scont, schema, idx):
+    rc, out = dcont.exec_run("sos_cmd -C {} -q -S {} -X {} -f json"\
+                             .format(scont, schema, idx))
+    if rc != 0:
+        raise RuntimeError("sos_cmd error {}, out: {}".format(rc, out))
+    data = json.loads(out)
+    data = data['data']
+    for d in data:
+        d['schema'] = schema
+    return data
+
+id = assertion_id_get()
+
+AGG_RUNNING = next(id)
+STORING_DATA = next(id)
+CORRECT_DATA = next(id)
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+    #### argument parsing #### -------------------------------------------
+    ap = argparse.ArgumentParser(description = "Test store_sos storing lists of records")
+    add_common_args(ap)
+    args = ap.parse_args()
+    process_args(args)
+
+    spec["ovis_prefix"] = args.prefix
+    spec["name"] = args.clustername
+    spec["mounts"] += args.mount + ["{}:/db:rw".format(args.data_root)]
+    if args.src:
+        spec["mounts"] += { "{0}:{0}:ro".format(args.src)}
+    spec["env"]["TADA_USER"] = args.user
+    spec["env"]["TADA_ADDR"] = args.tada_addr
+    spec["image"] = args.image
+
+    #### Test Definition ####
+    test = TADA.Test(test_suite = "LDMSD",
+                     test_type = "FVT",
+                     test_name = "store_sos_list_of_records_test",
+                     test_desc = "Test store_sos storing lists of records",
+                     test_user = args.user,
+                     commit_id = args.commit_id,
+                     tada_addr = args.tada_addr,
+                     )
+
+    test.add_assertion(AGG_RUNNING, "aggregator starts properly")
+    test.add_assertion(STORING_DATA, "store_sos is storing data.")
+    test.add_assertion(CORRECT_DATA, "store_sos is storing data correctly.")
+
+    log.info("-- Get or create the cluster --")
+
+    cluster = None
+    test.start()
+
+    cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+    smplr1 = cluster.get_container("sampler-1")
+    agg = cluster.get_container("aggregator")
+
+    agg.exec_run("mkdir -p {}".format(STORE_SOS_PATH))
+
+    log.info("Waiting ... for all LDMSDs to start")
+    cluster.start_daemons()
+    cluster.make_known_hosts()
+
+    while True:
+        if smplr1.check_ldmsd() is False:
+            sleep(1)
+        else:
+            break
+    log.info("All sampler daemons are up.")
+
+    # Check whether the aggregator is running or not
+    test.assert_test(AGG_RUNNING, agg.check_ldmsd(), "agg.check_ldmsd()")
+
+    # Check whether store_sos has created the database or not
+    sleep(1)
+    test.assert_test(STORING_DATA,
+                     agg.files_exist(store_sos_db_get()),
+                     "store_sos has created the database.")
+
+    # Verify whether store_sos correctly stores the data or not.
+    sleep(5) # Wait for LDMSD populating the database
+    def obj_iter(itr):
+        b = itr.begin()
+        while b:
+            yield itr.item()
+            b = itr.next()
+
+    def is_same_sample(prev_ts, ts):
+        if 0 == prev_ts:
+            return True
+        if prev_ts == ts:
+            return True
+        else:
+            return False
+
+    def verify_row(o):
+        round = o["round"]
+        for n, v in o.items():
+            if n in PRIMITIVE_V_TYPES.keys():
+                if PRIMITIVE_V_TYPES[n].fn:
+                    is_same = PRIMITIVE_V_TYPES[n].fn(round, v)
+                    if not is_same:
+                        return (False, round, n, v)
+        return (True, None, None, None)
+
+    def verify_data():
+        data = sos_query(agg, store_sos_db_get(), SCHEMA_NAME, "time_job_comp")
+        while 0 == len(data):
+            sleep(5)
+            data = sos_query(agg, store_sos_db_get(), SCHEMA_NAME, "time_job_comp")
+        prev_ts = 0
+        cnt = 0
+        for d in data:
+            ts = d["timestamp"]
+            list_len = int(d["list_1_len"])
+            if list_len == 0:
+                raise Exception("store_sos stores a sample with an empty list. This is not supported by design.")
+            if is_same_sample(prev_ts, ts):
+                cnt += 1
+            else:
+                if list_len != cnt:
+                    return (False, "list_len == num_records: {} == {}".format(list_len, cnt))
+                cnt = 0
+                prev_ts = ts
+            is_good, round, typ, v = verify_row(d)
+            if not is_good:
+                return (False, "round == d[{}]: {}".format(typ, d))
+        return (True, "verify_data()")
+
+    is_good, test_msg = verify_data()
+    if is_good:
+        test.assert_test(CORRECT_DATA, is_good, "verify_data()")
+    else:
+        test.assert_test(CORRECT_DATA, is_good, "verify_data(): {}".format(test_msg))
+
