@@ -2639,5 +2639,11 @@ def get_ldmsd_config(spec, ver=None):
             sio.write("\n")
     return sio.getvalue()
 
+def assertion_id_get():
+    id = 1
+    while True:
+        yield id
+        id += 1
+
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())
