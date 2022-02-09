@@ -1,0 +1,400 @@
+#!/usr/bin/env python3
+
+# The script tests the updtr_start configuration command
+
+import argparse
+import atexit
+import errno
+import logging
+import json
+import os
+import sys
+import TADA
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, assertion_id_get, \
+                      create_updtr_status, create_updtr_prdcr_status
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+LDMSD_PORT = 10000
+LDMSD_XPRT = "sock"
+RECONNECT_TIME = 1000000
+UPDT_INTERVAL = 1000000
+UPDT_OFFSET = 100000
+
+id = assertion_id_get()
+
+NEGATIVE_INTERVAL = next(id)
+ALPHABET_INTERVAL = next(id)
+NEGATIVE_OFFSET   = next(id)
+ALPHABET_OFFSET   = next(id)
+OFFSET_LARGER_INTERVAL = next(id)
+CHANGE_OFFSET2NONE = next(id)
+NOT_EXISTING_UPDTR = next(id)
+VALID_INTERVAL    = next(id)
+VALID_OFFSET      = next(id)
+NO_INTERVAL_OFFSET = next(id)
+RUNNING_UPDTR     = next(id)
+
+common_plugin_config = [
+    "component_id=%component_id%",
+    "instance=%hostname%/%plugin%",
+    "producer=%hostname%",
+]
+
+spec = {
+    "name" : "REPLACE_ME",
+    "description" : "updtr_prdcdr_add_test cluster",
+    "type" : "NA",
+    "templates" : {
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                }
+            ]
+        },
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ]
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                },
+                {
+                    "plugin" : "vmstat",
+                    "!extends" : "sampler_plugin",
+                }
+            ]
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "xprt" : LDMSD_XPRT,
+            "port" : LDMSD_PORT,
+            "type" : "active",
+            "interval" : RECONNECT_TIME,
+        },
+        "ldmsd-agg" : {
+            "!extends" : "ldmsd-base",
+            "prdcrs" : [
+                {
+                    "name" : "sampler-1",
+                    "!extends" : "prdcr"
+                },
+                {
+                    "name" : "sampler-2",
+                    "!extends" : "prdcr",
+                }
+            ],
+        },
+    },
+    "nodes" : [
+        {
+            "hostname" : "sampler-1",
+            "component_id" : 10001,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "sampler-2",
+            "component_id" : 10002,
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "agg",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-agg",
+                    "config" : [
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=neg_int interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=alpha_int interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=neg_offset interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=alpha_offset interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=offset_larger interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=offset2none interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=valid_int interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=valid_offset interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=all interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_add name=running interval={} offset={}" \
+                                .format(UPDT_INTERVAL, UPDT_OFFSET),
+                        "updtr_prdcr_add name=running regex=0",
+                        "updtr_start name=running"
+                    ]
+                },
+            ]
+        },
+    ],
+
+    "cap_add" : ["SYS_PTRACE"],
+    "image" : None,
+    "ovis_prefix" : "REPLACE_ME",
+    "mounts" : [],
+    "env" : {}
+}
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+def ldmsd_request_send(dcont, cmd):
+    x = "/db/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
+        .format(xprt = LDMSD_XPRT, port = LDMSD_PORT, cmd = cmd)
+    rc, out = dcont.exec_run(x)
+    return (rc, out)
+
+def get_updtr_status(dcont, name = None):
+    if name is None:
+        cmd = "updtr_status"
+    else:
+        cmd = "updtr_status name={}".format(name)
+    (rc, out) = ldmsd_request_send(dcont, cmd)
+    return (rc, out.strip())
+
+def updtr_start(dcont, name, interval = None, offset = None):
+    cmd = "updtr_start name={}".format(name)
+    if interval is not None:
+        cmd += " interval={}".format(interval)
+    if offset is not None:
+        cmd += " offset={}".format(offset)
+    (rc, out) = ldmsd_request_send(dcont, cmd)
+    return (rc, out.strip())
+
+if __name__ == "__main__":
+    if sys.flags.interactive:
+        exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+    #### argument parsing #### -------------------------------------------
+    ap = argparse.ArgumentParser(description = "Test the configuration command updtr_start")
+    add_common_args(ap)
+    args = ap.parse_args()
+    process_args(args)
+
+    spec["ovis_prefix"] = args.prefix
+    spec["name"] = args.clustername
+    spec["mounts"] += args.mount + ["{}:/db:rw".format(args.data_root)]
+    if args.src:
+        spec["mounts"] += { "{0}:{0}:ro".format(args.src)}
+    spec["env"]["TADA_USER"] = args.user
+    spec["env"]["TADA_ADDR"] = args.tada_addr
+    spec["image"] = args.image
+
+    #### Test Definition ####
+    test = TADA.Test(test_suite = "LDMSD",
+                     test_type = "FVT",
+                     test_name = "updtr_add test",
+                     test_desc = "Test updtr_add",
+                     test_user = args.user,
+                     commit_id = args.commit_id,
+                     tada_addr = args.tada_addr,
+                     )
+
+    test.add_assertion(NEGATIVE_INTERVAL,
+                       "updtr_start with a negative interval")
+    test.add_assertion(ALPHABET_INTERVAL,
+                       "updtr_start with an alphabet interval")
+    test.add_assertion(NEGATIVE_OFFSET,
+                       "updtr_start with a negative offset")
+    test.add_assertion(ALPHABET_OFFSET,
+                       "updtr_start with an alphabet offset")
+    test.add_assertion(OFFSET_LARGER_INTERVAL,
+                       "updtr_start without an offset larger than interval")
+    test.add_assertion(CHANGE_OFFSET2NONE,
+                       "updtr_start that changes offset to no offset")
+    test.add_assertion(NOT_EXISTING_UPDTR,
+                       "updtr_start of a non-existing updater")
+    test.add_assertion(VALID_INTERVAL,
+                       "updtr_start with a valid interval")
+    test.add_assertion(VALID_OFFSET,
+                       "updtr_start with a valid offset")
+    test.add_assertion(NO_INTERVAL_OFFSET,
+                       "updtr_start without giving interval and offset")
+    test.add_assertion(RUNNING_UPDTR,
+                       "updtr_start a running updater")
+
+    # --------------------------------------------------------------------------
+    log.info("-- Get or create the cluster --")
+
+    cluster = None
+    test.start()
+
+    cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+    smplr1 = cluster.get_container("sampler-1")
+    smplr2 = cluster.get_container("sampler-2")
+    agg = cluster.get_container("agg")
+    containers = [smplr1, smplr2, agg]
+
+    for c in containers:
+        c.write_file("/db/ldmsd_request_send.py", open(SCRIPT_DIR + "/ldmsd_request_send.py").read())
+        c.exec_run("chmod 755 /db/ldmsd_request_send.py")
+
+    log.info("-- Start daemons --")
+    cluster.start_daemons()
+    cluster.make_known_hosts()
+
+    log.info("Waiting ... for all LDMSDs to start")
+    while True:
+        for c in containers:
+            if c.check_ldmsd() is False:
+                sleep(1)
+                break
+        break
+    log.info("All LDMSDs are up.")
+
+    # Nagative interval
+    (rc, out) = updtr_start(agg, name = "neg_int",
+                            interval = -1000000, offset = UPDT_OFFSET)
+    test.assert_test(NEGATIVE_INTERVAL, rc == errno.EINVAL,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.EINVAL))
+
+    # Alphabet interval
+    (rc, out) = updtr_start(agg, name = "alpha_int",
+                            interval = "foo", offset = UPDT_OFFSET)
+    test.assert_test(ALPHABET_INTERVAL, rc == errno.EINVAL,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.EINVAL))
+
+    # Negative offset
+    (rc, out) = updtr_start(agg, name = "neg_offset",
+                            offset = -100000, interval = UPDT_INTERVAL)
+    test.assert_test(NEGATIVE_OFFSET, rc == 0,
+                     "report(rc = {}) == expect(rc = {})".format(rc, 0))
+
+    # alphanet offset
+    (rc, out) = updtr_start(agg, name = "neg_offset",
+                            offset = "foo", interval = UPDT_INTERVAL)
+    test.assert_test(ALPHABET_OFFSET, rc == errno.EINVAL,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.EINVAL))
+
+    # offset larger than interval
+    (rc, out) = updtr_start(agg, name = "offset_larger",
+                            interval = 1000000, offset = 2000000)
+    test.assert_test(OFFSET_LARGER_INTERVAL, rc == errno.EINVAL,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.EINVAL))
+
+    # Change offset to None
+    (rc, out) = updtr_start(agg, name = "offset2none",
+                            interval = UPDT_INTERVAL, offset = None)
+    (_, status) = get_updtr_status(agg, name = "offset2none")
+    status = json.loads(status)
+    exp_updtr = [create_updtr_status(name = "offset2none",
+                                    interval = UPDT_INTERVAL,
+                                    offset = 0,
+                                    state = "RUNNING",
+                                    prdcrs = [],
+                                    sync = False)
+                ]
+    test.assert_test(CHANGE_OFFSET2NONE, rc == 0 and status == exp_updtr,
+                     "report(rc = {}, status = {}) == expect(rc = {}, status = {}" \
+                     .format(rc, status, 0, exp_updtr))
+
+    # Non existing updater
+    (rc, out) = updtr_start(agg, name = "foo")
+    test.assert_test(NOT_EXISTING_UPDTR, rc == errno.ENOENT,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.ENOENT))
+
+    # valid interval
+    (rc, out) = updtr_start(agg, name = "valid_int",
+                            interval = 2000000, offset = UPDT_OFFSET)
+    (_, status) = get_updtr_status(agg, name = "valid_int")
+    status = json.loads(status)
+    exp_updtr = [create_updtr_status(name = "valid_int",
+                                    interval = 2000000,
+                                    offset = UPDT_OFFSET,
+                                    state = "RUNNING",
+                                    prdcrs = [])
+                ]
+    test.assert_test(VALID_INTERVAL, rc == 0 and status == exp_updtr,
+                     "report(rc = {}, status = {}) == expect(rc = {}, status = {}" \
+                     .format(rc, status, 0, exp_updtr))
+
+    # Valid offset
+    (rc, out) = updtr_start(agg, name = "valid_offset",
+                            offset = 200000, interval = UPDT_INTERVAL)
+    (_, status) = get_updtr_status(agg, name = "valid_offset")
+    status = json.loads(status)
+    exp_updtr = [create_updtr_status(name = "valid_offset",
+                                    interval = UPDT_INTERVAL,
+                                    offset = 200000,
+                                    state = "RUNNING",
+                                    prdcrs = [])
+                ]
+    test.assert_test(VALID_OFFSET, rc == 0 and status == exp_updtr,
+                     "report(rc = {}, status = {}) == expect(rc = {}, status = {}" \
+                     .format(rc, status, 0, exp_updtr))
+
+
+    # Not change interval and offset
+    (rc, out) = updtr_start(agg, name = "all")
+    (_, status) = get_updtr_status(agg, name = "all")
+    status = json.loads(status)
+    exp_updtr = [create_updtr_status(name = "all",
+                                    interval = UPDT_INTERVAL,
+                                    offset = UPDT_OFFSET,
+                                    state = "RUNNING",
+                                    prdcrs = [])
+                ]
+    test.assert_test(NO_INTERVAL_OFFSET, rc == 0 and status == exp_updtr,
+                     "report(rc = {}, status = {}) == expect(rc = {}, status = {}" \
+                     .format(rc, status, 0, exp_updtr))
+
+    # Running updater
+    (rc, out) = updtr_start(agg, name = "running")
+    test.assert_test(RUNNING_UPDTR, rc == errno.EBUSY,
+                     "report(rc = {}) == expect(rc = {})".format(rc, errno.EBUSY))
+
+    log.info("--- done ---")

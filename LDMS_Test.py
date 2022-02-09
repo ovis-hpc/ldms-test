@@ -2639,5 +2639,29 @@ def get_ldmsd_config(spec, ver=None):
             sio.write("\n")
     return sio.getvalue()
 
+def assertion_id_get():
+    id = 1
+    while True:
+        yield id
+        id += 1
+
+def create_updtr_status(name, interval, offset, state, prdcrs, 
+                        sync = True, mode = "Pull", auto = False):
+    return {'name' : name,
+             'interval' : str(interval),
+             'offset' : str(offset),
+             'sync' : "true" if sync else "false",
+             'mode' : mode,
+             'auto' : "true" if auto else "false",
+             'state' : state,
+             'producers' : prdcrs}
+
+def create_updtr_prdcr_status(name, host, port, xprt, state):
+    return {'name' : name,
+             'host' : host,
+             'port' : int(port),
+             'transport' : xprt,
+             'state' : state}
+
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())
