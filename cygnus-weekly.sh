@@ -273,6 +273,7 @@ set_array_hang_test
 ldmsd_autointerval_test
 ldms_record_test
 ldmsd_stream_dir_test
+store_list_record_test
 )
 
 for T in ${LIST[*]}; do
