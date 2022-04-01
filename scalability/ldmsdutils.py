@@ -588,7 +588,7 @@ load name=test_sampler
 config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64
 """ + \
 "".join("""\
-config name=test_sampler action=add_set instance={{name}}/set_{} schema=test component_id={{id}}
+config name=test_sampler action=add_set instance={{name}}/set_{} schema=test component_id={{id}} producer={{name}}
 """.format(i) for i in range(0, SETS_PER_SAMP)) \
 + \
 """
