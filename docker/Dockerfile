@@ -23,6 +23,7 @@ yum -y install which openssh-server gdb gdb-gdbserver iproute \
 	       python3-devel papi-devel libpfm-devel tmux \
 	       bzip2-devel etcd \
 	       sudo libibverbs-devel libfabric-devel \
+	       libuuid-devel \
 	       ; \
 yum -y group install "Development Tools" ; \
 yum clean all ; \
