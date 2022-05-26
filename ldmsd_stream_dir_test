@@ -1,0 +1,409 @@
+#!/use/bin/env python3
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import sys
+import TADA
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, \
+                      assertion_id_get
+from time import sleep
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Run test against ldmsd_stream's stream_dir")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+LDMSD_XPRT = "sock"
+LDMSD_PORT = "10001"
+
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s ldmsd_stream_dir cluster",
+    "type" : "NA",
+    "templates" : {
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ]
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : LDMSD_XPRT,
+            "type" : "active",
+            "interval" : 1000000,
+        }
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"samplerd-{i}",
+            "component_id" : i,
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : f"samplerd-{i}",
+                    "!extends" : "ldmsd-base"
+                }
+            ]
+        } for i in [1,2]
+    ] + [
+        {
+            "hostname" : "agg",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "prdcrs" : [
+                        {
+                            "name" : f"samplerd-{i}",
+                            "!extends" : "prdcr"
+                        } for i in [1,2]
+                    ],
+                    "config" : [
+                        "prdcr_start_regex regex=.*"
+                    ]
+                }
+            ]
+        }
+    ], # nodes
+
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN"],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "env" : { "TADA_ADDR" : args.user, "TADA_ADDR" : args.tada_addr },
+    "mounts" : args.mount + ([f"{args.src}:{args.src}:ro"] if args.src else []) +
+                [f"{args.data_root}:/db:rw"]
+}
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+def stream_publish(dcont, stream_name, stream_type, fpath):
+    cmd = f"ldmsd_stream_publish -x {LDMSD_XPRT} -p {LDMSD_PORT} -h localhost "
+    cmd += f"-s {stream_name} -t {stream_type} "
+    cmd += f"-f {fpath}"
+    rc, out = dcont.exec_run(cmd)
+    return (rc, out)
+
+def ldmsd_request_send(dcont, cmd):
+    x = "/db/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
+        .format(xprt = LDMSD_XPRT, port = LDMSD_PORT, cmd = cmd)
+    rc, out = dcont.exec_run(x)
+    return (rc, out)
+
+def stream_dir(dcont):
+    cmd = "stream_dir"
+    (rc, out) = ldmsd_request_send(dcont, cmd)
+    if rc:
+        return (rc, out.strip())
+    else:
+        return (rc, json.loads(out.strip()))
+
+def prdcr_stream_dir(dcont, regex):
+    cmd = f"prdcr_stream_dir regex={regex}"
+    (rc, out) = ldmsd_request_send(dcont, cmd)
+    if rc:
+        return (rc, out.strip())
+    else:
+        return (rc, json.loads(out.strip()))
+
+def prdcr_subscribe(dcont, regex, stream):
+    cmd = f"prdcr_subscribe regex={regex} stream={stream}"
+    (rc, out) = ldmsd_request_send(dcont, cmd)
+    return (rc, out)
+
+def info_get(count, total_bytes, first_ts = None, last_ts = None):
+    d = {"count" : count,
+         "total_bytes" : total_bytes}
+    if first_ts:
+        d['first_ts'] = first_ts
+    if last_ts:
+        d['last_ts'] = last_ts
+    if first_ts != last_ts:
+        d['bytes/sec'] = float(f"{d['total_bytes']/(last_ts - first_ts):.6f}")
+        d['msg/sec'] = float(f"{d['count']/(last_ts - first_ts):.6f}")
+    return d
+
+def stream_get(mode, info, publishers = None):
+    if publishers is not None:
+        return { "mode" : mode, "info" : info, "publishers" : publishers }
+    else:
+        return { "mode" : mode, "info" : info }
+
+def stream_first_ts_get(stream):
+    return stream['info']['first_ts']
+
+def stream_last_ts_get(stream):
+    return stream['info']['last_ts']
+
+def remove_publishers(stream):
+    if 'publishers' in stream.keys():
+        return stream.pop('publishers')
+    else:
+        return stream
+
+def verify_info(result, exp, check_rate):
+    if result['count'] != exp['count']:
+        return False
+    if result['total_bytes'] != exp['total_bytes']:
+        return False
+    if check_rate:
+        exp['bytes/sec'] = result['total_bytes']/(result['last_ts'] - result['first_ts'])
+        exp['msg/sec'] = result['count']/(result['last_ts'] - result['first_ts'])
+        if result['bytes/sec'] != exp['bytes/sec']:
+            return False
+        if result['msg/sec'] != exp['msg/sec']:
+            return False
+    return True
+
+def verify_stream(result, expected, check_rate):
+    if result.keys() != expected.keys():
+        return False
+    for n in result.keys():
+        v1 = result[n]
+        v2 = expected[n]
+        if v1.keys() != v2.keys():
+            return False
+        for k in v1.keys():
+            if k == "info":
+                if not verify_info(v1[k], v2[k], check_rate):
+                    return False
+            else:
+                if v1[k] != v2[k]:
+                    return False
+    return True
+
+id = assertion_id_get()
+
+NO_STREAM_DATA              = next(id)
+ONE_MSG                     = next(id)
+CHECK_RATE_FREQ             = next(id)
+PRDCR_STREAM_DIR_ONE_PRDCR  = next(id)
+STREAM_DIR_TWO_STREAM       = next(id)
+PRDCR_STREAM_DIR_TWO_PRDCR  = next(id)
+STREAM_DIR_AGG_ONE_PRODUCER = next(id)
+STREAM_DIR_AGG_TWO_PRODUCERS = next(id)
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_stream_dir",
+                 test_desc = "Functionality tests of ldmsd_stream's stream_dir feature",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr,
+                 )
+
+test.add_assertion(NO_STREAM_DATA,
+                   "No Stream data")
+test.add_assertion(ONE_MSG,
+                   "stream_dir -- one stream message")
+test.add_assertion(CHECK_RATE_FREQ,
+                   "stream_dir --  multiple stream messages")
+test.add_assertion(PRDCR_STREAM_DIR_ONE_PRDCR,
+                   "prdcr_stream_dir to agg -- one producer")
+test.add_assertion(STREAM_DIR_TWO_STREAM,
+                   "stream_dir -- mulitple streams")
+test.add_assertion(PRDCR_STREAM_DIR_TWO_PRDCR,
+                   "prdcr_stream_dir to agg -- two producers")
+test.add_assertion(STREAM_DIR_AGG_ONE_PRODUCER,
+                   "stream_dir to agg after one producer republished stream")
+test.add_assertion(STREAM_DIR_AGG_TWO_PRODUCERS,
+                   "stream_dir to agg after two producers republished stream")
+
+log.info("-- Get or create the cluster --")
+
+cluster = None
+test.start()
+
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+smplr1 = cluster.get_container("samplerd-1")
+smplr2 = cluster.get_container("samplerd-2")
+agg = cluster.get_container("agg")
+containers = [smplr1, smplr2, agg]
+
+FOO_DATA = "12345"
+BAR_DATA = "This is a book."
+FOO_FILE = "/db/foo.data"
+BAR_FILE = "/db/bar.data"
+FOO_SZ = len(FOO_DATA) + 1
+BAR_SZ = len(BAR_DATA) + 1
+
+for c in containers:
+    c.write_file("/db/ldmsd_request_send.py", open(SCRIPT_DIR + "/ldmsd_request_send.py").read())
+    c.exec_run("chmod 755 /db/ldmsd_request_send.py")
+
+    c.write_file(FOO_FILE, FOO_DATA)
+    c.write_file(BAR_FILE, BAR_DATA)
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("waiting ... for all LDMSDs to start")
+while True:
+    for c in containers:
+        if c.check_ldmsd() is False:
+            sleep(1)
+            break
+    break
+log.info("All LDMSDs are up.")
+
+# NO_STREAM_DATA
+(rc, result) = stream_dir(smplr1)
+test.assert_test(NO_STREAM_DATA, result == {}, f"{result} == {{}}")
+
+# ONE_MSG
+(rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
+assert(rc == 0)
+(rc, result) = stream_dir(smplr1)
+assert(rc == 0)
+exp = { "foo" : stream_get("not subscribed",
+                           info_get(1, FOO_SZ,
+                                    stream_first_ts_get(result['foo']),
+                                    stream_last_ts_get(result['foo'])),
+                           {})}
+test.assert_test(ONE_MSG, result == exp, f"{result} == {exp}")
+
+# CHECK_RATE_FREQ
+(rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
+assert(rc == 0)
+sleep(1) # Send stream data 1 second apart so that the rate can be calculated.
+(rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
+assert(rc == 0)
+(rc, result) = stream_dir(smplr1)
+exp = { "foo" : stream_get("not subscribed",
+                           info_get(3, FOO_SZ *3, 
+                                stream_first_ts_get(result['foo']),
+                                stream_last_ts_get(result['foo'])),
+                           {}) }
+samplerd1_exp = exp
+test.assert_test(CHECK_RATE_FREQ, result == exp, f"{result} == {exp}")
+
+# PRDCR_STREAM_DIR_ONE_PRDCR
+(rc, result) = prdcr_stream_dir(agg, ".*")
+assert(rc == 0)
+exp = { "foo" : { "samplerd-1" : stream_get("not subscribed",
+                                            info_get(3, FOO_SZ * 3,
+                                                     stream_first_ts_get(result['foo']['samplerd-1']),
+                                                     stream_last_ts_get(result['foo']['samplerd-1']))) }}
+test.assert_test(PRDCR_STREAM_DIR_ONE_PRDCR, result == exp, f"{result} == {exp}")
+
+# STREAM_DIR_TWO_STREAM
+(rc, out) = stream_publish(smplr2, "foo", "string", FOO_FILE)
+assert(rc == 0)
+sleep(1)
+(rc, out) = stream_publish(smplr2, "foo", "string", FOO_FILE)
+assert(rc == 0)
+(rc, out) = stream_publish(smplr2, "bar", "string", BAR_FILE)
+assert(rc == 0)
+(rc, out) = stream_publish(smplr2, "bar", "string", BAR_FILE)
+assert(rc == 0)
+sleep(1)
+(rc, out) = stream_publish(smplr2, "bar", "string", BAR_FILE)
+assert(rc == 0)
+(rc, result) = stream_dir(smplr2)
+assert(rc == 0)
+exp = {"foo" : stream_get("not subscribed",
+                          info_get(2, FOO_SZ * 2,
+                                   stream_first_ts_get(result['foo']),
+                                   stream_last_ts_get(result['foo'])),
+                          {}),
+       "bar" : stream_get("not subscribed",
+                          info_get(3, BAR_SZ * 3,
+                                   stream_first_ts_get(result['bar']),
+                                   stream_last_ts_get(result['bar'])),
+                          {})}
+samplerd2_exp = exp
+test.assert_test(STREAM_DIR_TWO_STREAM, result == exp, f"{result} == {exp}")
+
+# PRDCR_STREAM_DIR_TWO_PRDCR
+(rc, result) = prdcr_stream_dir(agg, ".*")
+assert(rc == 0)
+exp = {"foo" : { "samplerd-1" : stream_get("not subscribed", samplerd1_exp['foo']['info']),
+                 "samplerd-2" : stream_get("not subscribed", samplerd2_exp['foo']['info'])
+               },
+       "bar" : { "samplerd-2" : stream_get("not subscribed", samplerd2_exp['bar']['info'])}
+      }
+test.assert_test(PRDCR_STREAM_DIR_TWO_PRDCR, result == exp, f"{result} == {exp}")
+
+# STREAM_DIR_AGG_ONE_PRODUCER
+(rc, out) = prdcr_subscribe(agg, ".*", "foo")
+assert(rc == 0)
+(rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
+assert(rc == 0)
+sleep(1)
+(rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
+assert(rc == 0)
+(rc, result) = stream_dir(agg)
+assert(rc == 0)
+publishers = { "samplerd-1" : { "info" : info_get(2, FOO_SZ * 2,
+                                                  stream_first_ts_get(result['foo']),
+                                                  stream_last_ts_get(result['foo']))
+                              }
+             }
+exp = {"foo" : stream_get("not subscribed",
+                          info_get(2, FOO_SZ * 2,
+                                   stream_first_ts_get(result['foo']),
+                                   stream_last_ts_get(result['foo'])),
+                          publishers)}
+test.assert_test(STREAM_DIR_AGG_ONE_PRODUCER, result == exp, f"{result} == {exp}")
+
+# STREAM_DIR_AGG_TWO_PRODUCERS
+count = 3
+for i in range(count):
+    (rc, out) = stream_publish(smplr2, "foo", "string", FOO_FILE)
+    assert(rc == 0)
+(rc, result) = stream_dir(agg)
+assert(rc == 0)
+publishers['samplerd-2'] = {'info' : info_get(count, FOO_SZ * count,
+                                              stream_first_ts_get(result['foo']['publishers']['samplerd-2']),
+                                              stream_last_ts_get(result['foo']['publishers']['samplerd-2']))}
+exp = { "foo" : stream_get("not subscribed",
+                           info_get(5, FOO_SZ * 5,
+                                    stream_first_ts_get(result['foo']),
+                                    stream_last_ts_get(result['foo'])),
+                           publishers)}
+test.assert_test(STREAM_DIR_AGG_TWO_PRODUCERS, result == exp, f"{result} == {exp}")
