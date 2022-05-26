@@ -272,6 +272,7 @@ quick_set_add_rm_test
 set_array_hang_test
 ldmsd_autointerval_test
 ldms_record_test
+ldmsd_stream_dir_test
 )
 
 for T in ${LIST[*]}; do
