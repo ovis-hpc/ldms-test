@@ -54,6 +54,7 @@ set_array_hang_test
 ldmsd_autointerval_test
 ldms_record_test
 ldms_schema_digest_test
+ldmsd_decomp_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e

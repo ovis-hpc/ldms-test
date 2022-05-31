@@ -1,0 +1,858 @@
+#!/usr/bin/env python3
+
+# TODO COMPLEETE ME
+
+# REMARK This test uses `ldms-kafka` image to run the test
+#
+# NOTE Test `static` and `as_is` decomposition with  `store_sos`, `store_csv`,
+#      and `store_kafka`.
+#      - static decomposition
+#        - fill
+#        - filter
+#        - records
+#        - indices
+#      - `as_is` decomposition
+#        - indices
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "LDMSD decomposition test")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+STORE_ROOT = "/store" # path inside container (agg-2)
+
+def __strgp_cfg(plugin, decomp, decomp_json, schema, cont):
+    cfg = [
+        f"strgp_add name={plugin}_{decomp}_{schema} plugin={plugin}"
+        f" decomposition=/tada-src/conf/{decomp_json}"
+        f" container={cont} schema={schema}",
+        f"strgp_prdcr_add name={plugin}_{decomp}_{schema} regex=.*",
+        f"strgp_start name={plugin}_{decomp}_{schema}",
+    ]
+    return cfg
+
+def strgp_cfg():
+    tbl = {
+            "store_kafka": [
+                [ "as_is", "as_is_decomp.json", "test_sampler", "kafka:9092" ],
+                [ "as_is", "as_is_decomp.json", "record_sampler", "kafka:9092" ],
+                [ "static", "test_sampler_static_decomp.json",
+                    "test_sampler", "kafka:9092" ],
+                [ "static", "record_sampler_static_decomp.json",
+                    "record_sampler", "kafka:9092" ],
+            ],
+            "store_sos": [
+                [ "as_is", "as_is_decomp.json", "test_sampler", "test_sampler" ],
+                [ "as_is", "as_is_decomp.json", "record_sampler",
+                    "record_sampler" ],
+                [ "static", "test_sampler_static_decomp.json",
+                    "test_sampler", "test_sampler" ],
+                [ "static", "record_sampler_static_decomp.json",
+                    "record_sampler", "record_sampler" ],
+            ],
+            "store_csv": [
+                [ "as_is", "as_is_decomp.json", "test_sampler", "test_sampler" ],
+                [ "as_is", "as_is_decomp.json", "record_sampler",
+                    "record_sampler" ],
+                [ "static", "test_sampler_static_decomp.json",
+                    "test_sampler", "test_sampler" ],
+                [ "static", "record_sampler_static_decomp.json",
+                    "record_sampler", "record_sampler" ],
+            ],
+        }
+    ret = list()
+    for k, lst in tbl.items():
+        for p in lst:
+            ret += __strgp_cfg(k, *p)
+    return ret
+
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldmsd_decomp_test cluster".format(USER),
+    "type" : "NA",
+    "INTERVAL" : 1000000,
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : "%INTERVAL%",
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "record_sampler",
+                    "!extends" : "sampler_plugin",
+                },
+            ],
+            "config" : [
+                # additional config for test_sampler
+                "load name=test_sampler",
+                "config name=test_sampler action=add_schema schema=test_sampler"
+                "       metrics=%test_sampler_metrics%",
+                "config name=test_sampler"
+                "       action=add_set schema=test_sampler producer=%hostname%"
+                "       instance=%hostname%/test_sampler"
+                "       component_id=%component_id%",
+                "start name=test_sampler interval=%INTERVAL% offset=0",
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : "%INTERVAL%",
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "samp-1",
+            "component_id" : 1,
+            "test_sampler_metrics" :
+                "component_id:m:u64:0,job_id:d:u64:0,app_id:d:u64:0,count:d:u64:0"
+                ",u16:d:u16:0,u32:d:u32:0,u32_array:d:u32_array:0:8",
+            "!extends" : "compute-node",
+        },
+        {
+            "hostname" : "samp-2",
+            "component_id" : 2,
+            "test_sampler_metrics" :
+                "component_id:m:u64:0,job_id:d:u64:0,app_id:d:u64:0,count:d:u64:0"
+                ",u16:d:u16:0,u32_array:d:u32_array:0:8",
+            "!extends" : "compute-node",
+        }
+    ] + [
+        {
+            "hostname" : f"agg-1{i}",
+            "i" : i,
+            "!extends" : "compute-node",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "samp-%i%",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                },
+            ]
+        } for i in [1, 2]
+    ] + [
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 400000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : f"agg-1{i}",
+                            "!extends" : "prdcr",
+                        } for i in [1,2]
+                    ],
+                    "config" : [
+                        # additional config, mainly storages
+                        # load storages
+                        f"load name=store_kafka",
+                        f"config name=store_kafka",
+                        f"load name=store_sos",
+                        f"config name=store_sos path=/{STORE_ROOT}/sos",
+                        f"load name=store_csv",
+                        f"config name=store_csv path=/{STORE_ROOT}/csv"
+                        f" buffer=0",
+                    ] + strgp_cfg() + [
+                        # updtr
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=%INTERVAL% offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : "kafka",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ],
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ldms-kafka",
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR",
+        "KAFKA_OPTS": "-Djava.net.preferIPv4Stack=True",
+        "MALLOC_PERTURB_": "0x11",
+        "MALLOC_CHECK_": "1",
+    },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{DB}/tmp:/tmp:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( [f"{SRC}:{SRC}:ro"] if SRC else [] ),
+}
+
+#### test definition ####
+
+ROW_SCHEMAS = [ 'test_sampler_8d2b8bd',
+                'test_sampler_95772b6',
+                'record_sampler_e1f021f',
+                'fill', 'filter', 'record' ]
+DECOMPS = [ 'as_is' ]*3 + [ 'static' ]*3
+STORES = [ 'sos', 'csv', 'kafka' ]
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_decomp_test",
+                 test_desc = "Decomposition test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+# Test assertion
+i = 1
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} schema check")
+        i += 1
+
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} data check")
+        i += 1
+
+#### Helper Functions ####
+def ldms_ls(host, port = LDMSD_PORT, l = False):
+    try:
+        args = "-l -v" if l else ""
+        rc, out = headnode.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     -h {host} 2>/dev/null'" \
+                                    .format(host=host, port=port, args=args))
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        return None
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+os.makedirs(f"{DB}/tmp", mode=0o755, exist_ok=True)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg11 = cluster.get_container("agg-11")
+agg12 = cluster.get_container("agg-12")
+samp1 = cluster.get_container("samp-1")
+samp2 = cluster.get_container("samp-2")
+kafka = cluster.get_container("kafka")
+
+
+agg2.exec_run("mkdir -p /store/{sos,csv}")
+
+log.info("-- Start daemons --")
+
+# get kafka directory
+rc, out = kafka.exec_run("ls -d /opt/kafka*/")
+assert(rc == 0)
+out = out.splitlines()
+assert(len(out) == 1)
+KFK_DIR = out[0]
+KFK_LOG_DIR = "/db/kafka_logs"
+rc, out = kafka.exec_run(f"mkdir {KFK_LOG_DIR}")
+
+# start zookeeper
+ZOO_BIN = f"{KFK_DIR}/bin/zookeeper-server-start.sh"
+ZOO_CONF = f"{KFK_DIR}/config/zookeeper.properties"
+zoo_cmd = f"LOG_DIR={KFK_LOG_DIR} {ZOO_BIN} -daemon {ZOO_CONF}"
+rc, out = kafka.exec_run(zoo_cmd)
+assert(rc == 0)
+
+rc, out = kafka.exec_run("/tada-src/python/zoo_check.py >/db/zoo_check.log 2>&1")
+assert(rc == 0)
+
+# start kafka
+KFK_BIN = f"{KFK_DIR}/bin/kafka-server-start.sh"
+KFK_CONF = f"{KFK_DIR}/config/server.properties"
+kfk_cmd = f"LOG_DIR={KFK_LOG_DIR} {KFK_BIN} -daemon {KFK_CONF}"
+rc, out = kafka.exec_run(kfk_cmd)
+assert(rc == 0)
+
+# start daemons defined in the spec
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(5)
+
+def kafka_topic_verify(topics):
+    topics = set(topics)
+    S = set(["fill", "filter", "record"])
+    if not S <= topics:
+        return False
+    topics -= S
+    R = re.compile(r"^(record|test)_sampler_[0-9a-f]+$")
+    r = 0
+    t = 0
+    # one record_sampler, two test_sampler
+    for topic in topics:
+        m = R.match(topic)
+        if not m:
+            return False
+        (k,) = m.groups()
+        if k == "record":
+            r += 1
+        else:
+            t += 1
+    if r != 1 or t != 2:
+        return False
+    return True
+
+retry = 5
+while retry:
+    time.sleep(1)
+    rc, out = kafka.exec_run(f"/tada-src/scripts/kafka-topic --list")
+    if rc == 0:
+        topics = out.splitlines()
+        if kafka_topic_verify(topics):
+            break;
+    retry -= 1
+else:
+    raise RuntimeError(f"kafka-topic verification error, rc: {rc}, out: {out}")
+for topic in topics:
+    rc, out = kafka.exec_run(f"/bin/bash -c '/tada-src/scripts/kafka-console-consumer --topic {topic} > /db/kafka-{topic}.dump & '")
+
+# Let it run for a while
+time.sleep(10)
+
+rc, out = agg2.exec_run("/tada-src/python/as_is_schema.py")
+assert(rc == 0)
+schemas = out.splitlines()
+# Expecting "test_sampler_HASH1", "test_sampler_HASH2", "record_sampler_HASH3"
+test_sampler_count = 0
+record_sampler_count = 0
+for s in schemas:
+    if s.startswith("test_sampler"):
+        test_sampler_count += 1
+    elif s.startswith("record_sampler"):
+        record_sampler_count += 1
+    else:
+        raise RuntimeError(f"Unexpected schema: {s}")
+assert( test_sampler_count == 2 )
+assert( record_sampler_count == 1 )
+schemas += [ "fill", "filter", "record" ] # from static decomp
+
+# kill ldmsd on agg-2 to save space consumed by the growing stores
+agg2.exec_run("pkill ldmsd")
+
+agg2.exec_run("mkdir -p /db/rows")
+
+def decomp_out_parse(out):
+    lines = out.splitlines()
+    objs = [ json.loads(l) for l in lines ]
+    return { "schema": objs[0], "rows": objs[1:] }
+
+# convert store data into rows
+data = { "kafka": dict(), "sos": dict(), "csv": dict() }
+for sch in schemas:
+    if sch.startswith("record"):
+        cont = "record_sampler"
+    else:
+        cont = "test_sampler"
+    # sos
+    rc, out = agg2.exec_run(
+                f"/tada-src/python/decomp_out.py --store sos"
+                f" --path /store/sos/{cont} --schema {sch}"
+            )
+    assert( rc == 0 )
+    data["sos"][sch] = decomp_out_parse(out)
+    # csv
+    rc, out = agg2.exec_run(
+                f"/tada-src/python/decomp_out.py --store csv"
+                f" --path /store/csv/{cont}/{sch}"
+            )
+    assert( rc == 0 )
+    data["csv"][sch] = decomp_out_parse(out)
+    # kafka
+    rc, out = kafka.exec_run(
+                f"/tada-src/python/decomp_out.py --store kafka"
+                f" --path /db/kafka-{sch}.dump"
+            )
+    assert( rc == 0 )
+    data["kafka"][sch] = decomp_out_parse(out)
+
+expected_schemas = {
+    "test_sampler_8d2b8bd": {
+        "cols": ["timestamp", "component_id", "job_id", "app_id", "count",
+            "u16", "u32", "u32_array"],
+        "indices": [
+            {"name": "timestamp", "cols": ["timestamp"]},
+            {"name": "time_comp", "cols": ["timestamp", "component_id"]}
+        ]
+    },
+    "test_sampler_95772b6": {
+        "cols": ["timestamp", "component_id", "job_id", "app_id", "count",
+            "u16", "u32_array"],
+        "indices": [
+            {"name": "timestamp", "cols": ["timestamp"]},
+            {"name": "time_comp", "cols": ["timestamp", "component_id"]}
+        ]
+    },
+    "record_sampler_e1f021f": {
+        "cols": ["timestamp", "component_id", "job_id",
+            "app_id", "round", "device_list.LDMS_V_CHAR",
+            "device_list.LDMS_V_U8", "device_list.LDMS_V_S8",
+            "device_list.LDMS_V_U16", "device_list.LDMS_V_S16",
+            "device_list.LDMS_V_U32", "device_list.LDMS_V_S32",
+            "device_list.LDMS_V_U64", "device_list.LDMS_V_S64",
+            "device_list.LDMS_V_F32", "device_list.LDMS_V_D64",
+            "device_list.LDMS_V_CHAR_ARRAY", "device_list.LDMS_V_U8_ARRAY",
+            "device_list.LDMS_V_S8_ARRAY", "device_list.LDMS_V_U16_ARRAY",
+            "device_list.LDMS_V_S16_ARRAY", "device_list.LDMS_V_U32_ARRAY",
+            "device_list.LDMS_V_S32_ARRAY", "device_list.LDMS_V_U64_ARRAY",
+            "device_list.LDMS_V_S64_ARRAY", "device_list.LDMS_V_F32_ARRAY",
+            "device_list.LDMS_V_D64_ARRAY", "device_array.LDMS_V_CHAR",
+            "device_array.LDMS_V_U8", "device_array.LDMS_V_S8",
+            "device_array.LDMS_V_U16", "device_array.LDMS_V_S16",
+            "device_array.LDMS_V_U32", "device_array.LDMS_V_S32",
+            "device_array.LDMS_V_U64", "device_array.LDMS_V_S64",
+            "device_array.LDMS_V_F32", "device_array.LDMS_V_D64",
+            "device_array.LDMS_V_CHAR_ARRAY", "device_array.LDMS_V_U8_ARRAY",
+            "device_array.LDMS_V_S8_ARRAY", "device_array.LDMS_V_U16_ARRAY",
+            "device_array.LDMS_V_S16_ARRAY", "device_array.LDMS_V_U32_ARRAY",
+            "device_array.LDMS_V_S32_ARRAY", "device_array.LDMS_V_U64_ARRAY",
+            "device_array.LDMS_V_S64_ARRAY", "device_array.LDMS_V_F32_ARRAY",
+            "device_array.LDMS_V_D64_ARRAY"],
+        "indices": [
+            {"name": "timestamp", "cols": ["timestamp"]},
+            {"name": "time_comp", "cols": ["timestamp", "component_id"]}
+        ]
+    },
+    "fill": {
+        "cols": ["ts", "comp_id", "ushort", "uint", "ushort_array", "uint_array"],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ],
+        "fills": [
+            None, None, 16, 32,
+            [16,16,16,16,16,16,16,16],
+            [32,32,32,32,32,32,32,32]
+        ]
+    },
+    "filter": {
+        "cols": ["ts", "prdcr", "inst", "count", "comp_id", "ushort", "uint_array"],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ]
+    },
+    "record": {
+        "cols": ["ts", "comp_id", "round", "dev.LDMS_V_U64", "dev.LDMS_V_U64_ARRAY"],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ]
+    }
+}
+
+COL_RE = re.compile(r'([^.]+)(?:\.(.+))?')
+
+def row_to_obj(cols, row):
+    # convert a row into dict object
+    obj = dict()
+    for c, v in zip(cols, row):
+        a, b = COL_RE.match(c).groups()
+        if b is not None:
+            # record
+            o = obj.setdefault(a, dict())
+            o[b] = v
+        else:
+            obj[a] = v
+    # put record into a list
+    ret = { k: [v] if type(v) is dict else v for k,v in obj.items() }
+    return ret
+
+def data_to_snaps(_data):
+    # converts rows into set snapshots
+    cols = _data["schema"]["cols"]
+    rows = _data["rows"]
+    snaps = dict() # key := (ts, comp_id) or (timestamp, component_id)
+    ts_col = -1
+    comp_col = -1
+    i = 0
+    for c in cols:
+        if c in [ "Time", "ts", "timestamp" ]:
+            ts_col = i
+        if c in [ "component_id", "comp_id" ]:
+            comp_col = i
+        i += 1
+    assert( ts_col   > -1 )
+    assert( comp_col > -1 )
+    for row in rows:
+        key = ( row[ts_col], row[comp_col] )
+        obj = row_to_obj(cols, row)
+        o = snaps.get(key)
+        if o is None:
+            snaps[key] = obj
+        else:
+            assert( set(o.keys()) == set(obj.keys()) )
+            for k in o.keys():
+                v0 = o[k]
+                v1 = obj[k]
+                if type(v0) == list:
+                    assert(type(v1) == list)
+                    if v0[-1] != v1[0]:
+                        v0 += v1
+    return snaps
+
+def test_sampler_snap_check(snaps, assert_id, exp_comp_ids):
+    comp_ids = set()
+    for s in snaps.values():
+        comp_id = s.get("component_id", s.get("comp_id"))
+        if comp_id not in exp_comp_ids:
+            test.assert_test(assert_id, False, f"Unexpected comp_id: {comp_id}")
+            return False
+        comp_ids.add( comp_id )
+        a = s["count"]
+        arr = [ a ] * 8
+        for k, v in s.items():
+            if k in [ "Time", "timestamp", "component_id", "job_id", "ts", "comp_id" ]:
+                continue # skip
+            if k == "inst":
+                exp = f"samp-{comp_id}/test_sampler"
+                if v != exp:
+                    test.assert_test(assert_id, False, f"Expecting {exp}, but got {v}")
+                    return False
+                continue
+            if k == "prdcr":
+                exp = f"samp-{comp_id}"
+                if v != exp:
+                    test.assert_test(assert_id, False, f"Expecting {exp}, but got {v}")
+                    return False
+                continue
+            if type(v) == list:
+                if v != arr:
+                    test.assert_test(assert_id, False, f"Expecting {arr}, but got {v}")
+                    return False
+            else:
+                if v != a:
+                    test.assert_test(assert_id, False, f"Expecting {a}, but got {v}")
+                    return False
+    if comp_ids != exp_comp_ids:
+        test.assert_test(assert_id, False,
+                f"Expecting {exp_comp_ids} component IDs, but got {comp_ids}")
+        return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+def test_sampler_8d2b8bd_snap_check(snaps, assert_id):
+    return test_sampler_snap_check(snaps, assert_id, set([1]))
+
+def test_sampler_95772b6_snap_check(snaps, assert_id):
+    return test_sampler_snap_check(snaps, assert_id, set([2]))
+
+def rec_gen(i):
+    COUNT = 8
+    rec = dict()
+    rec['LDMS_V_CHAR'] = 'a' if i % 2 == 0 else 'b'
+    rec['LDMS_V_U8'] =   i % 256
+    rec['LDMS_V_S8'] = -(i % 128)
+    rec['LDMS_V_U16'] =   i + 1000
+    rec['LDMS_V_S16'] = -(i + 1000)
+    rec['LDMS_V_U32'] =   i + 100000
+    rec['LDMS_V_S32'] = -(i + 100000)
+    rec['LDMS_V_U64'] =   i + 200000
+    rec['LDMS_V_S64'] = -(i + 200000)
+    rec['LDMS_V_F32'] = float(i)
+    rec['LDMS_V_D64'] = float(i)
+    rec['LDMS_V_CHAR_ARRAY'] = f"a_{i}"
+    rec['LDMS_V_U8_ARRAY'] = [  (i + j)%256 for j in range(0, COUNT) ]
+    rec['LDMS_V_S8_ARRAY'] = [ -((i + j)%128) for j in range(0, COUNT) ]
+    rec['LDMS_V_U16_ARRAY'] = [  (i + j + 1000) for j in range(0, COUNT) ]
+    rec['LDMS_V_S16_ARRAY'] = [ -(i + j + 1000) for j in range(0, COUNT) ]
+    rec['LDMS_V_U32_ARRAY'] = [  (i + j + 100000) for j in range(0, COUNT) ]
+    rec['LDMS_V_S32_ARRAY'] = [ -(i + j + 100000) for j in range(0, COUNT) ]
+    rec['LDMS_V_U64_ARRAY'] = [  (i + j + 500000) for j in range(0, COUNT) ]
+    rec['LDMS_V_S64_ARRAY'] = [ -(i + j + 500000) for j in range(0, COUNT) ]
+    rec['LDMS_V_F32_ARRAY'] = [  (i + j + 0.5 ) for j in range(0, COUNT) ]
+    rec['LDMS_V_D64_ARRAY'] = [  (i + j + 0.75) for j in range(0, COUNT) ]
+    return rec
+
+def rec_static_gen(i):
+    COUNT = 8
+    rec = dict()
+    rec['LDMS_V_U64'] =   i + 200000
+    rec['LDMS_V_U64_ARRAY'] = [  (i + j + 500000) for j in range(0, COUNT) ]
+    return rec
+
+
+def gen_record_sampler_e1f021f(ts, comp_id, _round):
+    N = 3
+    obj = dict()
+    obj["timestamp"] = ts
+    obj["component_id"] = comp_id
+    obj["job_id"] = 0
+    obj["app_id"] = 0
+    obj["round"] = _round
+    obj["device_list"] = [ rec_gen(_round + i) for i in range(0, N) ]
+    obj["device_array"] = [ rec_gen(_round + i + N) for i in range(0, N) ]
+    return obj
+
+def gen_record_static(ts, comp_id, _round):
+    N = 3
+    obj = dict()
+    obj["ts"] = ts
+    obj["comp_id"] = comp_id
+    obj["round"] = _round
+    obj["dev"] = [ rec_static_gen(_round + i) for i in range(0, N) ]
+    return obj
+
+def record_sampler_e1f021f_snap_check(snaps, assert_id):
+    for s in snaps.values():
+        ts = s.pop("timestamp", s.pop("Time", None))
+        s["timestamp"] = ts
+        comp_id = s.get("component_id")
+        rnd = s.get("round")
+        smp = gen_record_sampler_e1f021f(ts, comp_id, rnd)
+        if smp.keys() != s.keys():
+            test.assert_test(assert_id, False, f"Expecting keys {smp.keys()} but got {s.keys()}")
+            return False
+        for k in smp:
+            v0 = smp[k]
+            v1 = s[k]
+            if type(v1) == list and type(v1[0]) == dict:
+                # list of records
+                for v in v1:
+                    a = v["LDMS_V_S8_ARRAY"]
+                    v["LDMS_V_S8_ARRAY"] = [ x if x < 128 else x - 256 for x in a ]
+                    a = v["LDMS_V_S16"]
+                    v["LDMS_V_S16"] = a if a < 32768 else a - 65536
+                    a = v["LDMS_V_CHAR"]
+                    if type(a) == int:
+                        v["LDMS_V_CHAR"] = bytes([a]).decode()
+            if v0 != v1:
+                test.assert_test(assert_id, False, f"Expecting {v0} but got {v1}")
+                return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+FILL = {
+        "ushort": 16,
+        "uint": 32,
+        "ushort_array": [16,16,16,16,16,16,16,16],
+        "uint_array": [32,32,32,32,32,32,32,32],
+        }
+def fill_snap_check(snaps, assert_id):
+    comp_ids = set()
+    for s in snaps.values():
+        comp_id = s["comp_id"]
+        if comp_id not in [1, 2]:
+            test.assert_test(assert_id, False, f"Unexpected comp_id: {comp_id}")
+            return False
+        comp_ids.add( comp_id )
+        a = s["ushort"]
+        arr = [ a ] * 8
+        for k, v in s.items():
+            if k in ["comp_id", "ts", "Time"]:
+                continue
+            f = FILL[k]
+            if type(f) == list:
+                if v != arr and v != f:
+                    test.assert_test(assert_id, False, f"Expecting {arr} or {f}, but got {v}")
+                    return False
+            else:
+                if v != a and v != f:
+                    test.assert_test(assert_id, False, f"Expecting {a} or {f}, but got {v}")
+                    return False
+    if comp_ids != set( [1, 2] ):
+        test.assert_test(assert_id, False,
+                f"Expecting {1, 2} component IDs, but got {comp_ids}")
+        return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+def filter_snap_check(snaps, assert_id):
+    return test_sampler_snap_check(snaps, assert_id, set([1, 2]))
+
+def record_snap_check(snaps, assert_id):
+    for s in snaps.values():
+        ts = s.pop("ts", s.pop("Time", None))
+        s["ts"] = ts
+        comp_id = s.get("comp_id")
+        rnd = s.get("round")
+        smp = gen_record_static(ts, comp_id, rnd)
+        if smp.keys() != s.keys():
+            test.assert_test(assert_id, False, f"Expecting keys {smp.keys()} but got {s.keys()}")
+            return False
+        for k in smp:
+            v0 = smp[k]
+            v1 = s[k]
+            if v0 != v1:
+                test.assert_test(assert_id, False, f"Expecting {v0} but got {v1}")
+                return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+row_check_tbl = {
+    "test_sampler_8d2b8bd":   test_sampler_8d2b8bd_snap_check,
+    "test_sampler_95772b6":   test_sampler_95772b6_snap_check,
+    "record_sampler_e1f021f": record_sampler_e1f021f_snap_check,
+    "fill":                   fill_snap_check,
+    "filter":                 filter_snap_check,
+    "record":                 record_snap_check,
+}
+
+i = 1
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        # test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} schema check")
+        data_sch = data[st][rs]["schema"]
+        exp_sch = expected_schemas[rs]
+        while True: # will break
+            exp_cols = list(exp_sch["cols"])
+            data_cols = list(data_sch["cols"])
+            if data_cols[0] not in ["Time", "ts", "timestamp"]:
+                test.assert_test(i, False, f"Missing leading timesrtamp column")
+                break
+            exp_cols = exp_cols[1:]
+            data_cols = data_cols[1:]
+            if data_cols != exp_cols:
+                test.assert_test(i, False, f"columns mismatch")
+                break
+            if st == "sos" and data_sch["indices"] != exp_sch["indices"]:
+                test.assert_test(i, False, f"indices mismatch")
+                break
+            test.assert_test(i, True, f"OK")
+            break
+        i += 1
+
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        # test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} data check")
+        check_fn = row_check_tbl[rs]
+        rows = data[st][rs]["rows"]
+        snap = data_to_snaps(data[st][rs])
+        check_fn(snap, i)
+        i += 1
+
+test.finish()
