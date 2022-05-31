@@ -64,6 +64,7 @@ yes | pip3 install numpy ; \
 yes | pip3 install etcd3 ; \
 yes | pip3 install PyYAML ; \
 yes | pip3 install ipython ; \
+yes | pip3 install pandas ; \
 '
 
 RUN /bin/echo >/etc/tmux.conf -e "\
