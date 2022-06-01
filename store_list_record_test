@@ -118,7 +118,7 @@ spec = {
                             schema = s, types = s) for s in VALUE_TYPES
                     ] + ["config name=test_sampler action=add_lists max_len=4 " \
                             "min_len=1 schema={schema} value_types={types}".format(
-                            schema = schema_from_types(s), types = ",".join(s)) 
+                            schema = schema_from_types(s), types = ",".join(s))
                             for s in COMBINATION
                     ] + ["config name=test_sampler action=add_set producer=sampler " \
                             "schema={0} instance=sampler/{0}".format(s) for s in VALUE_TYPES
@@ -132,7 +132,7 @@ spec = {
             ]
         },
         {
-            "hostname" : "agg_sos",
+            "hostname" : "agg-sos",
             "daemons" : [
                 {
                     "name" : "sshd",
@@ -174,7 +174,7 @@ spec = {
             ]
         },
         {
-            "hostname" : "agg_csv",
+            "hostname" : "agg-csv",
             "daemons" : [
                 {
                     "name" : "sshd",
@@ -216,7 +216,7 @@ spec = {
             },
     "mounts" : args.mount + [
                 "{}:/db:rw".format(args.data_root)
-                ] + (["{}:{}:ro".format(args.src)] if args.src else [])
+                ] + (["{0}:{0}:ro".format(args.src)] if args.src else [])
 }
 
 def __char(round):
@@ -260,7 +260,7 @@ PRIMITIVE_V_TYPES = {
 @atexit.register
 def at_exit():
     rc = test.finish()
-    if (not args.debug) and (cluster is not None):
+    if cluster is not None:
         cluster.remove()
     os._exit(rc)
 
@@ -400,8 +400,8 @@ test.start()
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
 smplr = cluster.get_container("sampler")
-agg_sos = cluster.get_container("agg_sos")
-agg_csv = cluster.get_container("agg_csv")
+agg_sos = cluster.get_container("agg-sos")
+agg_csv = cluster.get_container("agg-csv")
 
 agg_sos.exec_run("mkdir -p {}".format(STORE_SOS_PATH))
 agg_csv.exec_run("mkdir -p {}".format(STORE_CSV_PATH))
@@ -503,4 +503,3 @@ for s in VT:
     if good is False:
         break
 test.assert_test(CSV_RESTART_VERIFY_DATA, good, reason)
-
