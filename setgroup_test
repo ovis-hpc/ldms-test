@@ -124,9 +124,12 @@ spec = {
                 # v4 config
                 "load name=test_sampler",
                 "config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_0 schema=test component_id=1",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_1 schema=test component_id=1",
-                "config name=test_sampler action=add_set instance=${HOSTNAME}/test_2 schema=test component_id=1",
+                "config name=test_sampler action=add_set producer=${HOSTNAME} "
+                "       instance=${HOSTNAME}/test_0 schema=test component_id=1",
+                "config name=test_sampler action=add_set producer=${HOSTNAME} "
+                "       instance=${HOSTNAME}/test_1 schema=test component_id=1",
+                "config name=test_sampler action=add_set producer=${HOSTNAME} "
+                "       instance=${HOSTNAME}/test_2 schema=test component_id=1",
                 "start name=test_sampler interval=1000000 offset=0",
                 "setgroup_add name=${HOSTNAME}/grp interval=1000000 offset=0",
                 "setgroup_ins name=${HOSTNAME}/grp instance=${HOSTNAME}/test_1",
