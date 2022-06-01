@@ -1,0 +1,7 @@
+{
+  "type": "as_is",
+  "indices": [
+    { "name": "time", "cols": [ "timestamp" ] },
+    { "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+  ]
+}

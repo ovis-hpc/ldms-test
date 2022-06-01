@@ -1,0 +1,21 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "record",
+      "cols": [
+        { "src":"timestamp", "dst":"ts","type":"ts" },
+        { "src":"component_id", "dst":"comp_id","type":"u64" },
+        { "src":"round", "dst":"round","type":"u32" },
+        { "src":"device_list", "rec_member": "LDMS_V_U64",
+          "dst":"dev.LDMS_V_U64","type":"u64" },
+        { "src":"device_list", "rec_member": "LDMS_V_U64_ARRAY",
+          "dst":"dev.LDMS_V_U64_ARRAY","type":"u64_array", "array_len": 8 }
+      ],
+      "indices": [
+        { "name": "time", "cols": [ "ts" ] },
+        { "name": "time_comp", "cols": [ "ts", "comp_id" ] }
+      ]
+    }
+  ]
+}

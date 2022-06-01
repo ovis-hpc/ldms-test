@@ -1,0 +1,39 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "filter",
+      "cols": [
+        { "src":"timestamp", "dst":"ts","type":"ts" },
+        { "src":"producer", "dst":"prdcr","type":"char_array", "array_len":64 },
+        { "src":"instance", "dst":"inst","type":"char_array", "array_len":64 },
+        { "src":"count", "dst":"count","type":"u64" },
+        { "src":"component_id", "dst":"comp_id","type":"u64" },
+        { "src":"u16", "dst":"ushort","type":"u16" },
+        { "src":"u32_array", "dst":"uint_array","type":"u32_array",
+          "array_len":8 }
+      ],
+      "indices": [
+        { "name": "time", "cols": [ "ts" ] },
+        { "name": "time_comp", "cols": [ "ts", "comp_id" ] }
+      ]
+    },
+    {
+      "schema": "fill",
+      "cols": [
+        { "src":"timestamp", "dst":"ts","type":"ts" },
+        { "src":"component_id", "dst":"comp_id","type":"u64" },
+        { "src":"u16", "dst":"ushort","type":"u16", "fill":16 },
+        { "src":"u32", "dst":"uint","type":"u32", "fill":32 },
+        { "src":"u16_array", "dst":"ushort_array","type":"u16_array",
+          "array_len":8, "fill":[16,16,16,16,16,16,16,16] },
+        { "src":"u32_array", "dst":"uint_array","type":"u32_array",
+          "array_len":8, "fill":[32,32,32,32,32,32,32,32] }
+      ],
+      "indices": [
+        { "name": "time", "cols": [ "ts" ] },
+        { "name": "time_comp", "cols": [ "ts", "comp_id" ] }
+      ]
+    }
+  ]
+}

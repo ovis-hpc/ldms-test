@@ -1,0 +1,7 @@
+#!/bin/bash
+#
+# kafka-topic --list
+
+KPREFIX=( /opt/kafka*/ )
+
+${KPREFIX}/bin/kafka-topics.sh --zookeeper kafka:2181 "$@"
