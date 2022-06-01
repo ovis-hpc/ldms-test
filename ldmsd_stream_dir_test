@@ -1,4 +1,4 @@
-#!/use/bin/env python3
+#!/usr/bin/env python3
 
 import argparse
 import atexit
@@ -315,7 +315,7 @@ sleep(1) # Send stream data 1 second apart so that the rate can be calculated.
 assert(rc == 0)
 (rc, result) = stream_dir(smplr1)
 exp = { "foo" : stream_get("not subscribed",
-                           info_get(3, FOO_SZ *3, 
+                           info_get(3, FOO_SZ *3,
                                 stream_first_ts_get(result['foo']),
                                 stream_last_ts_get(result['foo'])),
                            {}) }
