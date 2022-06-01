@@ -353,6 +353,14 @@ def at_exit():
         cluster.remove()
     os._exit(rc)
 
+def cleardir(path):
+    for dirpath, dirnames, filenames in os.walk(path, topdown=False):
+        for f in filenames:
+            os.unlink(f"{dirpath}/{f}")
+        if dirpath != path:
+            os.rmdir(dirpath)
+
+cleardir(f"{DB}")
 os.makedirs(f"{DB}/tmp", mode=0o755, exist_ok=True)
 
 log.info("-- Get or create the cluster --")
