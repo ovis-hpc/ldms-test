@@ -2655,7 +2655,7 @@ def assertion_id_get():
         yield id
         id += 1
 
-def create_updtr_status(name, interval, offset, state, prdcrs, 
+def create_updtr_status(name, interval, offset, state, prdcrs,
                         sync = True, mode = "Pull", auto = False):
     return {'name' : name,
              'interval' : str(interval),
