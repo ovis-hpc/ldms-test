@@ -1,0 +1,533 @@
+#!/usr/bin/env python3
+
+# SYNOPSIS
+# --------
+# Test maestro on RAFT: 8 samplers, 2 L1, 1 L2, 3 etcds, and 3 maestros.
+#
+# TEST SCENARIOS
+# --------------
+# - start all ldmsds
+# - start all etcd
+# - add config to etcd with maestro_ctrl
+# - start maestros
+#   - verify 3 maestros (1 leader, 2 followers)
+# - verify all ldmsds
+# - verify storage
+# - kill L2 aggregator (with store)
+# - kill maestro leader
+# - verify that the survived maestros elect a new leader
+# - start L2 aggregator
+# - verify all ldmsds
+# - verify storage
+# - start the dead maestro
+# - verify that the restarted maestro becomes a follower
+
+import os
+import re
+import sys
+import time
+import json
+import TADA
+import atexit
+import logging
+import argparse
+import tempfile
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args
+
+
+if __name__ != "__main__":
+    raise ImportError("This is not a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test maestros on RAFT"
+ap = argparse.ArgumentParser(description = "Test maestro on RAFT")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### -------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+NUM_COMPUTE = 8
+STORE_ROOT = "/store" # path inside container (aggs)
+CFG_PREFIX = "headnode"
+LDMS_PORT = 411
+STORE_PATH = "/db/containers"
+LDMS_CFG_FILE = "/db/ldms_cfg.yaml"
+ETCD_FILE = "/db/etcd.yaml"
+
+
+# Edit etcd to run
+ETCD_YAML = f"""\
+cluster: {CFG_PREFIX}
+members:
+  - host: cfg1
+    port: 2379
+  - host: cfg2
+    port: 2379
+  - host: cfg3
+    port: 2379
+maestro_members:
+  - host: cfg1
+    port: 4411
+  - host: cfg2
+    port: 4411
+  - host: cfg3
+    port: 4411
+"""
+MAESTRO_CFG = f"""\
+daemons:
+  - names : &sampler-daemons "samp[1-8]"
+    hosts : &sampler-hosts "node[1-8]"
+    endpoints :
+      - names : &sampler-endpoints "samp[1-8]-ep"
+        ports : "[{LDMS_PORT}]"
+        xprt : sock
+        maestro_comm : True
+        auth :
+          name : none
+
+  - names : &l1-daemons "agg[1-3]"
+    hosts : &l1-hosts "agg[1-3]"
+    endpoints :
+      - names: &l1-endpoints "agg[1-3]-ep"
+        ports : "[{LDMS_PORT}]"
+        xprt : sock
+        maestro_comm : True
+        auth :
+          name : none
+
+  - names : &l2-daemons "agg[4]"
+    hosts : &l2-hosts "agg4"
+    endpoints :
+      - names: &l2-endpoints "agg[4]-ep"
+        ports: "{LDMS_PORT}"
+        xprt : sock
+        maestro_comm : True
+        auth :
+          name : none
+
+aggregators:
+  - daemons   : *l1-daemons
+    peers     :
+      - daemons   : *sampler-daemons
+        endpoints : *sampler-endpoints
+        reconnect : 1s
+        type      : active
+        updaters  : &updtr
+          - mode     : pull
+            interval : "1.0s"
+            offset   : "0ms"
+            sets     :
+              - regex : .*
+                field : inst
+  - daemons : *l2-daemons
+    peers:
+      - daemons : *l1-daemons
+        endpoints : *l1-endpoints
+        reconnect : 1s
+        type      : active
+        updaters  : *updtr
+
+samplers:
+  - daemons : *sampler-daemons
+    plugins : &sampler-plugins
+      - name        : meminfo # Variables can be specific to plugin
+        interval    : "1s" # Used when starting the sampler plugin
+        offset      : "0s"
+        config : &simple_samp_config
+            component_id : "${{COMPID}}"
+            perm : "0777"
+
+stores:
+  - name      : sos-meminfo
+    daemons   : *l2-daemons
+    container : ldms_data
+    schema    : meminfo
+    flush     : 10s
+    plugin :
+      name   : store_sos
+      config :
+        path : {STORE_PATH}
+"""
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldms-daemon" : {
+            "name" : "ldmsd",
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMS_PORT, "xprt" : "sock" }
+            ],
+            "config" : [
+                "env COMPID=%component_id%",
+            ],
+        },
+        "ldms-node" : { # generic ldms node
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "ldmsd",
+                    "type" : "ldmsd",
+                    "!extends" : "ldms-daemon",
+                }
+            ]
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"node{i}",
+            "component_id" : i,
+            "!extends" : "ldms-node",
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
+        {
+            "hostname" : f"agg{i}",
+            "component_id" : 0,
+            "!extends" : "ldms-node",
+        } for i in [1, 2, 3, 4]
+    ] + [
+        {
+            "hostname" : f"cfg{i}",
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "etcd", "type" : "etcd" },
+            ],
+        } for i in [1, 2, 3]
+    ] + [
+        {
+            "hostname" : "headnode",
+            "component_id" : 0,
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+            ],
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": "ovis-centos-build",
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR",
+         },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "maestro_raft_test",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "Statuses of maestros, 1 leader + 2 followers")
+test.add_assertion(2, "All ldmsds are up and configured")
+test.add_assertion(3, "Data are being stored")
+test.add_assertion(4, "New leader elected")
+test.add_assertion(5, "Restarted ldmsd is configured")
+test.add_assertion(6, "New data are presented in the store")
+test.add_assertion(7, "The restarted maestro becomes a follower")
+
+#### Helper Functions ####
+def ldms_ls(host, _from = None):
+    global headnode
+    if not _from:
+        _from = headnode
+    cmd = f"/tada-src/python/ldms_ls.py -h {host} -p {LDMS_PORT} -x sock -l"
+    rc, out = _from.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"ldms_ls error {rc}, out: {out}")
+    obj = json.loads(out)
+    return obj
+
+def get_maestro_state(cont):
+    rc, out = cont.exec_run(f"/bin/bash -c 'pgrep -af \"python3.*maestro\"'")
+    if rc:
+        return "NOT_RUNNING"
+    out = cont.read_file("/var/log/maestro.log")
+    state = "FOLLOWER"
+    reg = re.compile(r".* state changed .* => (\w+)")
+    for l in out.splitlines():
+        m = reg.match(l)
+        if m:
+            state = m.group(1)
+    return state
+
+def get_maestro_state_tbl():
+    """Returns { "STATE": [ CONTAINERS ] }"""
+    global maestro_containers
+    tbl = dict()
+    for cont in maestro_containers:
+        st = get_maestro_state(cont)
+        ent = tbl.setdefault(st, list())
+        ent.append(cont)
+    return tbl
+
+def start_maestro(cont):
+    """Start a maestro daemon on the container `cont`"""
+    maestro_cmd = f"bash -c 'maestro --cluster {ETCD_FILE} --prefix {CFG_PREFIX} " \
+                  f" >/var/log/maestro.log 2>&1 &'"
+    rc, out = cont.exec_run(maestro_cmd)
+    assert(rc == 0)
+
+#### start ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    def rm_f(path):
+        try:
+            os.remove(path)
+        except:
+            pass
+    rm_f(DB+"/etcd.yaml")
+    rm_f(DB+"/ldms_cfg.yaml")
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+# Check maestro + maestro_ctrl
+_m = [ args.prefix+"/bin/maestro", args.prefix+"/sbin/maestro" ]
+_m_ctrl = [ args.prefix+"/bin/maestro_ctrl", args.prefix+"/sbin/maestro_ctrl" ]
+
+_m_exists = (os.path.exists(_m[0]) or os.path.exists(_m[1])) and \
+            (os.path.exists(_m_ctrl[0]) or os.path.exists(_m_ctrl[1]))
+if not _m_exists:
+    log.info("maestro and/or maestro_ctrl not found, skipping tests")
+    sys.exit()
+
+if not os.path.isdir(DB+"/containers"):
+    os.mkdir(DB+"/containers")
+
+### Write test config files ###
+etcd_cfg = open(DB+"/etcd.yaml", "w")
+ldms_cfg = open(DB+"/ldms_cfg.yaml", "w")
+etcd_cfg.write(ETCD_YAML)
+ldms_cfg.write(MAESTRO_CFG)
+print("---Wait for config to write to file---")
+time.sleep(10)
+etcd_cfg.close()
+ldms_cfg.close()
+
+log.info("-- Get or create cluster --")
+cluster = LDMSDCluster.get(spec['name'], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+node1 = cluster.get_container("node1")
+node2 = cluster.get_container("node2")
+node3 = cluster.get_container("node3")
+node4 = cluster.get_container("node4")
+node5 = cluster.get_container("node5")
+node6 = cluster.get_container("node6")
+node7 = cluster.get_container("node7")
+node8 = cluster.get_container("node8")
+agg1 = cluster.get_container("agg1")
+agg2 = cluster.get_container("agg2")
+agg3 = cluster.get_container("agg3")
+agg4 = cluster.get_container("agg4")
+cfg1 = cluster.get_container("cfg1")
+cfg2 = cluster.get_container("cfg2")
+cfg3 = cluster.get_container("cfg3")
+maestro_containers = [ cfg1, cfg2, cfg3 ]
+
+headnode.exec_run("mkdir -p {}".format(STORE_PATH))
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+log.info("-- making known hosts (ssh) --")
+cluster.make_known_hosts()
+
+log.info("... make sure ldmsd's are up")
+time.sleep(5)
+
+# Test 1 test.add_assertion(1, "load maestro etcd cluster")
+cmd = f"bash -c 'maestro_ctrl --cluster {ETCD_FILE}" \
+      f" --ldms_config {LDMS_CFG_FILE}" \
+      f" --prefix {CFG_PREFIX} 2>/dev/null'"
+rc, out = headnode.exec_run(cmd)
+if rc:
+    raise RuntimeError(f"maestro_ctl error rc: {rc}, out: {out}")
+
+# start 3 maestros
+start_maestro(cfg1)
+start_maestro(cfg2)
+start_maestro(cfg3)
+time.sleep(2)
+
+#test.add_assertion(1, "Statuses of maestros, 1 leader + 2 followers")
+maestro_tbl = get_maestro_state_tbl()
+maestro_stat = [ (k, len(v)) for k, v in maestro_tbl.items() ]
+maestro_stat.sort()
+expected_maestro_stat = [ ("FOLLOWER", 2), ("LEADER", 1) ]
+test.assert_test(1, maestro_stat == expected_maestro_stat, f"{maestro_stat}")
+
+t0 = time.time()
+time.sleep(10) # give some time for LDMS configuration
+
+def verify_ldmsds(assert_id):
+    global test
+    # sampler
+    for i in range(1, 9):
+        host = f"node{i}"
+        objs = ldms_ls(host)
+        expected_sets = [ f"samp{i}/meminfo" ]
+        sets = [ k for k in objs ]
+        if sets != expected_sets:
+            test.assert_test(assert_id, False,
+                    f"samp{i}: expecting {expected_sets}, but got {sets}")
+            return
+        s = objs[f"samp{i}/meminfo"]
+        ts = s["timestamp"]
+        ts = ts["sec"] + ts["usec"]*1e-6
+        if ts <= t0:
+            test.assert_test(assert_id, False, f"Bad timestamp")
+            return
+    for i in range(1, 5):
+        objs = ldms_ls(f"agg{i}")
+        if i == 4:
+            J0 = 1
+            J1 = 9
+        else:
+            J0 = 1 + (i-1)*3
+            J1 = J0 + 3 if i < 3 else J0 + 2
+        expected_sets = [ f"samp{j}/meminfo" for j in range(J0, J1)]
+        sets = [ k for k in objs ]
+        sets.sort()
+        if sets != expected_sets:
+            test.assert_test(assert_id, False,
+                    f"agg{i}: expecting {expected_sets}, but got {sets}")
+            return
+        for k in sets:
+            s = objs[k]
+            ts = s["timestamp"]
+            ts = ts["sec"] + ts["usec"]*1e-6
+            if ts <= t0:
+                test.assert_test(assert_id, False, f"Bad timestamp")
+                return
+    test.assert_test(assert_id, True, f"sets verified")
+    return
+
+#test.add_assertion(2, "All ldmsds are up and configured")
+verify_ldmsds(2)
+
+def sos_check(assert_id, t):
+    global agg4
+    cmd = "sos_cmd -C /db/containers/ldms_data -q -S meminfo -X job_time_comp -f json"
+    rc, out = agg4.exec_run(cmd)
+    if rc:
+        test.assert_test(assert_id, False, f"sos_cmd error, rc: {rc}, out: {out}")
+        return
+    json_out = json.loads(out)
+    objs = json_out['data']
+    compids = set()
+    for o in objs:
+        ts = o["timestamp"]
+        if ts < t:
+            continue
+        compids.add(o["component_id"])
+    compids = [ c for c in compids ]
+    compids.sort()
+    expected_compids = [ i for i in range(1, 9) ]
+    test.assert_test(assert_id, compids == expected_compids, f"data check")
+
+#test.add_assertion(3, "Data are being stored")
+sos_check(3, t0)
+
+# kill agg4 and the leader
+ldr_cont = maestro_tbl["LEADER"][0]
+rc, out = ldr_cont.exec_run(f"/usr/bin/pgrep -af 'python3.*maestro'")
+assert(rc == 0)
+pid, ignore = out.split(maxsplit=1)
+rc, out = ldr_cont.exec_run(f"kill {pid}")
+assert(rc == 0)
+rc, out = agg4.exec_run(f"pkill ldmsd")
+assert(rc == 0)
+
+time.sleep(4)
+#test.add_assertion(4, "New leader elected")
+while True: # will break
+    maestro_tbl = get_maestro_state_tbl()
+    maestro_stat = [ (k, len(v)) for k, v in maestro_tbl.items() ]
+    maestro_stat.sort()
+    expected_maestro_stat = [ ("FOLLOWER", 1), ("LEADER", 1), ("NOT_RUNNING", 1) ]
+    new_ldr_cont = maestro_tbl["LEADER"][0]
+    if ldr_cont == new_ldr_cont:
+        test.assert_test(4, False, f"New leader is not elected")
+        break
+    if expected_maestro_stat != maestro_stat:
+        test.assert_test(4, False, f"Expecting {expected_maestro_stat} but got {maestro_stat}")
+        break
+    test.assert_test(4, True, f"checked")
+    break
+
+#test.add_assertion(5, "Restarted ldmsd is configured")
+agg4.start_ldmsd()
+t1 = time.time()
+time.sleep(4)
+verify_ldmsds(5)
+
+#test.add_assertion(6, "New data are presented in the store")
+sos_check(6, t1)
+
+#test.add_assertion(7, "The restarted maestro becomes a follower")
+while True: # will break
+    start_maestro(ldr_cont) # this was the old leader
+    time.sleep(2)
+    st = get_maestro_state(ldr_cont)
+    if st != "FOLLOWER":
+        test.assert_test(7, False, f"Expecting FOLLOWER state, but got {st}")
+        break
+    maestro_tbl = get_maestro_state_tbl()
+    maestro_stat = [ (k, len(v)) for k, v in maestro_tbl.items() ]
+    maestro_stat.sort()
+    expected_maestro_stat = [ ("FOLLOWER", 2), ("LEADER", 1) ]
+    if maestro_stat != expected_maestro_stat:
+        test.assert_test(7, False, f"Expecting {expected_maestro_stat}, "
+                                   f"but got {maestro_stat}")
+        break
+    test.assert_test(7, True, "checked")
+    break
+
+# EOF ; see at_exit()
