@@ -939,7 +939,27 @@ class LDMSDContainer(ABC):
         """Start etcd in the container"""
         if self.check_etcd():
             return
-        cmd = "bash -c 'etcd --data-dir /var/lib/etcd/default.etcd >/var/log/etcd.log 2>&1 &'"
+        # collect etcd daemons from the cluster spec
+        etcd_conts = []
+        for node in self.cluster.spec.get("nodes", []):
+            for d in node.get("daemons", []):
+                if d.get("type") == "etcd":
+                    hostname = node["hostname"]
+                    cont = self.cluster.get_container(hostname)
+                    etcd_conts.append(cont)
+        initial_cluster = ",".join([
+                f"{c.name}=http://{c.ip_addr}:2380" for c in etcd_conts
+            ])
+        cmd = f"bash -c 'etcd --data-dir /var/lib/etcd/default.etcd" \
+              f" --name {self.name}" \
+              f" --initial-advertise-peer-urls http://{self.ip_addr}:2380" \
+              f" --listen-peer-urls http://{self.ip_addr}:2380" \
+              f" --advertise-client-urls http://{self.ip_addr}:2379" \
+              f" --listen-client-urls http://{self.ip_addr}:2379" \
+              f" --initial-cluster {initial_cluster}" \
+              f" --initial-cluster-state new" \
+              f" --initial-cluster-token token" \
+              f" >/var/log/etcd.log 2>&1 &'"
         rc, out = self.exec_run(cmd)
         if rc:
             raise RuntimeError("sshd failed, rc: {}, output: {}" \
