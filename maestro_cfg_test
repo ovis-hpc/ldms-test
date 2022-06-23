@@ -80,6 +80,7 @@ daemons:
         maestro_comm : True
         auth :
           name : none
+          plugin : none
 
   - names : &l1-daemons "agg-[1-3]"
     hosts : &l1-hosts "agg-[1-3]"
@@ -90,6 +91,7 @@ daemons:
         maestro_comm : True
         auth :
           name : none
+          plugin : none
 
   - names : &l2-daemons "agg-[4]"
     hosts : &l2-hosts "headnode"
@@ -100,6 +102,7 @@ daemons:
         maestro_comm : True
         auth :
           name : none
+          plugin : none
 
 aggregators:
   - daemons   : *l1-daemons
