@@ -948,14 +948,14 @@ class LDMSDContainer(ABC):
                     cont = self.cluster.get_container(hostname)
                     etcd_conts.append(cont)
         initial_cluster = ",".join([
-                f"{c.name}=http://{c.ip_addr}:2380" for c in etcd_conts
+                f"{c.hostname}=http://{c.ip_addr}:2380" for c in etcd_conts
             ])
         cmd = f"bash -c 'etcd --data-dir /var/lib/etcd/default.etcd" \
-              f" --name {self.name}" \
+              f" --name {self.hostname}" \
               f" --initial-advertise-peer-urls http://{self.ip_addr}:2380" \
               f" --listen-peer-urls http://{self.ip_addr}:2380" \
               f" --advertise-client-urls http://{self.ip_addr}:2379" \
-              f" --listen-client-urls http://{self.ip_addr}:2379" \
+              f" --listen-client-urls http://0.0.0.0:2379" \
               f" --initial-cluster {initial_cluster}" \
               f" --initial-cluster-state new" \
               f" --initial-cluster-token token" \
