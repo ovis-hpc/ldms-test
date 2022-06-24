@@ -410,7 +410,7 @@ cluster.start_daemons()
 cluster.make_known_hosts()
 
 log.info("... wait a bit to make sure ldmsd's are up")
-time.sleep(5)
+time.sleep(10)
 
 def kafka_topic_verify(topics):
     topics = set(topics)
