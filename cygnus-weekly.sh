@@ -88,7 +88,9 @@ assert mkdir -p $D
 
 PREFIX=/opt/ovis
 
-MAESTRO_COMMIT=${MAESTRO_COMMIT:-78af06a}
+#MAESTRO_COMMIT=${MAESTRO_COMMIT:-78af06a}
+MAESTRO_COMMIT=${MAESTRO_COMMIT:-master} # use master by default
+MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
 
 SOS_BUILD_OPTS=(
 	--prefix=${PREFIX}
@@ -160,7 +162,7 @@ if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 	INFO "== Checking out OVIS =="
 	git clone https://github.com/ovis-hpc/ovis
 	INFO "== Checkout maestro =="
-	git clone https://github.com/ovis-hpc/maestro
+	git clone ${MAESTRO_REPO}
 	[[ -z "${MAESTRO_COMMIT}" ]] || {
 		INFO "checking out maestro commit id: ${MAESTRO_COMMIT}"
 		pushd maestro
@@ -194,7 +196,8 @@ if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 	popd # back to ${WORK_DIR}
 
 	INFO "== Installing maestro =="
-	sudo cp maestro/*.py maestro/maestro* ${PREFIX}/bin
+	MAESTRO_FILES=( $(ls maestro/*.py maestro/maestro* | sort | uniq) )
+	sudo cp "${MAESTRO_FILES[@]}" ${PREFIX}/bin
 
 else
 	INFO "skip building because GIT SHA has not changed: ${OLD_GIT_SHA}"
@@ -272,6 +275,8 @@ quick_set_add_rm_test
 set_array_hang_test
 ldmsd_autointerval_test
 ldms_record_test
+ldms_schema_digest_test
+ldmsd_decomp_test
 ldmsd_stream_dir_test
 store_list_record_test
 )
