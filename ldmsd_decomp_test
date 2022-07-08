@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-# TODO COMPLEETE ME
-
 # REMARK This test uses `ldms-kafka` image to run the test
 #
 # NOTE Test `static` and `as_is` decomposition with  `store_sos`, `store_csv`,
