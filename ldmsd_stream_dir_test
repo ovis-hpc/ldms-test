@@ -178,6 +178,28 @@ def stream_first_ts_get(stream):
 def stream_last_ts_get(stream):
     return stream['info']['last_ts']
 
+def stream_count_get(stream):
+    return stream['info']['count']
+
+def stream_total_bytes_get(stream):
+    return stream['info']['total_bytes']
+
+def aggregated_get(result):
+    count = 0
+    first = 0
+    last = 0
+    total_bytes = 0
+    for n, s in result.items():
+        if n == "_AGGREGATED_":
+            continue
+        count += stream_count_get(s)
+        if first == 0 or first > stream_first_ts_get(s):
+            first = stream_first_ts_get(s)
+        if last == 0 or last < stream_last_ts_get(s):
+            last = stream_last_ts_get(s)
+        total_bytes += stream_total_bytes_get(s)
+    return {"info": info_get(count, total_bytes, first, last)}
+
 def remove_publishers(stream):
     if 'publishers' in stream.keys():
         return stream.pop('publishers')
@@ -293,7 +315,8 @@ log.info("All LDMSDs are up.")
 
 # NO_STREAM_DATA
 (rc, result) = stream_dir(smplr1)
-test.assert_test(NO_STREAM_DATA, result == {}, f"{result} == {{}}")
+exp = {}
+test.assert_test(NO_STREAM_DATA, result == exp, f"{result} == {exp}")
 
 # ONE_MSG
 (rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
@@ -304,7 +327,8 @@ exp = { "foo" : stream_get("not subscribed",
                            info_get(1, FOO_SZ,
                                     stream_first_ts_get(result['foo']),
                                     stream_last_ts_get(result['foo'])),
-                           {})}
+                           {}),
+        "_AGGREGATED_": aggregated_get(result)}
 test.assert_test(ONE_MSG, result == exp, f"{result} == {exp}")
 
 # CHECK_RATE_FREQ
@@ -318,7 +342,8 @@ exp = { "foo" : stream_get("not subscribed",
                            info_get(3, FOO_SZ *3,
                                 stream_first_ts_get(result['foo']),
                                 stream_last_ts_get(result['foo'])),
-                           {}) }
+                           {}),
+        "_AGGREGATED_": aggregated_get(result)}
 samplerd1_exp = exp
 test.assert_test(CHECK_RATE_FREQ, result == exp, f"{result} == {exp}")
 
@@ -328,7 +353,10 @@ assert(rc == 0)
 exp = { "foo" : { "samplerd-1" : stream_get("not subscribed",
                                             info_get(3, FOO_SZ * 3,
                                                      stream_first_ts_get(result['foo']['samplerd-1']),
-                                                     stream_last_ts_get(result['foo']['samplerd-1']))) }}
+                                                     stream_last_ts_get(result['foo']['samplerd-1']))) },
+        "_AGGREGATED_": { "samplerd-1" : {"info": info_get(3, FOO_SZ * 3,
+                                                     stream_first_ts_get(result['foo']['samplerd-1']),
+                                                     stream_last_ts_get(result['foo']['samplerd-1']))}}}
 test.assert_test(PRDCR_STREAM_DIR_ONE_PRDCR, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_TWO_STREAM
@@ -355,7 +383,8 @@ exp = {"foo" : stream_get("not subscribed",
                           info_get(3, BAR_SZ * 3,
                                    stream_first_ts_get(result['bar']),
                                    stream_last_ts_get(result['bar'])),
-                          {})}
+                          {}),
+       "_AGGREGATED_": aggregated_get(result)}
 samplerd2_exp = exp
 test.assert_test(STREAM_DIR_TWO_STREAM, result == exp, f"{result} == {exp}")
 
@@ -365,8 +394,10 @@ assert(rc == 0)
 exp = {"foo" : { "samplerd-1" : stream_get("not subscribed", samplerd1_exp['foo']['info']),
                  "samplerd-2" : stream_get("not subscribed", samplerd2_exp['foo']['info'])
                },
-       "bar" : { "samplerd-2" : stream_get("not subscribed", samplerd2_exp['bar']['info'])}
-      }
+       "bar" : { "samplerd-2" : stream_get("not subscribed", samplerd2_exp['bar']['info'])},
+       "_AGGREGATED_": { "samplerd-1": {"info": samplerd1_exp['_AGGREGATED_']['info']},
+                         "samplerd-2": {"info": samplerd2_exp['_AGGREGATED_']['info']}
+           }}
 test.assert_test(PRDCR_STREAM_DIR_TWO_PRDCR, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_AGG_ONE_PRODUCER
@@ -382,13 +413,15 @@ assert(rc == 0)
 publishers = { "samplerd-1" : { "info" : info_get(2, FOO_SZ * 2,
                                                   stream_first_ts_get(result['foo']),
                                                   stream_last_ts_get(result['foo']))
-                              }
-             }
+                              }}
 exp = {"foo" : stream_get("not subscribed",
                           info_get(2, FOO_SZ * 2,
                                    stream_first_ts_get(result['foo']),
                                    stream_last_ts_get(result['foo'])),
-                          publishers)}
+                          publishers),
+       "_AGGREGATED_": {"info": info_get(2, FOO_SZ * 2,
+                                                  stream_first_ts_get(result['foo']),
+                                                  stream_last_ts_get(result['foo']))}}
 test.assert_test(STREAM_DIR_AGG_ONE_PRODUCER, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_AGG_TWO_PRODUCERS
@@ -405,5 +438,6 @@ exp = { "foo" : stream_get("not subscribed",
                            info_get(5, FOO_SZ * 5,
                                     stream_first_ts_get(result['foo']),
                                     stream_last_ts_get(result['foo'])),
-                           publishers)}
+                           publishers),
+        "_AGGREGATED_": aggregated_get(result)}
 test.assert_test(STREAM_DIR_AGG_TWO_PRODUCERS, result == exp, f"{result} == {exp}")
