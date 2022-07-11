@@ -67,6 +67,7 @@ updtr_prdcr_add_test
 updtr_prdcr_del_test
 updtr_start_test
 updtr_status_test
+ldmsd_flex_decomp_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
