@@ -49,7 +49,6 @@ INVALID_REGEX      = next(id)
 NON_EXISTING_UPDTR = next(id)
 NON_EXISTING_MATCH_INST = next(id)
 NON_EXISTING_MATCH_SCHEMA = next(id)
-RUNNING_UPDTR = next(id)
 INVALID_MATCH      = next(id)
 SUCCESS_INST       = next(id)
 SUCCESS_SCHEMA     = next(id)
@@ -235,8 +234,6 @@ if __name__ == "__main__":
                        "Send updtr_match_del with a non-existing inst match")
     test.add_assertion(NON_EXISTING_MATCH_SCHEMA,
                        "Send updtr_match_del with a non-existing schema match")
-    test.add_assertion(RUNNING_UPDTR,
-                       "Send updtr_match_del to a running updater")
     test.add_assertion(INVALID_MATCH,
                        "Send updater_match_del with an invalid match type")
     test.add_assertion(SUCCESS_INST,
@@ -276,7 +273,7 @@ if __name__ == "__main__":
 
     # Invalid regex
     (rc, out) = updtr_match_del(agg, name = "invalid_regex", regex = "[", m = "inst")
-    test.assert_test(INVALID_REGEX, rc == errno.EINVAL,
+    test.assert_test(INVALID_REGEX, rc == errno.ENOENT,
                      "report(rc = {}) == expect(rc = {})".format(rc, errno.EINVAL))
 
     # Non-existing updater
