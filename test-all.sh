@@ -57,6 +57,16 @@ ldms_schema_digest_test
 ldmsd_decomp_test
 ldmsd_stream_dir_test
 store_list_record_test
+maestro_raft_test
+ovis_json_test
+updtr_add_test
+updtr_del_test
+updtr_match_add_test
+updtr_match_del_test
+updtr_prdcr_add_test
+updtr_prdcr_del_test
+updtr_start_test
+updtr_status_test
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
