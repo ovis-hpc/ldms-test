@@ -519,7 +519,9 @@ static void test_json_entity_dump(test_t suite)
 		jb = json_entity_dump(NULL, exp[type]);
 
 		if (type == ATTR_VALUE) {
-			tada_assert(suite, assert_no, (NULL == jb), "NULL == jb");
+			tada_assert(suite, assert_no,
+					(0 == strcmp("\"name\":\"foo\"",jb->buf)),
+						"\"name\":\"foo\" == jb->buf");
 		} else if (type == DICT_VALUE) {
 			ldms_test_buf_append(buf, "%s == %s",
 					EXP_JSON_STR[type], jb->buf);
