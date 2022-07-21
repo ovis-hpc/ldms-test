@@ -1,0 +1,611 @@
+#!/usr/bin/env python3
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import TADA
+import sys
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, parse_ldms_ls, \
+                      assertion_id_get
+from time import sleep
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values ####
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing ####
+ap = argparse.ArgumentParser(description = "Run test against the slurm_sampler2 plugin")
+add_common_args(ap)
+ap.add_argument("--slurm-notifier", type = str,
+                default = "__find_from_prefix__",
+                help = "The path (in container) to slurm_notifier library")
+ap.add_argument("--num-compute", type = int,
+                default = 2,
+                help = "Number of compute nodes/")
+args = ap.parse_args()
+process_args(args)
+
+#### config variables ####
+LDMSD_XPRT = "sock"
+LDMSD_PORT = "10001"
+USERS = ["user1"]
+CPU_PER_NODE = 2
+DELETE_JOB_TIME = 5
+WAIT_FOR_JOB_INIT = 2
+
+STORE_ROOT = "/store"
+
+SLURM_NOTIFIER = args.slurm_notifier
+if SLURM_NOTIFIER == "__find_from_prefix__":
+    paths = map(lambda x: f"{args.prefix}/{x}/ovis-ldms/libslurm_notifier.so",
+                ["lib", "lib64"])
+    for p in paths:
+        if os.path.exists(p):
+            SLURM_NOTIFIER = p.replace(args.prefix, '/opt/ovis', 1)
+            break
+    else:
+        raise RuntimeError("libslurm_notifier.so not found")
+
+#### Test specification ####
+common_sampler_config = [
+                            "component_id=%component_id%",
+                            "instance=%hostname%/%plugin%",
+                            "producer=%hostname%",
+                        ]
+common_daemons = [
+                    {
+                        "name" : "sshd",
+                        "type" : "sshd"
+                    },
+                    {
+                        "name" : "slurmd",
+                        "!extends" : "slurmd",
+                    },
+]
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s slurm_sampler2 test cluster",
+    "type" : "NA",
+    "templates" : {
+        "slurmd" : {
+            "name" : "slurmd",
+            "type" : "slurmd",
+            "plugstack" : [
+                {
+                    "required" : True,
+                    "path" : SLURM_NOTIFIER,
+                    "args" : [
+                        "auth=none",
+                        f"port={LDMSD_PORT}",
+                        f"client={LDMSD_XPRT}:localhost:{LDMSD_PORT}:none"
+                    ]
+                }
+            ]
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ],
+            "log_level" : "DEBUG"
+        },
+        "slurm_sampler2" : {
+            "plugin" : "slurm_sampler2",
+            "config" : common_sampler_config
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : LDMSD_XPRT,
+            "type" : "active",
+            "interval" : 1000000,
+        }
+    }, # Templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 10001,
+            "daemons" : common_daemons + [
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "slurm_sampler2",
+                            "config" : common_sampler_config
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "node-2",
+            "component_id" : 10002,
+            "daemons" : common_daemons + [
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "slurm_sampler2",
+                            "config" : common_sampler_config + [
+                                "job_count=1",
+                                "task_count=2"
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "node-3",
+            "component_id" : 10003,
+            "daemons" : common_daemons + [
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "slurm_sampler2",
+                            "config" : common_sampler_config + [
+                                f"delete_job={DELETE_JOB_TIME}" # delete any jobs completed longer than 5 seconds
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "node-4",
+            "component_id" : 10004,
+            "daemons" : common_daemons + [
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "slurm_sampler2",
+                            "config" : common_sampler_config + [
+                                "delete_job=0" # Delete any completed jobs when the plugin receives a new job data.
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "agg",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=100000 push=onchange",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                    "prdcrs" : [
+                        {
+                            "name" : f"node-{i}",
+                            "!extends" : "prdcr"
+                        } for i in range(1, 4)
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "slurmctld",
+                    "type" : "slurmctld"
+                }
+            ]
+        }
+    ], # nodes
+
+    "cpu_per_node" : CPU_PER_NODE,
+    "oversubscribe" : "FORCE",
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "mounts" :  [
+                    f"{args.data_root}:/db:rw",
+                    f"{os.path.realpath(sys.path[0])}:/tada-src/:ro",
+                ] + args.mount +
+                ( [f"{args.src}:{args.src}:ro"] if args.src else [] )
+}
+
+#### Clean up db ####
+def cleanup_db(cluster):
+    cont = cluster.get_container("headnode")
+    LST = [ "job.sh", "prog", "prog.c", "slurm*.out" ]
+    LST = [ "/db/{}".format(x) for x in LST ]
+    LST += [ "{}/{}".format(STORE_ROOT, x) for x in [ "slurm" ] ]
+    cont.exec_run("rm -fr {}".format(" ".join(LST)))
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+class Task(object):
+    def __init__(self, job_id, task_rank, task_pid = None, task_exit_status = 0):
+        self.task_pid = task_pid
+        self.job_id = job_id
+        self.task_rank = task_rank
+        self.task_exit_status = task_exit_status
+
+JOB_STATE_FREE = 0
+JOB_STATE_STARTING = 1
+JOB_STATE_RUNNING = 2
+JOB_STATE_STOPPING = 3
+JOB_STATE_COMPLETE = 4
+class Job(object):
+    def _user2uid(self, user):
+        if user == "root":
+            return 0
+        elif user == "user1":
+            return 1000
+        else:
+            raise ValueError(f"Unexpected user {user}")
+
+    def __init__(self, job_id, job_state = JOB_STATE_COMPLETE, job_name = "job.sh",
+                       user = "root", gid = 0,
+                       node_count = 4, task_count = 1):
+        self.job_id = job_id
+        self.job_state = job_state
+        self.job_name = job_name
+        self.user = user
+        self.job_uid = self._user2uid(user)
+        self.job_gid = gid
+        self.node_count = node_count
+        self.task_count = task_count
+        self.job_size = self.node_count * self.task_count
+        self.app_id = 0
+        self.job_tag = ""
+
+def ldms_ls(cont, host = "localhost", xprt = LDMSD_XPRT, port = LDMSD_PORT, l = True):
+    rc, out = cont.exec_run(f"/tada-src/python/ldms_ls.py -x {LDMSD_XPRT} " \
+                                        f"-p {LDMSD_PORT} -h localhost -l")
+    if rc:
+        raise RuntimeError(f"ldms_ls.py error {rc}, out: {out}")
+    obj = json.loads(out)
+    return obj
+
+def ldms_ls_all():
+    results = {}
+    for node in nodes:
+        results[node.hostname] = ldms_ls(node)
+    return results
+
+def get_set(cont, results):
+    return results[cont.hostname][f"{cont.hostname}/slurm_sampler2"]
+
+def get_job_list(cont, results):
+    set = get_set(cont, results)
+    return set['data']['job_list']
+
+def get_task_list(cont, results):
+    set = get_set(cont, results)
+    return set['data']['task_list']
+
+def get_ldmsd_spec(cont):
+    return [d for d in cont.spec['daemons'] if d['type'] == "ldmsd"][0]
+
+def get_sampler_plugin_spec(ldmsd_spec, plugin):
+    return [p for p in ldmsd_spec['samplers'] if p['plugin'] == plugin][0]
+
+def get_spec_component_id(plugin_spec):
+    config = plugin_spec['config']
+    for av in config:
+        a, v = av.split("=")
+        if a == "component_id":
+            return int(v)
+    raise KeyError(f"Cannot find component_id in {config}")
+
+def get_spec_producer(plugin_spec):
+    config = plugin_spec['config']
+    for av in config:
+        a, v = av.split("=")
+        if a == "producer":
+            return v
+    raise KeyError(f"Cannot find producer in {config}")
+
+def verify_job(result, job):
+    job = job.__dict__
+    for k in job.keys():
+        if k == "job_state":
+            continue
+        if result[k] != job[k]:
+            return (False, f"{k}'s value {result[k]} is not as expected {job[k]}.")
+    return (True, None)
+
+def verify_task(result, task):
+    task = task.__dict__
+    for k in task.keys():
+        if k == "task_pid":
+            continue
+        if result[k] != task[k]:
+            return (False, f"{k}'s value {result[k]} is not as expected {task[k]}.")
+    return (True, None)
+
+def verify_tasks(results, tasks):
+    # TODO:
+    # Solve the problem that the tasks reported by ldms_ls
+    # isn't ordered by task ranks. :(
+    _tasks = tasks.copy()
+    for x in results:
+        _e = None
+        for e in _tasks:
+            if x['job_id'] == e.__dict__['job_id']:
+                if x['task_rank'] == e.__dict__['task_rank']:
+                    _e = e
+                    _tasks.remove(e)
+                    b = x['task_exit_status'] == e.__dict__['task_exit_status']
+                    if not b:
+                        return (False, f"The task_exit_status {x['task_exit_status']} " \
+                                       f"of job id {x['job_id']}'s task " \
+                                       f"rank {x['task_rank']} is not as " \
+                                       f"expected {e['task_exit_status']}.")
+        if _e is None:
+            return (False, f"Unexpected task of job_id {x['job_id']} and task rank {x['task_rank']}.")
+    return (True, None)
+
+def verify_node_result(cont, results, jobs, tasks):
+    set = results[cont.hostname][f"{cont.hostname}/slurm_sampler2"]
+    job_list = set['data']['job_list']
+    task_list = set['data']['task_list']
+    comp_id = int(set['data']['component_id'])
+    producer = set['producer_name']
+    exp_job_list = jobs[cont.hostname]
+    exp_task_list = tasks[cont.hostname]
+
+    ldmsd_spec = get_ldmsd_spec(cont)
+    slurm2_spec = get_sampler_plugin_spec(ldmsd_spec, "slurm_sampler2")
+    exp_comp_id = get_spec_component_id(slurm2_spec)
+    exp_producer = get_spec_producer(slurm2_spec)
+
+    if comp_id != exp_comp_id:
+        return (False, f"The component_id {comp_id} is not the expected value {exp_comp_id}.")
+    if producer != exp_producer:
+        return (False, f"The producer '{producer}' is not the expected value '{exp_producer}'.")
+    if len(job_list) != len(exp_job_list):
+        return (False, f"The job list length {len(job_list)} is not the expected value {len(exp_job_list)}.")
+    if len(task_list) != len(exp_task_list):
+        return (False, f"The task list length {len(task_list)} is not the expected value {len(exp_task_list)}.")
+    for x, e in zip(job_list, exp_job_list):
+        b, r = verify_job(x, e)
+        if not b:
+            return (False, f"The data of job_id {e.__dict__['job_id']} is wrong. {r}")
+    b, r = verify_tasks(task_list, exp_task_list)
+    if not b:
+        return (False, r)
+    return (True, None)
+
+def verify_results(nodes, results, jobs, tasks):
+    for node in nodes:
+        b, r = verify_node_result(node, results, jobs, tasks)
+        if b is not True:
+            return (b, f"{node.hostname}: {r}")
+    return (True, None)
+
+id = assertion_id_get()
+
+JOB_MULTI_NODES = next(id)
+JOB_MULTI_TASKS = next(id)
+EXPAND_HEAP = next(id)
+DELETE_COMPLETE_JOBS = next(id)
+MULTI_TENANTS = next(id)
+
+#### Test Definition ####
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "slurm_sampler2_test",
+                 test_desc = "Test the slurm_sampler2 plugin",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(JOB_MULTI_NODES,
+                   "Correctly collect the data of a job running on multiple nodes")
+test.add_assertion(JOB_MULTI_TASKS,
+                   "Correctly collect the data of a job running on N tasks of multiple nodes")
+test.add_assertion(EXPAND_HEAP,
+                   "Correctly fill the metric values after expanding the set heap")
+test.add_assertion(DELETE_COMPLETE_JOBS,
+                   "Correctly collect the data of a job submitted as a user")
+test.add_assertion(MULTI_TENANTS,
+                   "Correctly collect the data in the multi-tenant case")
+
+#### Start ####
+cluster = None
+test.start()
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+cleanup_db(cluster)
+
+log.info("-- Add users --")
+for u in USERS:
+    cluster.all_exec_run(f"adduser {u}")
+
+log.info("-- Preparing job script & programs --")
+
+cont = cluster.get_container("headnode")
+
+code = """\
+#include <stdio.h>
+#include <unistd.h>
+
+int main(int argc, char **argv)
+{
+    int time = 5; /* 5 seconds */
+    int interval = 5; /* Report every 5 seconds */
+    int i = interval;
+    
+    if (argc > 1)
+        time = atoi(argv[1]);
+
+    int x = time / interval;
+    int remainder = time - interval * x;
+
+    printf("Run for %d seconds\\n", time);
+    while (i <= time) {
+        sleep(interval);
+        i += interval;
+    }
+    sleep(remainder);
+    printf("done\\n");
+    return 0;
+}
+"""
+cont.write_file("/db/prog.c", code)
+
+rc, out = cont.exec_run("gcc -o /db/prog /db/prog.c")
+assert(rc == 0)
+
+code = """\
+#!/bin/bash
+
+srun /db/prog $1
+"""
+cont.write_file("/db/job.sh", code)
+cont.exec_run("sync")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+sleep(2) # Wait for the daemons to start
+
+nodes = [cluster.get_container(f"node-{c}") for c in range(1, 5)]
+
+# -------------- job 1--------------------
+jobs = {}
+job_1 = cluster.sbatch("/db/job.sh 1", "--nodelist=node-[1-4]")
+sleep(WAIT_FOR_JOB_INIT)
+results = ldms_ls_all()
+jobs = {}
+tasks = {}
+i = 0
+job = Job(job_id = job_1)
+for node in nodes:
+    jobs[node.hostname] = [job]
+    tasks[node.hostname] = [Task(job_id = job_1, task_rank = i)]
+    i += 1
+b, r = verify_results(nodes, results, jobs, tasks)
+test.assert_test(JOB_MULTI_NODES, b, "The collected job data is correct." if b else r)
+
+# ------------- job 2 -----------------------
+job_2 = cluster.sbatch("/db/job.sh 1", "--nodelist=node-[1-4]", "--uid=user1",
+                            f"--ntasks-per-node={CPU_PER_NODE}")
+sleep(WAIT_FOR_JOB_INIT)
+# Get ldms_ls
+results = ldms_ls_all()
+i = 0
+task_count = CPU_PER_NODE
+job = Job(job_id = job_2, user = "user1", task_count = CPU_PER_NODE)
+for node in nodes:
+    jobs[node.hostname] += [job]
+    tasks[node.hostname] += [Task(job_id = job_2, task_rank = j) for j in range(i, i + CPU_PER_NODE)]
+    i += CPU_PER_NODE
+# remove deleted jobs
+del jobs[nodes[3].hostname][0]
+del tasks[nodes[3].hostname][0]
+b, r = verify_results(nodes, results, jobs, tasks)
+test.assert_test(JOB_MULTI_TASKS, b, "The collected job data is correct." if b else r)
+
+# ---------------- job 3 ------------------
+job_3 = cluster.sbatch(f"/db/job.sh 1", 
+                            "--nodelist=node-[1-4]",
+                            f"--ntasks-per-node={CPU_PER_NODE}")
+sleep(WAIT_FOR_JOB_INIT)
+results = ldms_ls_all()
+i = 0
+task_count = CPU_PER_NODE
+job = Job(job_id = job_3, task_count = CPU_PER_NODE)
+for node in nodes:
+    jobs[node.hostname] += [job]
+    tasks[node.hostname] += [Task(job_id = job_3, task_rank = j) for j in range(i, i + CPU_PER_NODE)]
+    i += CPU_PER_NODE
+#remove deleted jobs
+del jobs[nodes[3].hostname][0]
+del tasks[nodes[3].hostname][0:CPU_PER_NODE]
+b, r = verify_results(nodes, results, jobs, tasks)
+test.assert_test(EXPAND_HEAP, b, "The collected job data is correct." if b else r)
+
+# -------------------- job 4 ---------------------------
+# Get ldms_ls of node-4 to verify that job_2 was removed.
+# Make sure that the last job was submitted 
+# after the third job has been completed for at least DELETE_JOB_TIME.
+sleep(DELETE_JOB_TIME + 1)
+job_4 = cluster.sbatch("/db/job.sh", "--nodelist=node-[1-4]")
+sleep(WAIT_FOR_JOB_INIT + 1)
+results = ldms_ls_all()
+
+job = Job(job_id = job_4)
+i = 0
+for node in nodes:
+    jobs[node.hostname] += [job]
+    tasks[node.hostname] += [Task(job_id = job_4, task_rank = i)]
+    i += 1
+#remove deleted jobs
+del jobs[nodes[2].hostname][0:3]
+del tasks[nodes[2].hostname][0:(1 + CPU_PER_NODE + CPU_PER_NODE)]
+del jobs[nodes[3].hostname][0]
+del tasks[nodes[3].hostname][0:CPU_PER_NODE]
+b, r = verify_results(nodes, results, jobs, tasks)
+test.assert_test(DELETE_COMPLETE_JOBS, b, "The collected job data is correct." if b else r)
+
+# ----- Multiple tenants -------
+job_5 = cluster.sbatch("/db/job.sh 4", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
+sleep(1)
+job_6 = cluster.sbatch("/db/job.sh 3", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
+sleep(1)
+job_7 = cluster.sbatch("/db/job.sh 2", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
+sleep(1)
+job_8 = cluster.sbatch("/db/job.sh 1", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
+sleep(WAIT_FOR_JOB_INIT)
+results = ldms_ls_all()
+for node, i in zip(nodes, range(len(nodes))):
+    jobs[node.hostname] += [Job(job_id = jid) for jid in [job_5, job_6, job_7, job_8]]
+    tasks[node.hostname] += [Task(job_id = jid, task_rank = i) for jid in [job_5, job_6, job_7, job_8]]
+del jobs[nodes[3].hostname][0]
+del tasks[nodes[3].hostname][0]
+b, r = verify_results(nodes, results, jobs, tasks)
+test.assert_test(MULTI_TENANTS, b, "The collected job data is correct." if b else r)
