@@ -233,7 +233,10 @@ TEST_OPTS=(
 
 declare -A RCS
 
-for T in direct_ldms_ls_conn_test direct_prdcr_subscribe_test; do
+source ${SCRIPT_DIR}/test-list.sh
+# This defines DIRECT_TEST_LIST, CONT_TEST_LIST, PAPI_CONT_TEST_LIST
+
+for T in ${DIRECT_LIST[@]}; do
 	INFO "======== ${T} ========"
 	CMD="python3 ${T} ${TEST_OPTS[@]} --data_root ${DATA_ROOT}/${T}"
 	INFO "CMD: ${CMD}"
@@ -243,43 +246,10 @@ for T in direct_ldms_ls_conn_test direct_prdcr_subscribe_test; do
 done 2>&1
 
 [[ -z "${SKIP_PAPI}" ]] && {
-	PAPI_LIST=(
-		agg_slurm_test
-		papi_sampler_test
-		papi_store_test
-		store_app_test
-		syspapi_test
-	)
+	LIST=( ${PAPI_CONT_TEST_LIST[*]} ${CONT_TEST_LIST[*]} )
 } || {
-	PAPI_LIST=
+	LIST=( ${CONT_TEST_LIST[*]} )
 }
-
-LIST=(
-${PAPI_LIST[*]}
-agg_test
-failover_test
-ldmsd_auth_ovis_test
-ldmsd_auth_test
-ldmsd_ctrl_test
-ldmsd_stream_test
-maestro_cfg_test
-mt-slurm-test
-ovis_ev_test
-prdcr_subscribe_test
-set_array_test
-setgroup_test
-slurm_stream_test
-spank_notifier_test
-ldms_list_test
-quick_set_add_rm_test
-set_array_hang_test
-ldmsd_autointerval_test
-ldms_record_test
-ldms_schema_digest_test
-ldmsd_decomp_test
-ldmsd_stream_dir_test
-store_list_record_test
-)
 
 for T in ${LIST[*]}; do
 	INFO "======== ${T} ========"

@@ -3,7 +3,7 @@
 # Usage: [NAME=VAUE ...] ./test-all.sh [OPTIONS-PASSED-TO-TESTS]
 #
 # Environment variables:
-# - LOG: Path to the log file. ${HOME}/test-all.log is the default.
+# - LOG: Path to the log file. ${SCRIPT_DIR}/test-all.log is the default.
 #
 # - SKIP_PAPI: set to non-empty string (e.g. 'y') to skip tests that use PAPI.
 # - FAIL_FAST: set to non-empty string (e.g. 'y') to fail immediately if a test
@@ -16,59 +16,19 @@
 # $ LOG=test.log FAIL_FAST=y ./test-all.sh --prefix /opt/ovis
 # ```
 
-LOG=${LOG:-${HOME}/test-all.log}
+SCRIPT_DIR=$( dirname $0 )
+LOG=${LOG:-${SCRIPT_DIR}/test-all.log}
 
 echo "LOG: ${LOG}"
 
-[[ -z "${SKIP_PAPI}" ]] && {
-	PAPI_LIST=(
-		agg_slurm_test
-		papi_sampler_test
-		papi_store_test
-		store_app_test
-		syspapi_test
-	)
-} || {
-	PAPI_LIST=
-}
+source ${SCRIPT_DIR}/test-list.sh
+# This defines DIRECT_TEST_LIST, CONT_TEST_LIST, PAPI_CONT_TEST_LIST
 
-LIST=(
-${PAPI_LIST[*]}
-agg_test
-failover_test
-ldmsd_auth_ovis_test
-ldmsd_auth_test
-ldmsd_ctrl_test
-ldmsd_stream_test
-maestro_cfg_test
-mt-slurm-test
-ovis_ev_test
-prdcr_subscribe_test
-set_array_test
-setgroup_test
-slurm_stream_test
-spank_notifier_test
-ldms_list_test
-quick_set_add_rm_test
-set_array_hang_test
-ldmsd_autointerval_test
-ldms_record_test
-ldms_schema_digest_test
-ldmsd_decomp_test
-ldmsd_stream_dir_test
-store_list_record_test
-maestro_raft_test
-ovis_json_test
-updtr_add_test
-updtr_del_test
-updtr_match_add_test
-updtr_match_del_test
-updtr_prdcr_add_test
-updtr_prdcr_del_test
-updtr_start_test
-updtr_status_test
-ldmsd_flex_decomp_test
-)
+[[ -z "${SKIP_PAPI}" ]] && {
+	LIST=( ${PAPI_CONT_TEST_LIST[*]} ${CONT_TEST_LIST[*]} )
+} || {
+	LIST=( ${CONT_TEST_LIST[*]} )
+}
 
 [[ -z "${FAIL_FAST}" ]] || set -e
 
