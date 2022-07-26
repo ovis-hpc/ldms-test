@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -l
 #
 # WARNINGS:
 # - This script uses `sudo` to purge /opt/ovis/ directory.
@@ -33,6 +33,9 @@
 #    new binaries.  To force the build, set environment variable
 #    `FORCE_BUILD=1`.
 #
+# - `SKIP_BUILD=0|1`:
+#   Force skip the build, default :0. This precedes FORCE_BUILD.
+#
 # - `GITHUB_REPORT=0|1`:
 #   Set `GITHUB_REPORT=0` to skip reporting test results to github (e.g. for
 #   debugging). By default, `GITHUB_REPORT` is 1.
@@ -45,7 +48,6 @@
 #   image, and you have to be in the /etc/subuid and /etc/subgid list. See
 #   details in "Singularity Cluster Set" section in README.md.
 
-export PATH=/opt/ovis/sbin:/opt/ovis/bin:/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
 export GITHUB_REPORT=${GITHUB_REPORT:-1}
 
 LOG_MSG() {
@@ -73,7 +75,10 @@ export -f assert
 
 SCRIPT_DIR=$(realpath $(dirname $0))
 
-WORK_DIR=${WORK_DIR:-/mnt/cygnus/data/$(date +"%F-%H%M%S")}
+WORK_DIR_POOL=${WORK_DIR_POOL:-/mnt/300G/data}
+WORK_DIR=${WORK_DIR:-${WORK_DIR_POOL}/$(date +"%F-%H%M%S")}
+CONT_PREFIX=${WORK_DIR_POOL}/opt-ovis
+INFO "WORK_DIR: ${WORK_DIR}"
 WORK_DIR=$(realpath ${WORK_DIR})
 export WORK_DIR
 
@@ -87,49 +92,6 @@ D=$(dirname $LOG)
 assert mkdir -p $D
 
 PREFIX=/opt/ovis
-
-#MAESTRO_COMMIT=${MAESTRO_COMMIT:-78af06a}
-MAESTRO_COMMIT=${MAESTRO_COMMIT:-master} # use master by default
-MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
-
-SOS_BUILD_OPTS=(
-	--prefix=${PREFIX}
-	--enable-python
-	CFLAGS="-Wall -Werror -O0 -ggdb3"
-)
-
-OVIS_BUILD_OPTS=(
-	--prefix=${PREFIX}
-	--enable-python
-
-	# test stuff
-	--enable-ldms-test
-	--enable-zaptest
-	--enable-test_sampler
-	--enable-list_sampler
-	--enable-record_sampler
-
-	--enable-munge
-
-	--enable-sos
-	--with-sos=${PREFIX}
-
-	# xprt
-	--enable-rdma
-	--enable-fabric
-	--with-libfabric=/usr
-
-	# app stuff
-	--enable-store-app
-	--enable-app-sampler
-
-	# etc and doc
-	--enable-etc
-	--enable-doc
-	--enable-doc-man
-
-	CFLAGS="-Wall -Werror -O0 -ggdb3"
-)
 
 NEW_GIT_SHA=( $( git ls-remote https://github.com/ovis-hpc/ovis OVIS-4 ) )
 OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
@@ -154,53 +116,36 @@ set -e
 # remove existing clusters
 ./remove_cluster --all
 
+# build on host
 pushd ${WORK_DIR}
-if [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
-
-	INFO "== Checking out SOS =="
-	git clone -b SOS-5 https://github.com/ovis-hpc/sos
-	INFO "== Checking out OVIS =="
-	git clone https://github.com/ovis-hpc/ovis
-	INFO "== Checkout maestro =="
-	git clone ${MAESTRO_REPO}
-	[[ -z "${MAESTRO_COMMIT}" ]] || {
-		INFO "checking out maestro commit id: ${MAESTRO_COMMIT}"
-		pushd maestro
-		git checkout ${MAESTRO_COMMIT}
-		popd
-	}
-
-	INFO "Purging /opt/ovis/"
-	sudo rm -rf /opt/ovis/* # we want to keep the directory, just purge stuff inside
-
-	INFO "== Building/Installing SOS =="
-	pushd sos
-	./autogen.sh 2>&1
-	mkdir -p build
-	pushd build
-	../configure "${SOS_BUILD_OPTS[@]}" 2>&1
-	make
-	sudo make install
-	popd # back to sos
-	popd # back to ${WORK_DIR}
-
-	INFO "== Building/Installing OVIS =="
-	pushd ovis
-	./autogen.sh 2>&1
-	mkdir -p build
-	pushd build
-	../configure "${OVIS_BUILD_OPTS[@]}" 2>&1
-	make
-	sudo make install
-	popd # back to ovis
-	popd # back to ${WORK_DIR}
-
-	INFO "== Installing maestro =="
-	MAESTRO_FILES=( $(ls maestro/*.py maestro/maestro* | sort | uniq) )
-	sudo cp "${MAESTRO_FILES[@]}" ${PREFIX}/bin
-
+if [[ "$SKIP_BUILD" -ne 0 ]]; then
+	INFO "Force-skip building on host (SKIP_BUILD: ${SKIP_BUILD})"
+elif [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
+	INFO "==== start building on host ===="
+	${SCRIPT_DIR}/scripts/clean-build.sh
 else
-	INFO "skip building because GIT SHA has not changed: ${OLD_GIT_SHA}"
+	INFO "Skip building on host because GIT SHA has not changed: ${OLD_GIT_SHA}"
+fi
+
+if [[ "$SKIP_BUILD" -ne 0 ]]; then
+	INFO "Force-skip building containerized binary (SKIP_BUILD: ${SKIP_BUILD})"
+elif [[ ! -f ${CONT_PREFIX}/sbin/ldmsd ]] ||
+     ! strings ${CONT_PREFIX}/sbin/ldmsd | grep ${NEW_GIT_SHA}; then
+	TS=$(date +%s)
+	NAME="build-${TS}"
+
+	mkdir -p ${CONT_PREFIX}
+	sudo rm -rf ${CONT_PREFIX}/*
+	# build inside the container
+	INFO "==== start building in a container ===="
+	docker run --rm -i --name ${NAME} --hostname ${NAME} \
+			-e WORK_DIR \
+			-v ${CONT_PREFIX}:/opt/ovis:rw \
+			-v ${SCRIPT_DIR}:${SCRIPT_DIR}:ro \
+			ovishpc/ovis-centos-build \
+			${SCRIPT_DIR}/scripts/clean-build.sh
+else
+	INFO "Skip building containerized binary because GIT SHA has not changed: ${OLD_GIT_SHA}"
 fi
 
 export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
@@ -219,6 +164,7 @@ fi
 set +e
 INFO "==== OVIS+SOS Installation Completed ===="
 
+source ${PREFIX}/etc/profile.d/set-ovis-variables.sh
 
 INFO "==== Start batch testing ===="
 
@@ -226,7 +172,7 @@ pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
 TEST_OPTS=(
 	--prefix ${PREFIX}
-	--src ${WORK_DIR}
+	--src ${WORK_DIR_POOL}
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
@@ -236,7 +182,7 @@ declare -A RCS
 source ${SCRIPT_DIR}/test-list.sh
 # This defines DIRECT_TEST_LIST, CONT_TEST_LIST, PAPI_CONT_TEST_LIST
 
-for T in ${DIRECT_LIST[@]}; do
+for T in ${DIRECT_TEST_LIST[@]}; do
 	INFO "======== ${T} ========"
 	CMD="python3 ${T} ${TEST_OPTS[@]} --data_root ${DATA_ROOT}/${T}"
 	INFO "CMD: ${CMD}"
@@ -251,6 +197,10 @@ done 2>&1
 	LIST=( ${CONT_TEST_LIST[*]} )
 }
 
+TEST_OPTS=(
+	--prefix ${CONT_PREFIX}
+	--src ${WORK_DIR_POOL}
+)
 for T in ${LIST[*]}; do
 	INFO "======== ${T} ========"
 	CMD="python3 ${T} ${TEST_OPTS[@]} --data_root ${DATA_ROOT}/${T}"
