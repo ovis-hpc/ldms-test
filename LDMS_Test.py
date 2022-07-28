@@ -1865,7 +1865,7 @@ class LDMSDCluster(ABC):
         cont = self.containers[-1]
         return cont.exec_run(cmd, env=env)
 
-    def sbatch(self, script_path):
+    def sbatch(self, script_path, *argv):
         """Submits slurm batch job, and returns job_id on success
 
         Parameters
@@ -1886,7 +1886,8 @@ class LDMSDCluster(ABC):
         """
         _base = os.path.basename(script_path)
         _dir = os.path.dirname(script_path)
-        rc, out = self.exec_run("bash -c \"cd {} && sbatch {}\"".format(_dir, _base))
+        opts = " ".join(argv) if len(argv) else ""
+        rc, out = self.exec_run(f"bash -c \"cd {_dir} && sbatch {opts} {_base}\"")
         if rc:
             raise RuntimeError("sbatch error, rc: {}, output: {}"\
                                     .format(rc, out))
