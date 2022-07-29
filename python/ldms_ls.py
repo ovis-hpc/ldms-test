@@ -125,7 +125,7 @@ if args.lookup:
         lset = d.pop('lset', None)
         if not lset:
             continue
-        l = set2dict(lset)
+        l = lset.json_obj()
         d.update(l)
 print(json.dumps(sets, indent=2))
 sys.exit(0)
