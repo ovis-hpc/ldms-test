@@ -50,6 +50,7 @@ CONT_TEST_LIST=(
 	ldmsd_flex_decomp_test
 	ldms_set_info_test
 	slurm_sampler2_test
+	run_inside_cont_test.py
 )
 
 # List of direct (non-containerized, running on host) tests
