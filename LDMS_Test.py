@@ -2696,5 +2696,123 @@ def create_updtr_prdcr_status(name, host, port, xprt, state):
              'transport' : xprt,
              'state' : state}
 
+# Class for tests to be run insides containers
+
+import pickle
+from abc import ABC, abstractmethod
+
+class ContainerTest(ABC):
+    """The parent class of a test to be run inside a container
+
+    The test scripts that are intended to be run inside a container 
+    must define a _single_ class that inherits from ContainerTest.
+
+    If a test script contains more than one classes that are 
+    ContainerTest's children, it will not be run and an error is reported 
+    by run_inside_cont_test.py.
+    """
+
+
+    @property
+    @abstractmethod
+    def test_name(self):
+        """The test name"""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def test_suite(self):
+        """The test suite the test belongs to"""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def test_type(self):
+        """The test type"""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def test_desc(self):
+        """The test's description"""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def spec(self):
+        """The spec oject"""
+        raise NotImplementedError()
+
+    @property
+    @abstractmethod
+    def test_node_name(self):
+        """A node (container)'s hostname to run the test script
+
+        The test script author specifies the hostname of a node, listed in the spec object,
+        that will run the test script.
+        """
+        raise NotImplementedError()
+
+    # @property
+    # @abstractmethod
+    # def assertions(self):
+    #     """The list of (assertion ID, assertion name)"""
+    #     raise NotImplementedError()
+
+    def get_outdir(self):
+        return self._outdir
+
+    def set_outdir(self, outdir):
+        self._outdir = outdir
+
+    outdir = property(get_outdir, set_outdir)
+
+    @classmethod
+    def add_common_args(cls, parser):
+        G.parser = parser
+        parser.add_argument("--outdir", type = str,
+                            help = "the path to the directory to store the " \
+                                   "file containing the result and log messages")
+
+    def __init__(self, outdir = None):
+        self._outdir = outdir
+        self._assertions = {}
+
+    def load_assertions(self):
+        """Load the assertions and their results. Do not overridden
+
+        The script that runs the test scripts calls this method
+        to gather the assertions and the results.
+        """
+        with open(f"{self.outdir}/{self.test_name}.out", 'rb') as fin:
+            while True:
+                try:
+                    yield pickle.load(fin)
+                except EOFError:
+                    break
+
+    def save_assertion(self, assert_id, cond, cond_str):
+        """Save an assertion's result. Do not overridden
+
+        The test script calls the method to save an assertion's result.
+        """
+        d = {   'assert_id' : assert_id,
+                'cond' : cond,
+                'cond_str' : cond_str
+             }
+        # Director in the container
+        with open(f"{self.outdir}/{self.test_name}.out", "ab") as fout:
+            pickle.dump(d, fout)
+
+    def log(self, msg):
+        """Log a message. Do not overridden
+
+        The test script calls the method to log a message.
+        """
+        with open(f"{self.outdir}/{self.test_name}.log", "a") as fout:
+            fout.write(f"{msg}\n")
+
+#####################################################################
+
 if __name__ == "__main__":
     exec(open(os.getenv('PYTHONSTARTUP', '/dev/null')).read())
