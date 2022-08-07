@@ -384,7 +384,7 @@ def process_config_file(path = None):
     _DEFAULT_CONFIG = {
             "ldms-test": {
                 "prefix": guess_ovis_prefix(),
-                "runtime": "doker",
+                "runtime": "docker",
                 "clustername": None,
                 "user": _USER,
                 "src": None,
