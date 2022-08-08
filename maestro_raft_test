@@ -517,7 +517,7 @@ sos_check(6, t1)
 #test.add_assertion(7, "The restarted maestro becomes a follower")
 while True: # will break
     start_maestro(ldr_cont) # this was the old leader
-    time.sleep(2)
+    time.sleep(10)
     st = get_maestro_state(ldr_cont)
     if st != "FOLLOWER":
         test.assert_test(7, False, f"Expecting FOLLOWER state, but got {st}")
