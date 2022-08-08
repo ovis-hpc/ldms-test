@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -l
 #
 # SYNOPSIS:
 # Remove ${PREFIX}, checkout latest ovis, sos, maestro and build/install them.
@@ -23,8 +23,7 @@ export -f INFO
 
 set -e
 
-[[ ! -f /etc/profile ]] || source /etc/profile
-
+INFO "WORK_DIR: ${WORK_DIR}"
 mkdir -p ${WORK_DIR}
 
 MAESTRO_COMMIT=${MAESTRO_COMMIT:-}
