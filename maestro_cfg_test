@@ -388,8 +388,8 @@ for i in range(1, 9):
         break
     s = obj[keys[0]]
     # verify component_id and sniff-check MemTotal value
-    comp_id = s["metrics"]["component_id"]
-    memtotal = s["metrics"]["MemTotal"]
+    comp_id = s["data"]["component_id"]
+    memtotal = s["data"]["MemTotal"]
     if comp_id != i:
         test.assert_test(3, False, f"Expecting component_id {i}, but got {comp_id}")
         break
@@ -413,8 +413,8 @@ for i in range(1, 4):
         break
     for k, s in obj.items():
         # verify component_id and sniff-check MemTotal value
-        comp_id  = s["metrics"]["component_id"]
-        memtotal = s["metrics"]["MemTotal"]
+        comp_id  = s["data"]["component_id"]
+        memtotal = s["data"]["MemTotal"]
         expected_comp_id = int(k.replace("/meminfo", "").replace("samp-", ""))
         if comp_id != expected_comp_id:
             test.assert_test(4, False, f"Expecting component_id {expected_comp_id}, but got {comp_id}")
@@ -440,8 +440,8 @@ while True: # will break
         break
     for k, s in obj.items():
         # verify component_id and sniff-check MemTotal value
-        comp_id  = s["metrics"]["component_id"]
-        memtotal = s["metrics"]["MemTotal"]
+        comp_id  = s["data"]["component_id"]
+        memtotal = s["data"]["MemTotal"]
         expected_comp_id = int(k.replace("/meminfo", "").replace("samp-", ""))
         if comp_id != expected_comp_id:
             test.assert_test(5, False, f"Expecting component_id {expected_comp_id}, but got {comp_id}")
