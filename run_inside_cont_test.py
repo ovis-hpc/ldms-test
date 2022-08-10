@@ -33,6 +33,13 @@ def cleanup_test_data(suite):
     test_node = suite.cluster.get_container(suite.test_node_name)
     test_node.exec_run(f"rm -fr {get_test_dir_cont(suite)}")
 
+def make_test_dir(suite):
+    test_node = suite.cluster.get_container(suite.test_node_name)
+    rc, out = test_node.exec_run(f"mkdir -p {get_test_dir_cont(suite)}")
+    if rc != 0:
+        raise RuntimeError(f"Failed to create the directory {get_test_dir_cont(suite)} " \
+                   "in side the container {suite.test_node_name}. {out}")
+
 @atexit.register
 def at_exit():
     for suite in suites:
@@ -99,13 +106,14 @@ def run_suite(suite):
 
     sleep(1)
 
+    cleanup_test_data(suite)
     if args.debug:
         input("ready ...")
     log.info(f"{suite.test_name}: Running the test script")
     test_cont = cluster.get_container(suite.test_node_name)
     if test_cont is None:
         raise Exception(f"Cannot find the test container with hostname {suite.test_node_name}")
-    test_cont.exec_run(f"mkdir {get_test_dir_cont(suite)}")
+    make_test_dir(suite)
     rc, out = test_cont.exec_run(f"python3 {LDMS_TEST_SRC}/inside_cont_tests/{get_executable_name(suite)}.py " \
                                  f"--outdir={get_test_dir_cont(suite)}")
     if rc:
