@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+
+import argparse
+import atexit
+import logging
+import os
+import shutil
+import signal
+import TADA
+
+from time import sleep
+
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, assertion_id_get
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+ap = argparse.ArgumentParser(description = "Run test against ldmsd_stream's stream_dir")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+SERVER_HOSTNAME = "node"
+
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s ldms_set_info_test",
+    "type" : "NA",
+    "templates" : {
+        "node-base" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                }
+            ]
+        }
+    }, 
+    "nodes" : [
+        {
+            "hostname" : "node",
+            "!extends" : "node-base"
+        },
+    ],
+    "cap_add" : ["SYS_PTRACE", "SYS_ADMIN"],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "env" : {"TADA_ADDR" : args.tada_addr},
+    "mounts" : args.mount + [f"{args.data_root}:/db:rw"]
+}
+
+@atexit.register
+def at_exit():
+    rc = 0
+    if "test_id" in test.__dict__:
+        rc = test.finish()
+    if args.debug:
+        os._exit(rc)
+
+    if cluster is not None:
+        cluster.remove()
+    shutil.rmtree(args.data_root)
+    os._exit(rc)
+
+XPRT = "sock"
+SERVER_PORT = 10001
+CLIENT_A_PORT = 10002
+CLIENT_B_PORT = 10003
+
+class ldms_set_info_prog(object):
+    TESTCASE_IDENTIFIER = "---"
+
+    def __init__(self, cont, mode = None, xprt = None, listen_port = None,
+                connect_port = None, host = None, wait_conn_req = True):
+
+        self.prog_name = "test_ldms_set_info"
+
+        cmd = f"{self.prog_name}"
+        if xprt:
+            cmd += f" -x {xprt}"
+        if listen_port:
+            cmd += f" -p {listen_port}"
+    
+        if mode == "server":
+            cmd += " -s"
+            self.outpath = "server.out"
+        elif mode == "A":
+            cmd += f" -c {connect_port} -h {host} -A"
+            self.outpath = "client_a.out"
+        elif mode == "B":
+            cmd += f" -c {connect_port} -h {host} -B"
+            self.outpath = "client_b.out"
+        else:
+            self.outpath = "server.out"
+
+        if not wait_conn_req:
+            cmd += " -E"
+
+        self.cmd = cmd
+        self.cont = cont
+        self.exitcode = None
+        self.out = None
+        self.fout = None
+
+    def run(self, background = True):
+        if background:
+            self.exitcode, self.out = self.cont.exec_run(f"bash -c \"" \
+                                                         f"{self.cmd} > /db/{self.outpath} 2>&1 & " \
+                                                         "sleep 1; \"")
+        else:
+            self.exitcode, self.out = self.cont.exec_run(f"bash -c \"" \
+                                                         f"{self.cmd} > /db/{self.outpath} " \
+                                                         "sleep 1; \"")
+            self.out = self.out.splitlines()
+        return self.exitcode, self.out
+
+    def is_done(self, line):
+        return "DONE" in line
+
+    def is_testcase(self, line):
+        return self.TESTCASE_IDENTIFIER in line
+
+    def is_passed(self, line):
+        if "PASSED" in line:
+            return True
+        if self.exitcode == signal.SIGABRT:
+            return False
+
+    def get_testcase_name(self, line):
+        return line.split(self.TESTCASE_IDENTIFIER)[0]
+
+    def is_error_exit(self):
+        return True if self.exitcode != 0 else False
+
+    def is_output_ready(self, timeout = 5):
+        c = 0
+        while not os.path.exists(f"{args.data_root}/{self.outpath}"):
+            sleep(1)
+            c += 1
+            if c > timeout:
+                return False
+        return True
+
+def process_output(test, p):
+    suite = {}
+    with open(f"{args.data_root}/{p.outpath}", "r") as fin:
+        for l in fin:
+            if p.is_done(l):
+                break
+            if p.is_testcase(l):
+                n = p.get_testcase_name(l)
+                d = { 'cond' : p.is_passed(l), 'id' : next(id)}
+                suite[n] = d
+                test.add_assertion(d['id'], n)
+    return suite
+
+id = assertion_id_get()
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "unittest",
+                 test_name = "ldms_set_info_test",
+                 test_desc = "Test LDMS's set_info",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr
+                )
+
+suites = {}
+
+cluster = None
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+cont = cluster.get_container("node")
+
+# ldms_set_info APIs
+p = ldms_set_info_prog(cont = cont)
+p.run(background = False)
+
+if p.is_output_ready():
+    suites.update(process_output(test, p))
+else:
+    raise RuntimeError("Failed to get an output")
+
+# Lookup the set_info from the server
+server = ldms_set_info_prog(cont, xprt = XPRT, listen_port = SERVER_PORT, mode = "server")
+server.run()
+client = ldms_set_info_prog(cont, xprt = XPRT, listen_port = CLIENT_A_PORT, mode = "A",
+                                 connect_port = SERVER_PORT, host = SERVER_HOSTNAME,
+                                 wait_conn_req = False)
+sleep(0.5)
+client.run()
+if client.is_output_ready():
+    suites.update(process_output(test, client))
+else:
+    raise RuntimeError("failed to get an output")
+
+# Lookup a collected set
+server = ldms_set_info_prog(cont, xprt = XPRT, listen_port = SERVER_PORT, mode = "server")
+server.run()
+client_a = ldms_set_info_prog(cont, xprt = XPRT, listen_port = CLIENT_A_PORT,
+                              connect_port = SERVER_PORT, host = SERVER_HOSTNAME,
+                              mode = "A")
+client_a.run()
+sleep(0.5)
+client_b = ldms_set_info_prog(cont, xprt = XPRT, listen_port = CLIENT_B_PORT,
+                              connect_port = CLIENT_A_PORT, host = SERVER_HOSTNAME,
+                              mode = "B", wait_conn_req = False) 
+client_b.run()
+if client_b.is_output_ready():
+    suites.update(process_output(test, client_b))
+
+test.start()
+for k, d in suites.items():
+    test.assert_test(d['id'], d['cond'], "-")

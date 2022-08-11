@@ -48,6 +48,7 @@ CONT_TEST_LIST=(
 	updtr_start_test
 	updtr_status_test
 	ldmsd_flex_decomp_test
+	ldms_set_info_test
 )
 
 # List of direct (non-containerized, running on host) tests
