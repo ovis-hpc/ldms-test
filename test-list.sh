@@ -49,6 +49,7 @@ CONT_TEST_LIST=(
 	updtr_status_test
 	ldmsd_flex_decomp_test
 	ldms_set_info_test
+	slurm_sampler2_test
 )
 
 # List of direct (non-containerized, running on host) tests
