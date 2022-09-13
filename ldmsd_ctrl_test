@@ -216,11 +216,12 @@ time.sleep(5)
 
 #test.add_assertion(1, "ldmsd_controller interactive session")
 while ENABLE_LDMSD_CONTROLLER:
-    cmd = "ldmsd_controller --host agg-11 --port 10000 --xprt sock"
+    cmd = "stty cols 512 && ldmsd_controller --host agg-11 --port 10000 --xprt sock"
     ldmsd_controller = headnode.exec_interact(["/bin/bash", "-c", cmd])
     time.sleep(1.0)
     out1 = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out1.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [ "Welcome to the LDMSD control processor",
                "sock:agg-11:10000>" ]
     if lines != elines:
@@ -232,11 +233,12 @@ while ENABLE_LDMSD_CONTROLLER:
 
 #test.add_assertion(2, "ldmsctl interactive session")
 while ENABLE_LDMSCTL:
-    cmd = "ldmsctl -h agg-12 -p 10000 -x sock"
+    cmd = "stty cols 512 && ldmsctl -h agg-12 -p 10000 -x sock"
     ldmsctl = headnode.exec_interact(["/bin/bash", "-c", cmd])
     time.sleep(1.0)
     out2 = ldmsctl.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out2.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = ["ldmsctl>"]
     if lines != elines:
         test.assert_test(2, False, "Unexpected welcome message: {}"\
@@ -252,6 +254,7 @@ while ENABLE_LDMSD_CONTROLLER:
     time.sleep(0.5)
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "The producer specified does not exist.", "sock:agg-11:10000>"]
     if lines != elines:
         test.assert_test(3, False, "Unexpected output: {}".format(out))
@@ -266,6 +269,7 @@ while ENABLE_LDMSCTL:
     time.sleep(0.5)
     out = ldmsctl.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "The producer specified does not exist.", "ldmsctl>"]
     if lines != elines:
         test.assert_test(4, False, "Unexpected output: {}".format(out))
@@ -280,6 +284,7 @@ while ENABLE_LDMSD_CONTROLLER:
     time.sleep(0.5)
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "*** Unknown syntax: bogus", "sock:agg-11:10000>"]
     if lines != elines:
         test.assert_test(5, False, "Unexpected output: {}".format(out))
@@ -294,6 +299,7 @@ while ENABLE_LDMSCTL:
     time.sleep(0.5)
     out = ldmsctl.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "Unrecognized command 'bogus'", "ldmsctl>"]
     if lines != elines:
         test.assert_test(6, False, "Unexpected output: {}".format(out))
@@ -308,6 +314,7 @@ while ENABLE_LDMSD_CONTROLLER:
     time.sleep(0.5)
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "Failed to load the plugin 'bogus'.", "sock:agg-11:10000>"]
     if len(lines) != 3 or lines[0] != elines[0] \
                        or lines[2] != elines[2] \
@@ -324,6 +331,7 @@ while ENABLE_LDMSCTL:
     time.sleep(0.5)
     out = ldmsctl.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
+    lines = [ l for l in lines if l ]
     elines = [cmd, "Failed to load the plugin 'bogus'.", "ldmsctl>"]
     if len(lines) != 3 or lines[0] != elines[0] \
                        or lines[2] != elines[2] \
@@ -345,24 +353,27 @@ def prdcr_updtr_routine(_id, ls_host, ctrl, prompt):
         ctrl.write(c)
         time.sleep(0.5)
     _out = ctrl.read(0.5)
-    out = _out.replace(" \r", "").splitlines()
-    eout = prompt.join(cmds + ['']).splitlines()
+    out = [cs_rm(l.strip()) for l in _out.splitlines()]
+    out = [ l for l in out if l ]
+    eout = prompt.join(cmds + ['']).strip().splitlines()
     if out != eout:
         test.assert_test(_id, False, "Unexpected output: {}".format(_out))
         return
-    time.sleep(4)
+    time.sleep(10)
     ctrl.write("prdcr_status\n")
     _out = ctrl.read(0.5)
-    out = _out.splitlines()
-    if not re.match(".*\sCONNECTED\s*.*", out[3]) \
-            or not re.match(".*\snode-1/meminfo\s.*\sREADY\s*.*", out[4]):
+    out = [cs_rm(l.strip()) for l in _out.splitlines()]
+    out = [ l for l in out if l ]
+    if not re.match(".*\sCONNECTED.*", out[3]) \
+            or not re.match("node-1/meminfo\s.*\sREADY\s*.*", out[4]):
         test.assert_test(_id, False, "Unexpected prdcr status: {}".format(_out))
         return
     ctrl.write("updtr_status\n")
     _out = ctrl.read(0.5)
-    out = _out.splitlines()
+    out = [cs_rm(l.strip()) for l in _out.splitlines()]
+    out = [ l for l in out if l ]
     if not re.match("updtr\s+.*\sRUNNING\s*.*", out[3]) \
-            or not re.match("\s+prdcr\s+.*\sCONNECTED\s*.*", out[4]):
+            or not re.match("prdcr\s+.*\sCONNECTED.*", out[4]):
         test.assert_test(_id, False, "Unexpected updtr status: {}".format(_out))
         return
     _ts0 = time.time()
