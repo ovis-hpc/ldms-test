@@ -291,7 +291,7 @@ cluster.start_daemons()
 cluster.make_known_hosts()
 
 log.info("... wait a bit to make sure ldmsd's are up")
-time.sleep(8)
+time.sleep(15)
 
 log.info("-- ldms_ls to agg-2 --")
 result = set(ldms_ls("agg-2"))
