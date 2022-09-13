@@ -984,16 +984,6 @@ class LDMSDContainer(ABC):
         rc, out = self.exec_run(cmd, env = env_dict(spec["env"]))
         if rc:
             raise RuntimeError("ldmsd exec error {}: {}".format(rc, out))
-        t0 = time.time()
-        while time.time() - t0 < 5: # give it 5 sec max
-            rc, pid = self.exec_run("pgrep ldmsd")
-            if rc == 0:
-                break
-            time.sleep(0.1)
-        # timedwait until ldmsd listen to the specified port
-        if rc:
-            raise RuntimeError("Cannot get ldmsd PID")
-        pid = int(pid)
         port = spec.get("listen_port")
         if not port:
             lstn = spec.get("listen")
