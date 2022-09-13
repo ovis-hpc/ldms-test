@@ -137,6 +137,8 @@ class Container(LDMSDContainer):
         return True
 
     def exec_run(self, cmd, env=None, user=None):
+        if type(cmd) != list:
+            cmd = [ '/bin/bash', '-c', cmd ]
         return self._exec_run(cmd, environment=env, user=user)
 
     def _exec_run(self, *args, **kwargs):
