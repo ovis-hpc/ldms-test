@@ -11,7 +11,7 @@ TARGETS = $(BUILDDIR)/libutil.so \
 	  $(BUILDDIR)/libtest_store.so
 
 LDMSD_VERSION = $(shell /usr/bin/strings ${OVIS_PREFIX}/sbin/ldmsd | \
-	      grep OVIS_LDMS_VERSION | \
+	      grep -E 'OVIS_LDMS_VERSION|LDMSD_VERSION' | \
 	      sed 's/.*"\(.*\)"/\1/' )
 LDMSD_MAJOR_VERSION = $(shell echo ${LDMSD_VERSION} | cut -d . -f 1)
 LDMSD_MINOR_VERSION = $(shell echo ${LDMSD_VERSION} | cut -d . -f 2)
