@@ -141,7 +141,6 @@ spec = {
     "env" : {
         "LD_LIBRARY_PATH" : TADA_LIB + ":/opt/ovis/lib:/opt/ovis/lib64",
         "LDMSD_PLUGIN_LIBPATH" : TADA_LIB + ":/opt/ovis/lib/ovis-ldms:/opt/ovis/lib64/ovis-ldms",
-        "PYTHONPATH" : "/opt/ovis/lib/python3.6/site-packages",
     },
     "mounts" : args.mount + [
         "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), TADA_SRC),
