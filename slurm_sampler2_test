@@ -409,6 +409,7 @@ def verify_node_result(cont, results, jobs, tasks):
         return (False, f"The job list length {len(job_list)} is not the expected value {len(exp_job_list)}.")
     if len(task_list) != len(exp_task_list):
         return (False, f"The task list length {len(task_list)} is not the expected value {len(exp_task_list)}.")
+    job_list.sort(key = lambda x: x['job_id']) # sort by job_id
     for x, e in zip(job_list, exp_job_list):
         b, r = verify_job(x, e)
         if not b:
@@ -478,7 +479,7 @@ int main(int argc, char **argv)
     int time = 5; /* 5 seconds */
     int interval = 5; /* Report every 5 seconds */
     int i = interval;
-    
+
     if (argc > 1)
         time = atoi(argv[1]);
 
@@ -551,7 +552,7 @@ b, r = verify_results(nodes, results, jobs, tasks)
 test.assert_test(JOB_MULTI_TASKS, b, "The collected job data is correct." if b else r)
 
 # ---------------- job 3 ------------------
-job_3 = cluster.sbatch(f"/db/job.sh 1", 
+job_3 = cluster.sbatch(f"/db/job.sh 1",
                             "--nodelist=node-[1-4]",
                             f"--ntasks-per-node={CPU_PER_NODE}")
 sleep(WAIT_FOR_JOB_INIT)
@@ -571,7 +572,7 @@ test.assert_test(EXPAND_HEAP, b, "The collected job data is correct." if b else 
 
 # -------------------- job 4 ---------------------------
 # Get ldms_ls of node-4 to verify that job_2 was removed.
-# Make sure that the last job was submitted 
+# Make sure that the last job was submitted
 # after the third job has been completed for at least DELETE_JOB_TIME.
 sleep(DELETE_JOB_TIME + 1)
 job_4 = cluster.sbatch("/db/job.sh", "--nodelist=node-[1-4]")
