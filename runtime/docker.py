@@ -351,6 +351,29 @@ class Network(object):
     def connect(self, container, *args, **kwargs):
         return self.obj.connect(container, *args, **kwargs)
 
+def get_host_tz():
+    # try TZ env first
+    try:
+        tz = os.getenv('TZ')
+        if tz is not None:
+            return tz
+    except:
+        pass
+    # try /etc/timezone
+    try:
+        tz = open('/etc/timezone').read().strip()
+        if tz:
+            return tz
+    except:
+        pass
+    # then try /etc/localtime link
+    try:
+        tz = '/'.join(os.readlink('/etc/localtime').split('/')[-2:])
+        return tz
+    except:
+        pass
+    # otherwise, UTC
+    return 'Etc/UTC'
 
 class DockerCluster(LDMSDCluster):
     """Docker Cluster
@@ -453,6 +476,10 @@ class DockerCluster(LDMSDCluster):
         if type(nodes) == int:
             nodes = [ "node-{}".format(i) for i in range(0, nodes) ]
         lbl = dict(labels)
+        _env = env
+        env = dict(_env) # shallow copy env
+        host_tz = get_host_tz()
+        env.setdefault('TZ', host_tz)
         cfg = dict(name = name,
                    image = image,
                    env = env,
