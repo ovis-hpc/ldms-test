@@ -370,6 +370,7 @@ srun /db/prog
 cont.write_file("/db/job.sh", code)
 
 log.info("-- Start daemons --")
+agg2.exec_run(f"mkdir -p {STORE_ROOT}")
 cluster.start_daemons()
 cluster.make_known_hosts()
 
