@@ -67,7 +67,7 @@ class ContainerTTY(LDMSDContainerTTY):
                 active = 0
                 time.sleep(idle_timeout)
         val = bio.getvalue()
-        return val.decode() if val else None
+        return val.decode() if val is not None else None
 
     def write(self, data):
         if type(data) == str:
