@@ -385,7 +385,7 @@ dt = [ t1 - t0 for t1, t0 in zip(ts[1:], ts[:-1]) ]
 rdt = [ math.floor( t + 0.5 ) for t in dt ]
 srdt = set(rdt)
 expected = set([INTERVAL0//1000000, INTERVAL1//1000000, INTERVAL2//1000000])
-if srdt == expected:
+if expected <= srdt:
     test.assert_test(5, True, "timestamp differences in SOS show all 3 intervals")
 else:
     test.assert_test(5, False, "Expecting {expected} but got {srdt}".format(**vars()))
@@ -398,7 +398,7 @@ flogs = [ l for l in logs if l.find("oversampled") >= 0 ]
 if flogs:
     l = flogs[-1]
     lts_txt = ':'.join( l.split(':', 3)[:-1] )
-    lts = time.strptime(ts_txt, "%c")
+    lts = time.strptime(lts_txt, "%c")
     lts = time.mktime(lts) # last oversampled timestamp
     t = ts[-1] # last timestamp from sos
     if t - lts < INTERVAL2/1e6:
