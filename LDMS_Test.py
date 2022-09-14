@@ -1761,20 +1761,20 @@ class LDMSDCluster(ABC):
             "SlurmUser=root\n"\
             "StateSaveLocation=/var/spool\n"\
             "SwitchType=switch/none\n"\
-            "TaskPlugin=task/none\n"\
-            "TaskPluginParam=Sched\n"\
+            "#TaskPlugin=task/none\n"\
+            "#TaskPluginParam=Sched\n"\
             "InactiveLimit=0\n"\
             "KillWait=30\n"\
             "MinJobAge=300\n"\
             "SlurmctldTimeout=120\n"\
             "SlurmdTimeout=300\n"\
             "Waittime=0\n"\
-            "FastSchedule=1\n"\
+            "#FastSchedule=1\n"\
             "SchedulerType=sched/builtin\n"\
             "SelectType=select/cons_res\n"\
             "SelectTypeParameters=CR_CPU\n"\
             "AccountingStorageType=accounting_storage/none\n"\
-            "AccountingStoreJobComment=YES\n"\
+            "#AccountingStoreJobComment=YES\n"\
             "ClusterName=cluster\n"\
             "JobCompType=jobcomp/none\n"\
             "JobAcctGatherFrequency=30\n"\
@@ -1959,6 +1959,7 @@ class LDMSDCluster(ABC):
                 _add LD_LIBRARY_PATH $PREFIX/lib64/ovis-ldms
                 _add MANPATH $PREFIX/share/man
                 _add PYTHONPATH $(echo $PREFIX/lib/python*/site-packages)
+                _add PYTHONPATH $(echo $PREFIX/lib/python*/dist-packages)
 
                 export ZAP_LIBPATH=$PREFIX/lib/ovis-ldms
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-ldms
