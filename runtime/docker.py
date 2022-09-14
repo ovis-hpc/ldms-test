@@ -562,7 +562,7 @@ class DockerCluster(LDMSDCluster):
         if prefix:
             mounts += ["{}:/opt/ovis:ro".format(prefix)]
             # handling python path
-            pp = glob.glob(prefix+'/lib*/python*/site-packages')
+            pp = glob.glob(prefix+'/lib*/python*/*-packages')
             pp = [ p.replace(prefix, '/opt/ovis', 1) for p in pp ]
             _PYTHONPATH = ':'.join(pp)
         if not _PYTHONPATH:
