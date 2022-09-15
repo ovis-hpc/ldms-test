@@ -18,6 +18,9 @@ mkdir -p .ldms-test
 mkdir -m 0755 var run
 mkdir -p var/empty/sshd
 mkdir -p var/{log,lib}/munge
+chown munge:munge var/{log,lib}/munge
+chmod 755 var/log
+chmod 755 var/lib
 mkdir -p var/spool/slurm/{ctld,d}
 mkdir -m 0755 -p run/munge
 mkdir -m 0755 -p munge
@@ -25,6 +28,8 @@ mkdir -p etc/slurm
 mkdir -p etc/profile.d
 mkdir -p store
 mkdir -p var/lib/etcd
+mkdir -p etc/munge
+chown munge:munge etc/munge
 
 # prep files
 touch etc/ldmsd.conf
@@ -34,7 +39,7 @@ ldconfig -C etc/ld.so.cache
 
 # bind
 ENTRIES=( .ldms-test etc/ldmsd.conf etc/profile.d/ovis.sh etc/ld.so.cache
-	  etc/slurm munge run var store )
+	  etc/slurm munge run var store etc/munge )
 for E in ${ENTRIES[*]}; do
 	mount --bind $E /$E
 done

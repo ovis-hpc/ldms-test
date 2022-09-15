@@ -65,6 +65,8 @@ INFO "  making etc/ld.so.conf.d/ovis.conf"
 cat > etc/ld.so.conf.d/ovis.conf <<EOF
 /opt/ovis/lib
 /opt/ovis/lib64
+/opt/ovis/lib/ovis-ldms
+/opt/ovis/lib64/ovis-ldms
 EOF
 
 INFO " correcting etc/shadow, etc/gshadow permission (for sshd in containers)"
