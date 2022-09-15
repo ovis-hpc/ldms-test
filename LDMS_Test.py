@@ -2125,17 +2125,19 @@ class Munged(object):
         if rc:
             raise RuntimeError("Cannot create directory '{}', rc: {}, out: {}"\
                                .format(_dir, rc, out))
-        self.cont.chown("root:root", _dir)
+        self.cont.chown("munge:munge", _dir)
 
     def _prep_key_file(self):
         _key = self.key
         if not _key: # key not given
             rc, out = self.cont.exec_run("ls {}".format(self.key_file))
             if rc == 0: # file existed, and no key given .. use existing key
+                self.cont.chown("munge:munge", self.key_file)
                 return
             _key = "0"*4096 # use default key if key_file not existed
         self.cont.write_file(self.key_file, _key)
         self.cont.chmod(0o600, self.key_file)
+        self.cont.chown("munge:munge", self.key_file)
 
     def get_pid(self):
         """PID of the running munged, `None` if it is not running"""
@@ -2156,14 +2158,16 @@ class Munged(object):
         """Start the daemon"""
         if self.is_running():
             return # do nothing
-        self.cont.exec_run("chown -R root:root /var/log/munge/ /var/lib/munge/ /etc/munge/")
+        rc, out = self.cont.exec_run("munged --help | grep pid-file")
+        has_pidfile = (rc == 0)
         self._prep_dom()
         self._prep_key_file()
         cmd = "munged"
         if self.dom:
-            cmd += " -S {sock} --pid-file {pid} --key-file {key}"\
-                   .format( sock = self.sock_file, pid = self.pid_file,
-                            key = self.key_file )
+            cmd += f" -S {self.sock_file} --key-file {self.key_file}"
+            if has_pidfile:
+                cmd += f" --pid-file {self.pid_file}"
+        cmd = f"su -s /bin/bash munge -c '{cmd}'"
         rc, out = self.cont.exec_run(cmd)
         if rc:
             raise RuntimeError("`{}` error, rc: {}, out: {}"\
