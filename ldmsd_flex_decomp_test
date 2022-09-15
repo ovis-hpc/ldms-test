@@ -289,7 +289,7 @@ spec = {
     ], # nodes
 
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ldms-kafka",
+    "image": args.image,
     "ovis_prefix": PREFIX,
     "env" : {
         "FOO": "BAR",
