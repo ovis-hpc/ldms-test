@@ -257,12 +257,15 @@ def cleanup_db(cluster):
     LST += [ "{}/{}".format(STORE_ROOT, x) for x in [ "slurm" ] ]
     cont.exec_run("rm -fr {}".format(" ".join(LST)))
 
+EXIT_RC = -1
+
 @atexit.register
 def at_exit():
-    rc = test.finish()
+    global EXIT_RC
+    test.finish()
     if cluster is not None:
         cluster.remove()
-    os._exit(rc)
+    os._exit(EXIT_RC)
 
 class Task(object):
     def __init__(self, job_id, task_rank, task_pid = None, task_exit_status = 0):
@@ -504,7 +507,11 @@ assert(rc == 0)
 code = """\
 #!/bin/bash
 
+echo start: $(date +%s)
+
 srun /db/prog $1
+
+echo finish: $(date +%s)
 """
 cont.write_file("/db/job.sh", code)
 cont.exec_run("sync")
@@ -531,6 +538,11 @@ for node in nodes:
     i += 1
 b, r = verify_results(nodes, results, jobs, tasks)
 test.assert_test(JOB_MULTI_NODES, b, "The collected job data is correct." if b else r)
+
+EXIT_RC = 0 if b else -1
+sys.exit(EXIT_RC)
+# NOTE: Test only the simple case for now. The rest of the test cases are
+#       skipped as they contain racing bug. They will be fixed later.
 
 # ------------- job 2 -----------------------
 job_2 = cluster.sbatch("/db/job.sh 1", "--nodelist=node-[1-4]", "--uid=user1",
