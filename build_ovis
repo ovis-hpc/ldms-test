@@ -47,7 +47,9 @@ else:
 ap = argparse.ArgumentParser(description = "Build OVIS for ldms-test" )
 add_common_args(ap)
 ap.add_argument("--sos-src", type=str,
-                help = "SOS source directory.")
+                help = "SOS source directory (on host).")
+ap.add_argument("--maestro-src", type=str,
+                help = "maestro source directory (on host).")
 args = ap.parse_args()
 process_args(args)
 
@@ -57,6 +59,7 @@ PREFIX = args.prefix
 SRC = args.src
 SOS_SRC = args.sos_src
 DB = args.data_root
+MAESTRO_SRC = args.maestro_src
 
 if not SRC:
     log.error("--src is required")
@@ -72,6 +75,13 @@ if ret.returncode:
 
 COMMIT_ID = ret.stdout.decode().split(' ', 1)[0]
 CLUSTERNAME = "{}-{}-{:.7}".format(USER, "build_ovis", COMMIT_ID)
+
+if MAESTRO_SRC:
+    if MAESTRO_SRC[0] != "/":
+        MAESTRO_SRC = os.path.realpath(MAESTRO_SRC)
+    maestro_mount = [ f"{MAESTRO_SRC}:{MAESTRO_SRC}:rw" ]
+else:
+    maestro_mount = []
 
 #### spec #### -------------------------------------------------------
 spec = {
@@ -92,14 +102,14 @@ spec = {
 
     #"image": "ovis-centos-build:slurm",
     "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
-    "image": "ovis-centos-build",
+    "image": args.image,
     "env" : { "FOO": "BAR" },
     "mounts": [
         "{}:/opt/ovis:rw".format(PREFIX),
         "{}:/db:rw".format(DB),
         "{0}:{0}:rw".format(SRC),
         "{0}:{0}:rw".format(SOS_SRC),
-    ] + args.mount
+    ] + maestro_mount + args.mount
 }
 
 #### test definition ####
@@ -129,11 +139,26 @@ cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
 build = cluster.get_container("build")
 
-build.write_file("/db/build.sh", """\
+maestro_build = f"""\
+pushd {MAESTRO_SRC}
+pip3 install --prefix /opt/ovis .
+pushd /opt/ovis
+if [[ -d local ]]; then
+	mv local/* ./
+	rmdir local
+fi
+popd # /opt/ovis
+popd # MAESTRO_SRC
+
+""" if MAESTRO_SRC else ""
+
+build.write_file("/db/build.sh", f"""\
 #!/bin/bash
 set -x
 set -e
-
+""" +
+maestro_build +
+f"""
 # SOS
 [[ -f /opt/ovis/bin/sos_cmd ]] || {{
     pushd {SOS_SRC}
@@ -156,27 +181,42 @@ pushd /db/build
 CFLAGS=( -ggdb3 -O0 -Wall -Werror )
 OPTIONS=(
         --prefix=/opt/ovis
-        --with-sos=/opt/ovis
-        --enable-sos
+
+	--enable-python
 	--enable-etc
 	--enable-doc
 	--enable-doc-man
+
+	# tests
 	--enable-zaptest
 	--enable-ldms-test
 	--enable-test_sampler
 	--enable-list_sampler
+	--enable-record_sampler
+
+	# extra xprt
+	--enable-rdma
+
+	# auth
 	--enable-munge
+
+	# stores
+	--enable-sos
+	--with-sos=/opt/ovis
 	--enable-store-app
+	--with-kafka=yes
+
+	# samplers
 	--enable-tutorial-sampler
 	--enable-tutorial-store
 	--enable-app-sampler
 	--enable-papi
-        --enable-rdma
+
 )
 {SRC}/configure ${{OPTIONS[*]}} CFLAGS="${{CFLAGS[*]}}"
 make
 make install
-""".format(**globals())
+"""
 ) # build.write_file /db/build.sh
 
 log.info("-- Building --")
