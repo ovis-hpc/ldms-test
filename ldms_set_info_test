@@ -43,7 +43,7 @@ spec = {
                 }
             ]
         }
-    }, 
+    },
     "nodes" : [
         {
             "hostname" : "node",
@@ -62,9 +62,6 @@ def at_exit():
     rc = 0
     if "test_id" in test.__dict__:
         rc = test.finish()
-    if args.debug:
-        os._exit(rc)
-
     if cluster is not None:
         cluster.remove()
     shutil.rmtree(args.data_root)
@@ -88,7 +85,7 @@ class ldms_set_info_prog(object):
             cmd += f" -x {xprt}"
         if listen_port:
             cmd += f" -p {listen_port}"
-    
+
         if mode == "server":
             cmd += " -s"
             self.outpath = "server.out"
@@ -211,7 +208,7 @@ client_a.run()
 sleep(0.5)
 client_b = ldms_set_info_prog(cont, xprt = XPRT, listen_port = CLIENT_B_PORT,
                               connect_port = CLIENT_A_PORT, host = SERVER_HOSTNAME,
-                              mode = "B", wait_conn_req = False) 
+                              mode = "B", wait_conn_req = False)
 client_b.run()
 if client_b.is_output_ready():
     suites.update(process_output(test, client_b))
