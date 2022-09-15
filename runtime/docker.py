@@ -18,7 +18,7 @@ from io import StringIO, BytesIO
 from distutils.version import LooseVersion
 
 from LDMS_Test import cached_property, LDMSDContainerTTY, LDMSDContainer, \
-                      LDMSDCluster, Spec, env_dict
+                      LDMSDCluster, Spec, env_dict, cs_rm
 
 # `D` Debug object to store values for debugging
 class Debug(object): pass
@@ -67,7 +67,7 @@ class ContainerTTY(LDMSDContainerTTY):
                 active = 0
                 time.sleep(idle_timeout)
         val = bio.getvalue()
-        return val.decode() if val is not None else None
+        return cs_rm(val.decode()) if val is not None else None
 
     def write(self, data):
         if type(data) == str:
