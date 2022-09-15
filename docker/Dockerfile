@@ -26,7 +26,9 @@ yum -y install which openssh-server gdb gdb-gdbserver iproute \
 	       libuuid-devel \
 	       librdkafka-devel \
 	       slurm slurm-devel \
+	       slurm-slurmd slurm-slurmctld \
 	       munge munge-devel \
+	       java-11-openjdk \
 	       ; \
 yum -y group install "Development Tools" ; \
 yum clean all ; \
@@ -124,3 +126,9 @@ RUN /bin/bash -c "\
 yum install -y pssh ; \
 yum clean all ; \
 "
+
+RUN set -e ;\
+    pushd /opt/ ;\
+    curl -LO https://archive.apache.org/dist/kafka/2.1.0/kafka_2.12-2.1.0.tgz ;\
+    tar xzf kafka_2.12-2.1.0.tgz ; \
+    mkdir kafka_2.12-2.1.0/logs/ ;
