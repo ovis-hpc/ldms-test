@@ -63,6 +63,15 @@ pushd weekly-report
 git fetch
 git reset --hard origin/master
 cp ${WORK_DIR}/cygnus-weekly.log test-all.log
+if [[ -d ${WORK_DIR}/test-log ]]; then
+	if [[ -d test-log ]]; then
+		rm -rf test-log
+	fi
+	cp -r ${WORK_DIR}/test-log ./
+	cp ${WORK_DIR}/summary.md ./
+	git add test-log
+	git add summary.md
+fi
 
 if TP=$(grep 'Total tests passed' test-all.log); then
 	TP=${TP#Total tests passed: }
