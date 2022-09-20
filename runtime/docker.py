@@ -36,6 +36,8 @@ def get_docker_clients():
     nodes = dc.nodes.list()
     addrs = [ n.attrs["Description"]["Hostname"] for n in nodes ]
     addrs.sort()
+    if len(addrs) == 1:
+            return [ dc ]
     return [ docker.DockerClient(base_url = "tcp://{}:2375".format(a)) \
                     for a in addrs ]
 
