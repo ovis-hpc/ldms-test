@@ -199,7 +199,8 @@ fi
 if [[ "$SKIP_BUILD" -ne 0 ]]; then
 	INFO "Force-skip building containerized binary (SKIP_BUILD: ${SKIP_BUILD})"
 elif [[ ! -f ${CONT_OVIS}/sbin/ldmsd ]] ||
-     ! strings ${CONT_OVIS}/sbin/ldmsd | grep ${NEW_GIT_SHA}; then
+     [[ "${FORCE_BUILD}0" -gt 0 ]] ||
+     ! strings ${CONT_OVIS}/sbin/ldmsd | grep ${NEW_GIT_SHA} ; then
 	pushd ${LDMS_CONTAINERS_DIR}
 	sed -i "s|^\\s*OVIS=.*|OVIS=${CONT_OVIS}|" config.sh
 	sed -i "s|^\\s*OVIS_REPO=.*|OVIS_REPO=${OVIS_REPO}|" config.sh
@@ -255,12 +256,28 @@ if [[ -z "$HAVE_RDMA" ]]; then
 	DIRECT_TEST_LIST=( )
 fi
 
+append_summary() {
+	local K=$1
+	local RC=$2
+	if (( $RC == 0 )); then
+		V_TEX='$\\textcolor{lightgreen}{\\text{PASSED}}$'
+	else
+		V_TEX='$\\textcolor{red}{\\text{FAILED}}$'
+	fi
+	echo -e "* [${K}](test-log/${K}.log): ${V_TEX}" >> ${SUMMARY_FILE}
+}
+
+echo -e "Test Summary" > ${SUMMARY_FILE}
+echo -e "============" >> ${SUMMARY_FILE}
+
 for T in ${DIRECT_TEST_LIST[@]}; do
 	INFO "======== ${T} ========"
 	CMD="python3 ${T} ${TEST_OPTS[@]} --data_root ${DATA_ROOT}/${T}"
 	INFO "CMD: ${CMD}"
 	${CMD} |& tee ${TEST_LOG_DIR}/${T}.log
-	RCS["$T"]=$?
+	RC=$?
+	RCS["$T"]=$RC
+	append_summary $T $RC
 	INFO "----------------------------------------------"
 done 2>&1
 
@@ -281,7 +298,9 @@ for T in ${LIST[*]}; do
 	CMD="python3 ${T} ${TEST_OPTS[@]} --data_root ${DATA_ROOT}/${T}"
 	INFO "CMD: ${CMD}"
 	${CMD} |& tee ${TEST_LOG_DIR}/${T}.log
-	RCS["$T"]=$?
+	RC=$?
+	RCS["$T"]=$RC
+	append_summary $T $RC
 	sleep 10 # allow some clean-up break between tests
 	INFO "----------------------------------------------"
 	./remove_cluster --all
@@ -295,7 +314,9 @@ for T in "${CONT_TEST_LIST[@]}"; do
 	CMD="${LDMS_CONTAINERS_DIR}/test/${T}/test.sh"
 	INFO "CMD: ${CMD}"
 	${CMD} |& tee ${TEST_LOG_DIR}/cont-${T}.log
-	RCS["cont-$T"]=$?
+	RC=$?
+	RCS["cont-$T"]=$RC
+	append_summary "cont-$T" $RC
 	sleep 10 # allow some clean-up break between tests
 	INFO "----------------------------------------------"
 done
@@ -305,21 +326,16 @@ export GREEN='\033[01;32m'
 export RESET='\033[0m'
 INFO "==== Summary ===="
 N=${#RCS[*]}
-echo -e "Test Summary" > ${SUMMARY_FILE}
-echo -e "============" >> ${SUMMARY_FILE}
 for K in "${!RCS[@]}"; do
 	V=${RCS["$K"]}
 	if (( $V == 0 )); then
 		PASSED=$((PASSED+1))
 		V_COLOR="${GREEN}PASSED${RESET}"
-		V_TEX='$\\textcolor{lightgreen}{\\text{PASSED}}$'
 	else
 		FAILED=$((FAILED+1))
 		V_COLOR="${RED}FAILED${RESET}"
-		V_TEX='$\\textcolor{red}{\\text{FAILED}}$'
 	fi
 	echo -e "${K}: ${V_COLOR}"
-	echo -e "* [${K}](test-log/${K}.log): ${V_TEX}" >> ${SUMMARY_FILE}
 done
 
 echo "${PASSED}" > "$PASSED_FILE"
