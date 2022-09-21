@@ -187,6 +187,9 @@ spec = {
     ] + [
         {
             "hostname" : "agg-2",
+            "tmpfs": [
+                "/store",
+            ],
             "daemons" : [
                 {
                     "name" : "sshd",

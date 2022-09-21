@@ -414,8 +414,9 @@ class DockerCluster(LDMSDCluster):
 
     @classmethod
     def _create(cls, spec):
-        kwargs = cls.spec_to_kwargs(Spec(spec))
-        return cls.__create(**kwargs)
+        sp = Spec(spec)
+        kwargs = cls.spec_to_kwargs(sp)
+        return cls.__create(spec=sp, **kwargs)
 
     @classmethod
     def __create(cls, name, image = "centos:7", nodes = 8,
@@ -424,7 +425,8 @@ class DockerCluster(LDMSDCluster):
                     cap_add = [],
                     cap_drop = [],
                     subnet = None,
-                    host_binds = {}):
+                    host_binds = {},
+                    spec = None):
         """Create virtual cluster with docker network and service
 
         If the docker network existed, this will failed. The hostname of each
@@ -540,6 +542,15 @@ class DockerCluster(LDMSDCluster):
                 idx += 1
                 hostname = node
                 cont_name = "{}-{}".format(name, node)
+                tmpfs = None
+                try:
+                    spec_nodes = spec["nodes"]
+                    for _n in spec_nodes:
+                        if _n["hostname"] == hostname:
+                            tmpfs = _n.get("tmpfs")
+                            break
+                except:
+                    pass
                 cont_param = dict(
                         image = image,
                         name = cont_name,
@@ -552,6 +563,14 @@ class DockerCluster(LDMSDCluster):
                         cap_drop = cap_drop,
                         #network = name,
                         hostname = hostname,
+                        ulimits = [
+                            docker.types.Ulimit(
+                                name = "nofile",
+                                soft = 1000000,
+                                hard = 1000000,
+                            )
+                        ],
+                        tmpfs = tmpfs,
                     )
                 binds = host_binds.get(hostname)
                 if binds:
