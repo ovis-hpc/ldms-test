@@ -5,14 +5,14 @@ import atexit
 import json
 import logging
 import os
-import TADA
 import sys
+import TADA
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, parse_ldms_ls, \
                       assertion_id_get
-from time import sleep
+from time import sleep, time
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be imported as a module")
@@ -52,12 +52,12 @@ process_args(args)
 #### config variables ####
 LDMSD_XPRT = "sock"
 LDMSD_PORT = "10001"
-USERS = ["user1"]
+USERS = {"user1": 1001 }
 CPU_PER_NODE = 2
-DELETE_JOB_TIME = 5
-WAIT_FOR_JOB_INIT = 2
+DELETE_JOB_TIME = 2
 
 STORE_ROOT = "/store"
+STREAM_DATA_FILE = "slurm_stream.json"
 
 SLURM_NOTIFIER = args.slurm_notifier
 if SLURM_NOTIFIER == "__find_from_prefix__":
@@ -136,7 +136,9 @@ spec = {
                     "samplers" : [
                         {
                             "plugin" : "slurm_sampler2",
-                            "config" : common_sampler_config
+                            "config" : common_sampler_config + [
+                                "delete_time=-1"
+                            ]
                         }
                     ]
                 }
@@ -153,8 +155,9 @@ spec = {
                         {
                             "plugin" : "slurm_sampler2",
                             "config" : common_sampler_config + [
-                                "job_count=1",
-                                "task_count=2"
+                                "job_count=2",
+                                "task_count=3",
+                                "delete_time=-1"
                             ]
                         }
                     ]
@@ -172,7 +175,7 @@ spec = {
                         {
                             "plugin" : "slurm_sampler2",
                             "config" : common_sampler_config + [
-                                f"delete_job={DELETE_JOB_TIME}" # delete any jobs completed longer than 5 seconds
+                                f"delete_time={DELETE_JOB_TIME}" # delete any jobs completed longer than 5 seconds
                             ]
                         }
                     ]
@@ -190,7 +193,7 @@ spec = {
                         {
                             "plugin" : "slurm_sampler2",
                             "config" : common_sampler_config + [
-                                "delete_job=0" # Delete any completed jobs when the plugin receives a new job data.
+                                "delete_time=0" # Delete any completed jobs when the plugin receives a new job data.
                             ]
                         }
                     ]
@@ -252,33 +255,209 @@ spec = {
 #### Clean up db ####
 def cleanup_db(cluster):
     cont = cluster.get_container("headnode")
-    LST = [ "job.sh", "prog", "prog.c", "slurm*.out" ]
+    LST = [ "job.sh", "prog", "prog.c", "slurm*.out", f"*{STREAM_DATA_FILE}*"]
     LST = [ "/db/{}".format(x) for x in LST ]
     LST += [ "{}/{}".format(STORE_ROOT, x) for x in [ "slurm" ] ]
     cont.exec_run("rm -fr {}".format(" ".join(LST)))
 
 EXIT_RC = -1
 
-@atexit.register
-def at_exit():
-    global EXIT_RC
-    test.finish()
-    if cluster is not None:
-        cluster.remove()
-    os._exit(EXIT_RC)
-
-class Task(object):
-    def __init__(self, job_id, task_rank, task_pid = None, task_exit_status = 0):
-        self.task_pid = task_pid
-        self.job_id = job_id
-        self.task_rank = task_rank
-        self.task_exit_status = task_exit_status
-
 JOB_STATE_FREE = 0
 JOB_STATE_STARTING = 1
 JOB_STATE_RUNNING = 2
 JOB_STATE_STOPPING = 3
 JOB_STATE_COMPLETE = 4
+
+SET_DEFAULT = {'component_id': None,
+               'job_data' : 'REC_DEF',
+               'task_data' : 'REC_DEF',
+               'job_list' : None,
+               'task_list' : None}
+
+STEPD_EVENT = ["job_init", "step_init", "task_init", "task_exit", "job_exit"]
+
+JOB_RECORD_DEF = ["job_id", "app_id", "user", "job_name", "job_tag", "job_state",
+                  "job_size", "job_uid", "job_gid",
+                  "job_start", "job_end",
+                  "node_count", "task_count"]
+JOB_RECORD_DEFAULT_V = dict.fromkeys(JOB_RECORD_DEF, '')
+JOB_RECORD_DEFAULT_V['app_id'] = 0
+JOB_RECORD_DEFAULT_V['job_uid'] = 0
+JOB_RECORD_DEFAULT_V['job_gid'] = 0
+JOB_RECORD_DEFAULT_V['node_count'] = 0
+TASK_RECORD_DEF = ["job_id", "task_pid", "task_rank", "task_exit_status"]
+TASK_RECORD_DEFAULT_V = dict.fromkeys(TASK_RECORD_DEF, 0)
+
+# If 'value' is not None, the expected metric value is the value of 'value'
+# If 'value' is None, the expected metric value is the value of the Job/Task <'attr'> attribute.
+# if both 'attr' and 'value' are None, the test ignores the metrics.
+UPDATED_METRICS = { 'job_init' : { 'job': { 'job_id'      : { 'attr' : "job_id", 'value' : None },
+                                            'job_uid'     : { 'attr' : "uid", 'value' : None },
+                                            'job_gid'     : { 'attr' : "gid", 'value' : None },
+                                            'job_size'    : { 'attr': "total_tasks", 'value' : None },
+                                            'task_count'  : { 'attr' : "local_tasks", 'value' : None },
+                                            'job_start'   : { 'attr' : None, 'value' : None }, # skip
+                                            'job_end'   : { 'attr' : None, 'value' : None }, # skip
+                                            'job_state'   : { 'attr' : None, 'value' : JOB_STATE_STARTING }
+                                        },
+                                   'task' : {}
+                                },
+                    'step_init' : { 'job' : { 'user'       : { 'attr': "job_user", 'value' : None },
+                                              'job_name'   : { 'attr' : "job_name", 'value' : None },
+                                              'job_tag'    : { 'attr' : "subscriber_data.job_tag", 'value' : None },
+                                              'node_count' : { 'attr' : "nnodes", 'value' : None },
+                                              'job_size'   : { 'attr' : "total_tasks", 'value' : None },
+                                              'app_id'     : { 'attr' : "step_id", 'value' : None },
+                                              'job_uid'    : { 'attr' : "uid", 'value' : None },
+                                              'job_gid'   : { 'attr' : "gid", 'value' : None },
+                                              'task_count' : { 'attr' : "local_tasks", 'value' : None }
+                                            },
+                                    'task' : {}
+                                 },
+                    'task_init' : { 'job' : { 'job_id'      : { 'attr' : "job_id", "value" : None },
+                                              'job_state'  : { 'attr' : None, 'value' : JOB_STATE_RUNNING }
+                                            },
+                                    'task' : { 'task_pid'    : { 'attr' : "task_pid", 'value' : None },
+                                              'task_rank'  : { 'attr' : "task_global_id", 'value' : None },
+                                              'task_exit_status'  : { 'attr' : "task_exit_status", 'value' : 0 }
+                                            }
+                                 },
+                    'task_exit' : { 'job' : { 'job_state'  : { 'attr' : None, 'value' : JOB_STATE_STOPPING }
+                                            },
+                                    'task' : { 'task_exit_status' : { 'attr' : "task_exit_status", 'value' : None },
+                                             }
+                                 },
+                    'job_exit' : { 'job' : { 'job_end'     : { 'attr' : None, 'value' : None },
+                                             'job_state'   : { 'attr' : None, 'value' : JOB_STATE_COMPLETE }
+                                           }
+                                 }
+                }
+
+def make_event_data(cont, event, job, task_idx = None):
+    if task_idx is not None:
+        task = job._tasks[cont.hostname][task_idx]
+    else:
+        task = None 
+
+    data = {    "schema": "slurm_job_data",
+                "event" : None,
+                "timestamp": int(time()),
+                "context": "foo",
+                "data": {}
+           }
+
+    if event == "job_init":
+        data['event'] = "init"
+        data['data'] = {
+            "job_id" : job.job_id,
+            "nodeid" : job._cont2node_id(cont),
+            "uid" : job.uid,
+            "gid" : job.gid,
+            "ncpus" : job.ncpus, # Ignored by slurm_sampler2 and slurm_sampler
+            "nnodes": 0, # Per my observation, slurm_notifier always sent 0
+            "local_tasks": len(job._tasks[cont.hostname]),
+            "total_tasks": job.total_tasks
+        }
+    elif event == "job_exit":
+        data['event'] = "exit"
+        data['data'] = {
+            "job_id" : job.job_id,
+            "nodeid" : job._cont2node_id(cont)
+        }
+    elif event == "step_init":
+        data['event'] = "step_init"
+        data['data'] = {
+            "subscriber_data" : job.subscriber_data,
+            "job_name" : job.job_name,
+            "job_user" : job.user,
+            "job_id" : job.job_id,
+            "nodeid" : job._cont2node_id(cont),
+            "step_id" : job.step_id,
+            "alloc_mb" : job.alloc_mem, # Ignored by the plugins
+            "ncpus" : job.ncpus, # Ignored by the plugins
+            "nnodes" : job.nnodes,
+            "local_tasks" : len(job._tasks[cont.hostname]), # Ignored by the plugins
+            "total_tasks" : job.total_tasks,
+        }
+    elif event == "step_exit":
+        data['event'] = "step_exit"
+        data['data'] = {
+            "job_id" : job.job_id,
+            "nodeid" : job._cont2node_id(cont), # Ignored by the plugins
+            "step_id" : job.step_id  # Ignored by the plugins
+        }
+    elif event == "task_init":
+        data['event'] = "task_init_priv"
+        data['data'] = {
+            "job_id" : job.job_id,
+            "step_id" : job.step_id, # Ignored by the plugin
+            "task_id" : task.task_id, # Not used by slurm_sampler2
+            "task_pid" : task.task_pid,
+            "task_global_id" : task.task_global_id, # task_rank metric
+            "nodeid" : job._cont2node_id(cont), # Ignored by the plugin
+            "uid" : job.uid, # Ignored by the plugin
+            "gid" : job.gid, # Ignored by the plugin
+            "ncpus" : job.ncpus, # Ignored by the plugin
+            "nnodes" : job.nnodes, # Ignored by the plugin
+            "local_tasks" : len(job._tasks[cont.hostname]), # Ignored by the plugin
+            "total_tasks" : job.total_tasks # Ignored by the plugin
+        }
+    elif event == "task_exit":
+        data['event'] = "task_exit"
+        data['data'] = {
+            "job_id" : job.job_id,
+            "step_id" : job.step_id, # Ignored by the plugins
+            "task_id" : task.task_id, # Not used by slurm_sampler2
+            "task_pid" : task.task_pid,
+            "task_global_id" : task.task_global_id, # Ignored by the plugins
+            "nodeid" : job._cont2node_id(cont), # Ignored by the plugins
+            "task_exit_status" : task.task_exit_status
+        }
+    else:
+        raise RuntimeError(f"Unrecognized {event}")
+    return data
+
+def publish_slurm_event(cont, data):
+    fpath = f"/db/{cont.hostname}-{STREAM_DATA_FILE}-{data['data']['job_id']}-{data['event']}"
+    cont.write_file(fpath, json.dumps(data))
+    cmd = f"ldmsd_stream_publish -h localhost -x {LDMSD_XPRT} -p {LDMSD_PORT} " \
+          f"-s slurm -t json -f {fpath}"
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to run ldmsd_stream_publish. Error {rc}: {out}")
+
+class Task(object):
+    def __init__(self, node, job, task_rank, task_pid, task_exit_status = 0,
+                 task_id = 0, ):
+        self.job = job
+        self.task_pid = task_pid
+        self.task_global_id = task_rank
+        self.task_exit_status = task_exit_status
+
+        self.task_id = task_id
+
+        self._node = node
+
+        self.exp = None # The corresponding task entry in the task list in the set
+
+    def __update_exp_metric(self, event):
+        task_metrics = UPDATED_METRICS[event]['task']
+        for k in task_metrics.keys():
+            if task_metrics[k]['value'] is not None:
+                self.exp[k] = task_metrics[k]['value']
+            else:
+                self.exp[k] = self.__dict__[task_metrics[k]['attr']]
+
+    def task_init(self):
+        task_metrics = UPDATED_METRICS['task_init']['task']
+        self.exp = TASK_RECORD_DEFAULT_V.copy()
+        self.exp['job_id'] = self.job.job_id
+        self.__update_exp_metric('task_init')
+
+    def task_exit(self):
+        task_metrics = UPDATED_METRICS['task_exit']['task']
+        self.__update_exp_metric('task_exit')
+
 class Job(object):
     def _user2uid(self, user):
         if user == "root":
@@ -288,20 +467,129 @@ class Job(object):
         else:
             raise ValueError(f"Unexpected user {user}")
 
-    def __init__(self, job_id, job_state = JOB_STATE_COMPLETE, job_name = "job.sh",
-                       user = "root", gid = 0,
-                       node_count = 4, task_count = 1):
+    def _cont2node_id(self, cont):
+        if cont.hostname == "node-1":
+            return 1
+        elif cont.hostname == "node-2":
+            return 2
+        elif cont.hostname == "node-3":
+            return 3
+        elif cont.hostname == "node-4":
+            return 4
+        else:
+            raise RuntimeError(f"Not recognized container {cont.hostname}")
+
+    def __init__(self, job_id, uid = 0, gid = 0,
+                 job_name = "job.sh", job_user = "", step_id = 0,
+                 job_tag = "", ncpus = 0, alloc_mem = 0):
         self.job_id = job_id
-        self.job_state = job_state
+        self.nnodes = 0
+        self.total_tasks = 0
+        self.uid  = uid
+        self.gid = gid
         self.job_name = job_name
-        self.user = user
-        self.job_uid = self._user2uid(user)
-        self.job_gid = gid
-        self.node_count = node_count
-        self.task_count = task_count
-        self.job_size = self.node_count * self.task_count
-        self.app_id = 0
-        self.job_tag = ""
+        self.subscriber_data = { 'job_tag' : job_tag }
+        self.job_user = job_user
+        self.step_id = step_id
+        self.user = job_user
+
+        self.ncpus = ncpus
+        self.alloc_mem = alloc_mem
+
+        self._nodes = []
+        self._tasks = {}
+
+        self.exp = {}  #  The corresponding job entry in the job_list in the set
+
+    def add_task(self, node, task_rank, task_pid, task_exit_status = 0):
+        task = Task(node, self, task_rank, task_pid, task_exit_status)
+        if node.hostname not in self._tasks.keys():
+            self._tasks[node.hostname] = []
+            self.nnodes += 1
+            self._nodes.append(node)
+        self._tasks[node.hostname].append(task)
+        self.total_tasks += 1
+
+    def __update_exp_metrics(self, event, node):
+        job_metrics = UPDATED_METRICS[event]['job']
+        exp = self.exp[node.hostname]
+        for k in job_metrics.keys():
+            if job_metrics[k]['value'] is not None:
+                exp[k] = job_metrics[k]['value']
+            elif job_metrics[k]['attr'] is not None:
+                attr = job_metrics[k]['attr']
+                if attr == "local_tasks":
+                    exp[k] = len(self._tasks[node.hostname])
+                elif "subscriber_data" in attr:
+                    exp[k] = self.__dict__["subscriber_data"][attr.split('.')[1]]
+                else:
+                    exp[k] = self.__dict__[attr]
+            else:
+                    exp[k] = None
+
+    def job_init(self, publish = True):
+        if publish:
+            for node in self._nodes:
+                data = make_event_data(node, "job_init", self)
+                publish_slurm_event(node, data)
+
+        # Prep expecting results
+        for node in self._nodes:
+            self.exp[node.hostname] = JOB_RECORD_DEFAULT_V.copy()
+            self.__update_exp_metrics("job_init", node)
+
+    def step_init(self, publish = True):
+        if publish:
+            for node in self._nodes:
+                data = make_event_data(node, "step_init", self)
+                publish_slurm_event(node, data)
+
+        # Prep expecting results
+        for node in self._nodes:
+            self.__update_exp_metrics("step_init", node)
+
+    def task_init(self, publish = True):
+        for node in self._nodes:
+            for i in range(len(self._tasks[node.hostname])):
+                self._tasks[node.hostname][i].task_init()
+
+        if publish:
+            for node in self._nodes:
+                for i in range(len(self._tasks[node.hostname])):
+                    data = make_event_data(node, "task_init", self, i)
+                    publish_slurm_event(node, data)
+
+        for node in self._nodes:
+            self.__update_exp_metrics("task_init", node)
+
+    def task_exit(self, publish = True):
+        for node in self._nodes:
+            for i in range(len(self._tasks[node.hostname])):
+                self._tasks[node.hostname][i].task_exit()
+
+        if publish:
+            for node in self._nodes:
+                for i in range(len(self._tasks[node.hostname])):
+                    data = make_event_data(node, "task_exit", self, i)
+                    publish_slurm_event(node, data)
+
+        for node in self._nodes:
+            self.__update_exp_metrics("task_exit", node)
+
+    def job_exit(self, publish = True):
+        if publish:
+            for node in self._nodes:
+                data = make_event_data(node, "job_exit", self)
+                publish_slurm_event(node, data)
+
+        for node in self._nodes:
+            self.__update_exp_metrics("job_exit", node)
+
+    op = {'job_init': job_init,
+          'step_init': step_init,
+          'task_init' : task_init,
+          'task_exit' : task_exit,
+          'job_exit' : job_exit}
 
 def ldms_ls(cont, host = "localhost", xprt = LDMSD_XPRT, port = LDMSD_PORT, l = True):
     rc, out = cont.exec_run(f"/tada-src/python/ldms_ls.py -x {LDMSD_XPRT} " \
@@ -316,17 +604,6 @@ def ldms_ls_all():
     for node in nodes:
         results[node.hostname] = ldms_ls(node)
     return results
-
-def get_set(cont, results):
-    return results[cont.hostname][f"{cont.hostname}/slurm_sampler2"]
-
-def get_job_list(cont, results):
-    set = get_set(cont, results)
-    return set['data']['job_list']
-
-def get_task_list(cont, results):
-    set = get_set(cont, results)
-    return set['data']['task_list']
 
 def get_ldmsd_spec(cont):
     return [d for d in cont.spec['daemons'] if d['type'] == "ldmsd"][0]
@@ -350,57 +627,17 @@ def get_spec_producer(plugin_spec):
             return v
     raise KeyError(f"Cannot find producer in {config}")
 
-def verify_job(result, job):
-    job = job.__dict__
-    for k in job.keys():
-        if k == "job_state":
-            continue
-        if result[k] != job[k]:
-            return (False, f"{k}'s value {result[k]} is not as expected {job[k]}.")
-    return (True, None)
-
-def verify_task(result, task):
-    task = task.__dict__
-    for k in task.keys():
-        if k == "task_pid":
-            continue
-        if result[k] != task[k]:
-            return (False, f"{k}'s value {result[k]} is not as expected {task[k]}.")
-    return (True, None)
-
-def verify_tasks(results, tasks):
-    # TODO:
-    # Solve the problem that the tasks reported by ldms_ls
-    # isn't ordered by task ranks. :(
-    _tasks = tasks.copy()
-    for x in results:
-        _e = None
-        for e in _tasks:
-            if x['job_id'] == e.__dict__['job_id']:
-                if x['task_rank'] == e.__dict__['task_rank']:
-                    _e = e
-                    _tasks.remove(e)
-                    b = x['task_exit_status'] == e.__dict__['task_exit_status']
-                    if not b:
-                        return (False, f"The task_exit_status {x['task_exit_status']} " \
-                                       f"of job id {x['job_id']}'s task " \
-                                       f"rank {x['task_rank']} is not as " \
-                                       f"expected {e['task_exit_status']}.")
-        if _e is None:
-            return (False, f"Unexpected task of job_id {x['job_id']} and task rank {x['task_rank']}.")
-    return (True, None)
-
-def verify_node_result(cont, results, jobs, tasks):
-    set = results[cont.hostname][f"{cont.hostname}/slurm_sampler2"]
+def verify_set(node, set, jobs):
+    global cluster
     job_list = set['data']['job_list']
     task_list = set['data']['task_list']
     comp_id = int(set['data']['component_id'])
     producer = set['producer_name']
-    exp_job_list = jobs[cont.hostname]
-    exp_task_list = tasks[cont.hostname]
 
-    ldmsd_spec = get_ldmsd_spec(cont)
-    slurm2_spec = get_sampler_plugin_spec(ldmsd_spec, "slurm_sampler2")
+    cont = cluster.get_container(node)
+    slurm2_spec = get_sampler_plugin_spec(get_ldmsd_spec(cont), "slurm_sampler2")
+    exp_job_list = [job.exp[node] for job in jobs]
+    exp_task_list = [task.exp for job in jobs for task in job._tasks[node] if task.exp is not None]
     exp_comp_id = get_spec_component_id(slurm2_spec)
     exp_producer = get_spec_producer(slurm2_spec)
 
@@ -408,34 +645,59 @@ def verify_node_result(cont, results, jobs, tasks):
         return (False, f"The component_id {comp_id} is not the expected value {exp_comp_id}.")
     if producer != exp_producer:
         return (False, f"The producer '{producer}' is not the expected value '{exp_producer}'.")
-    if len(job_list) != len(exp_job_list):
-        return (False, f"The job list length {len(job_list)} is not the expected value {len(exp_job_list)}.")
-    if len(task_list) != len(exp_task_list):
-        return (False, f"The task list length {len(task_list)} is not the expected value {len(exp_task_list)}.")
-    job_list.sort(key = lambda x: x['job_id']) # sort by job_id
-    for x, e in zip(job_list, exp_job_list):
-        b, r = verify_job(x, e)
-        if not b:
-            return (False, f"The data of job_id {e.__dict__['job_id']} is wrong. {r}")
-    b, r = verify_tasks(task_list, exp_task_list)
-    if not b:
-        return (False, r)
+    # Ignore the job's start and end time
+    for j in job_list:
+        j['job_start'] = None
+        j['job_end'] = None
+    # Assume both job_list and exp_job_list are ordered by job_id
+    if job_list != exp_job_list:
+        if len(job_list) != len(exp_job_list):
+            return (False, f"The number of jobs is not as expected. {len(job_list)} != {len(exp_job_list)}.")
+        for a, b in zip(job_list, exp_job_list):
+            if a != b:
+                return (False, f"The job_list is not as expected. {a} != {b}")
+    if task_list != exp_task_list:
+        if len(task_list) != len(exp_task_list):
+            return (False, f"The number of tasks is not as expected. {len(task_list)} != {len(exp_task_list)}.")
+        for a, b in zip(task_list, exp_task_list):
+            if a != b:
+                return (False, f"The task_list is not as expected. {a} != {b}")
     return (True, None)
 
-def verify_results(nodes, results, jobs, tasks):
-    for node in nodes:
-        b, r = verify_node_result(node, results, jobs, tasks)
-        if b is not True:
-            return (b, f"{node.hostname}: {r}")
+def verify_results(results, jobs):
+    if results.keys() != jobs.keys():
+        raise RuntimeError(f"results.keys() != jobs.keys()")
+    for node in results.keys():
+        set = results[node][f"{node}/slurm_sampler2"]
+        job_list = jobs[node]
+        passed, reason = verify_set(node, set, job_list)
+        if not passed:
+            return (False, f"[{node}]: {reason}")
     return (True, None)
+
+job_id = assertion_id_get()
+def get_job_id():
+    return next(job_id) + 1000
+
+def get_task_pid(job_id, rank):
+    return job_id * 100 + rank
+
+def test_all_step(job, nodes_job, assertion):
+    for e in STEPD_EVENT:
+        job.op[e](job)
+        results = ldms_ls_all()
+        passed, reason = verify_results(results, node_jobs)
+        test.assert_test(assertion[e], passed,
+                         "The metric values are as expected on all nodes." if passed else reason)
 
 id = assertion_id_get()
-
-JOB_MULTI_NODES = next(id)
-JOB_MULTI_TASKS = next(id)
-EXPAND_HEAP = next(id)
-DELETE_COMPLETE_JOBS = next(id)
-MULTI_TENANTS = next(id)
+SLURM_NOTIFIER = next(id)
+no = next(id)
+DELETE_COMPLETE_JOBS = dict(zip(STEPD_EVENT, [no + x/10 for x in range(1, len(STEPD_EVENT)+1)]))
+no = next(id)
+EXPAND_HEAP = dict(zip(STEPD_EVENT, [no + x/10 for x in range(1, len(STEPD_EVENT)+1)]))
+no = next(id)
+MULTI_TENANTS = dict(zip(STEPD_EVENT, [no + x/10 for x in range(1, len(STEPD_EVENT)+1)]))
 
 #### Test Definition ####
 test = TADA.Test(test_suite = "LDMSD",
@@ -445,17 +707,23 @@ test = TADA.Test(test_suite = "LDMSD",
                  test_user = args.user,
                  commit_id = args.commit_id,
                  tada_addr = args.tada_addr)
+test.add_assertion(SLURM_NOTIFIER,
+                   "Processing the stream data from slurm_notifier")
+for e in STEPD_EVENT:
+    test.add_assertion(DELETE_COMPLETE_JOBS[e],
+                   f"Deleting completed jobs -- {e}")
+    test.add_assertion(EXPAND_HEAP[e],
+                   f"Expanding the set heap -- {e}")
+    test.add_assertion(MULTI_TENANTS[e],
+                   f"Multi-tenant -- {e}")
 
-test.add_assertion(JOB_MULTI_NODES,
-                   "Correctly collect the data of a job running on multiple nodes")
-test.add_assertion(JOB_MULTI_TASKS,
-                   "Correctly collect the data of a job running on N tasks of multiple nodes")
-test.add_assertion(EXPAND_HEAP,
-                   "Correctly fill the metric values after expanding the set heap")
-test.add_assertion(DELETE_COMPLETE_JOBS,
-                   "Correctly collect the data of a job submitted as a user")
-test.add_assertion(MULTI_TENANTS,
-                   "Correctly collect the data in the multi-tenant case")
+@atexit.register
+def at_exit():
+    global EXIT_RC
+    test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(EXIT_RC)
 
 #### Start ####
 cluster = None
@@ -466,8 +734,8 @@ cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 cleanup_db(cluster)
 
 log.info("-- Add users --")
-for u in USERS:
-    cluster.all_exec_run(f"adduser {u}")
+for u in USERS.keys():
+    cluster.all_exec_run(f"adduser --uid {USERS[u]} {u}")
 
 log.info("-- Preparing job script & programs --")
 
@@ -519,106 +787,166 @@ cont.exec_run("sync")
 log.info("-- Start daemons --")
 cluster.start_daemons()
 cluster.make_known_hosts()
-sleep(2) # Wait for the daemons to start
+sleep(1) # Wait for the daemons to start
 
 nodes = [cluster.get_container(f"node-{c}") for c in range(1, 5)]
 
-# -------------- job 1--------------------
-jobs = {}
-job_1 = cluster.sbatch("/db/job.sh 1", "--nodelist=node-[1-4]")
-sleep(WAIT_FOR_JOB_INIT)
+# -------------------------------------------
+node_jobs = dict.fromkeys([node.hostname for node in nodes])
+
+# ------------------------------------------------------------------------------
+def test_slurm_notifier(node_name, set, exp_job_list, exp_task_list):
+    job_list = set['data']['job_list']
+    for job in job_list:
+        job['job_start'] = None
+        job['job_end'] = None
+
+    if len(job_list) != len(exp_job_list):
+        return (False, f"[{node_name}]: The job_list's length ({len(job_list)}) is not as expected ({len(exp_job_list)}).")
+    if job_list != exp_job_list:
+    
+        for a, b in zip(job_list, exp_job_list):
+            if a != b:
+                return (False, f"[{node_name}]: The job_list is not as expected. {a} != {b}")
+
+    task_list = set['data']['task_list']
+    if len(task_list) != len(exp_task_list):
+        return (False, f"[{node_name}]: The task_list's length ({len(task_list)}) is not as expected ({len(exp_task_lsit)}).")
+
+    for a, b in zip(task_list, exp_task_list):
+        if a['job_id'] != b['job_id'] or a['task_exit_status'] != b['task_exit_status']:
+            return (False, f"[{node_name}]: The task list is not as expected. {a} != {b}")
+    return (True, None)
+
+job_0_id = cluster.sbatch("/db/job.sh 1", 
+                        "--nodelist=node-[1-4]",
+                       f"--ntasks-per-node={CPU_PER_NODE}")
+
+exp_job_0 = JOB_RECORD_DEFAULT_V.copy()
+exp_job_0['job_id'] = job_0_id
+exp_job_0['user'] = "root"
+exp_job_0['job_uid'] = 0
+exp_job_0['job_name'] = "job.sh"
+exp_job_0['job_state'] = JOB_STATE_COMPLETE
+exp_job_0['task_count'] = CPU_PER_NODE
+exp_job_0['node_count'] = 4
+exp_job_0['job_size'] = exp_job_0['task_count'] * exp_job_0['node_count']
+exp_job_0['job_start'] = exp_job_0['job_end'] = None
+exp_job_0_task = TASK_RECORD_DEFAULT_V.copy()
+exp_job_0_task['job_id'] = exp_job_0['job_id']
+exp_job_0_task['task_pid'] = exp_job_0_task['task_rank'] = None
+exp_job_0_task['task_rank'] = None
+
+sleep(5) # wait for job to complete
 results = ldms_ls_all()
-jobs = {}
-tasks = {}
-i = 0
-job = Job(job_id = job_1)
 for node in nodes:
-    jobs[node.hostname] = [job]
-    tasks[node.hostname] = [Task(job_id = job_1, task_rank = i)]
-    i += 1
-b, r = verify_results(nodes, results, jobs, tasks)
-test.assert_test(JOB_MULTI_NODES, b, "The collected job data is correct." if b else r)
+    set = results[node.hostname][f"{node.hostname}/slurm_sampler2"]
 
-EXIT_RC = 0 if b else -1
-sys.exit(EXIT_RC)
-# NOTE: Test only the simple case for now. The rest of the test cases are
-#       skipped as they contain racing bug. They will be fixed later.
+    exp_job_list = [exp_job_0]
+    exp_task_list = [exp_job_0_task, exp_job_0_task]
+    passed, reason = test_slurm_notifier(node.hostname, set, 
+                                         exp_job_list, exp_task_list)
+    if not passed:
+        break
+test.assert_test(SLURM_NOTIFIER, passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
 
-# ------------- job 2 -----------------------
-job_2 = cluster.sbatch("/db/job.sh 1", "--nodelist=node-[1-4]", "--uid=user1",
-                            f"--ntasks-per-node={CPU_PER_NODE}")
-sleep(WAIT_FOR_JOB_INIT)
-# Get ldms_ls
-results = ldms_ls_all()
-i = 0
-task_count = CPU_PER_NODE
-job = Job(job_id = job_2, user = "user1", task_count = CPU_PER_NODE)
+job_0 = Job(job_id = job_0_id, job_user = "root")
 for node in nodes:
-    jobs[node.hostname] += [job]
-    tasks[node.hostname] += [Task(job_id = job_2, task_rank = j) for j in range(i, i + CPU_PER_NODE)]
-    i += CPU_PER_NODE
-# remove deleted jobs
-del jobs[nodes[3].hostname][0]
-del tasks[nodes[3].hostname][0]
-b, r = verify_results(nodes, results, jobs, tasks)
-test.assert_test(JOB_MULTI_TASKS, b, "The collected job data is correct." if b else r)
+    set = results[node.hostname][f"{node.hostname}/slurm_sampler2"]
+    job_0.add_task(node, task_rank = set['data']['task_list'][0]['task_rank'],
+                   task_pid = set['data']['task_list'][0]['task_pid'],
+                   task_exit_status = 0)
+    job_0.add_task(node, task_rank = set['data']['task_list'][1]['task_rank'],
+                   task_pid = set['data']['task_list'][1]['task_pid'],
+                   task_exit_status = 0)
+    node_jobs[node.hostname] = [job_0]
+    job_0.exp[node.hostname] = exp_job_0.copy()
+for e in STEPD_EVENT:
+    job_0.op[e](job_0, publish = False)
 
-# ---------------- job 3 ------------------
-job_3 = cluster.sbatch(f"/db/job.sh 1",
-                            "--nodelist=node-[1-4]",
-                            f"--ntasks-per-node={CPU_PER_NODE}")
-sleep(WAIT_FOR_JOB_INIT)
-results = ldms_ls_all()
-i = 0
-task_count = CPU_PER_NODE
-job = Job(job_id = job_3, task_count = CPU_PER_NODE)
+# Job 1 -- to test the delete job time
+sleep(DELETE_JOB_TIME)
+del node_jobs['node-3'][0]
+del node_jobs['node-4'][0]
+
+job_1 = Job(job_id = get_job_id())
+task_rank = assertion_id_get()
 for node in nodes:
-    jobs[node.hostname] += [job]
-    tasks[node.hostname] += [Task(job_id = job_3, task_rank = j) for j in range(i, i + CPU_PER_NODE)]
-    i += CPU_PER_NODE
-#remove deleted jobs
-del jobs[nodes[3].hostname][0]
-del tasks[nodes[3].hostname][0:CPU_PER_NODE]
-b, r = verify_results(nodes, results, jobs, tasks)
-test.assert_test(EXPAND_HEAP, b, "The collected job data is correct." if b else r)
+    rank = next(task_rank)
+    job_1.add_task(node, rank, get_task_pid(job_1.job_id, rank))
+    node_jobs[node.hostname].append(job_1)
 
-# -------------------- job 4 ---------------------------
-# Get ldms_ls of node-4 to verify that job_2 was removed.
-# Make sure that the last job was submitted
-# after the third job has been completed for at least DELETE_JOB_TIME.
-sleep(DELETE_JOB_TIME + 1)
-job_4 = cluster.sbatch("/db/job.sh", "--nodelist=node-[1-4]")
-sleep(WAIT_FOR_JOB_INIT + 1)
-results = ldms_ls_all()
+test_all_step(job_1, node_jobs, DELETE_COMPLETE_JOBS)
 
-job = Job(job_id = job_4)
-i = 0
+# ------------------------------------------------------------------------------
+# job 2 -- to test expanding the set heap
+sleep(DELETE_JOB_TIME)
+del node_jobs['node-3'][0]
+del node_jobs['node-4'][0]
+
+job_2 = Job(job_id = get_job_id(), uid = 1000, gid = 1000, job_user = "foo", job_tag = "bar", ncpus = 2)
+task_rank = assertion_id_get()
+num_task_per_node = dict(zip([node.hostname for node in nodes], range(1, 1 + len(nodes))))
 for node in nodes:
-    jobs[node.hostname] += [job]
-    tasks[node.hostname] += [Task(job_id = job_4, task_rank = i)]
-    i += 1
-#remove deleted jobs
-del jobs[nodes[2].hostname][0:3]
-del tasks[nodes[2].hostname][0:(1 + CPU_PER_NODE + CPU_PER_NODE)]
-del jobs[nodes[3].hostname][0]
-del tasks[nodes[3].hostname][0:CPU_PER_NODE]
-b, r = verify_results(nodes, results, jobs, tasks)
-test.assert_test(DELETE_COMPLETE_JOBS, b, "The collected job data is correct." if b else r)
+    for i in range(0, num_task_per_node[node.hostname]):
+        rank = next(task_rank)
+        job_2.add_task(node, rank, get_task_pid(job_2.job_id, rank))
+    node_jobs[node.hostname].append(job_2)
+test_all_step(job_2, node_jobs, EXPAND_HEAP)
 
-# ----- Multiple tenants -------
-job_5 = cluster.sbatch("/db/job.sh 4", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
-sleep(1)
-job_6 = cluster.sbatch("/db/job.sh 3", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
-sleep(1)
-job_7 = cluster.sbatch("/db/job.sh 2", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
-sleep(1)
-job_8 = cluster.sbatch("/db/job.sh 1", "--ntasks-per-node=1", "--nodelist=node-[1-4]")
-sleep(WAIT_FOR_JOB_INIT)
+# ------------------------------------------------------------------------------
+# job_3 and job_4 --- test multitenant
+
+sleep(DELETE_JOB_TIME)
+del node_jobs['node-3'][0]
+del node_jobs['node-4'][0]
+
+job_3 = Job(job_id = get_job_id())
+task_rank = assertion_id_get()
+for node in nodes:
+    rank = next(task_rank)
+    job_3.add_task(node, rank, get_task_pid(job_3.job_id, rank))
+    node_jobs[node.hostname].append(job_3)
+
+job_4 = Job(job_id = get_job_id())
+task_rank = assertion_id_get()
+for node in nodes:
+    for i in range(2):
+        rank = next(task_rank)
+        job_4.add_task(node, rank, get_task_pid(job_4.job_id, rank))
+    node_jobs[node.hostname].append(job_4)
+
+job_3.job_init()
+job_3.step_init()
+job_3.task_init()
+job_4.job_init()
+
 results = ldms_ls_all()
-for node, i in zip(nodes, range(len(nodes))):
-    jobs[node.hostname] += [Job(job_id = jid) for jid in [job_5, job_6, job_7, job_8]]
-    tasks[node.hostname] += [Task(job_id = jid, task_rank = i) for jid in [job_5, job_6, job_7, job_8]]
-del jobs[nodes[3].hostname][0]
-del tasks[nodes[3].hostname][0]
-b, r = verify_results(nodes, results, jobs, tasks)
-test.assert_test(MULTI_TENANTS, b, "The collected job data is correct." if b else r)
+passed, reason = verify_results(results, node_jobs)
+test.assert_test(MULTI_TENANTS["job_init"], passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
+
+job_4.step_init()
+results = ldms_ls_all()
+passed, reason = verify_results(results, node_jobs)
+test.assert_test(MULTI_TENANTS["step_init"], passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
+
+job_4.task_init()
+results = ldms_ls_all()
+passed, reason = verify_results(results, node_jobs)
+test.assert_test(MULTI_TENANTS["task_init"], passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
+
+job_4.task_exit()
+results = ldms_ls_all()
+passed, reason = verify_results(results, node_jobs)
+test.assert_test(MULTI_TENANTS["task_exit"], passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
+
+job_4.job_exit()
+results = ldms_ls_all()
+passed, reason = verify_results(results, node_jobs)
+test.assert_test(MULTI_TENANTS["job_exit"], passed,
+                 "The metric values are as expected on all nodes." if passed else reason)
