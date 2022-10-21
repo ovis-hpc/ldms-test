@@ -1,0 +1,202 @@
+#!/user/bin/env python3
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import TADA
+import sys
+
+from time import sleep
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, parse_ldms_ls, \
+                      assertion_id_get
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values ####
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing ####
+ap = argparse.ArgumentParser(description = "Run test against the slurm_sampler2 plugin")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables ####
+LDMSD_XPRT = "sock"
+LDMSD_PORT = "10001"
+
+LDMSD_INTERFACES = ["config_file", "ldmsd_controller", "ldmsctl"]
+
+def get_xprt_max_msg(mode = LDMSD_INTERFACES):
+    if mode == "config_file":
+        return 65536 # ldmsd config file max rec len is 8192.
+    else:
+        return 1100000 # ldms_xprt_msg_max() for socket is 1048536. This could be varied by system to system.
+
+def get_config_line(sz):
+    return f"greeting name={'a' * sz}"
+
+
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s ldmsd_long_config test cluster",
+    "type" : "NA",
+    "templates" : {
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ],
+            "log_level" : "DEBUG"
+        },
+    }, # Templates
+    "nodes" : [
+        {   "hostname" : "node-config_file",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        get_config_line(get_xprt_max_msg("config_file"))
+                    ]
+                }
+            ]
+        }
+    ] + [
+        {
+            "hostname" : f"node-{x}",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : f"ldmsd",
+                    "!extends" : "ldmsd-base",
+                }
+            ]
+        } for x in LDMSD_INTERFACES[1:]
+    ], # nodes
+
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "mounts" :  [
+                    f"{args.data_root}:/db:rw",
+                    f"{os.path.realpath(sys.path[0])}:/tada-src/:ro",
+                ] + args.mount +
+                ( [f"{args.src}:{args.src}:ro"] if args.src else [] )
+}
+
+#### Clean up db ####
+def cleanup_db(cluster):
+    cont = cluster.get_container("node-config_file")
+    cont.exec_run("rm -fr /db")
+
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None and args.debug < 2:
+        cluster.remove()
+    os._exit(rc)
+
+def get_xprt_max_msg(mode = ["config_file", "ldmsctl", "ldmsd_controller"]):
+    if mode == "config_file":
+        return 65536 # ldmsd config file max rec len is 8192.
+    else:
+        return 1100000 # ldms_xprt_msg_max() for socket is 1048536. This could be varied by system to system.
+
+def get_msg(sz):
+    return 'a' * sz
+
+def get_config_line(sz):
+    return f"greeting name={get_msg(sz)}"
+
+CONFIG_FILE = 1
+LDMSD_CONTROLLER = 2
+LDMSCTL = 3
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_long_config_line",
+                 test_desc = "Test the code path that handles long config lines " \
+                             "that larger than the max of the transport message size",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr)
+test.add_assertion(CONFIG_FILE,
+                   "LDMSD correctly processes a config line in a config file")
+test.add_assertion(LDMSD_CONTROLLER,
+                   "LDMSD correctly handle a config line from ldmsd_controller")
+test.add_assertion(LDMSCTL,
+                   "LDMSD correctly handle a config line from ldmsctl")
+
+cluster = None
+test.start()
+
+log.info("---Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+cleanup_db(cluster)
+
+log.info("--- Start daemons ---")
+cluster.start_daemons()
+cluster.make_known_hosts()
+sleep(1)
+
+# CONFIG_FILE
+cont = cluster.get_container("node-config_file")
+ldmsd_log = cont.read_file("/var/log/ldmsd.log")
+test.assert_test(CONFIG_FILE, get_msg(get_xprt_max_msg("config_file")) in ldmsd_log,
+                 "LDMSD processed the long config line in the config file correctly.")
+
+# LDMDSD_CONTOLLER
+cont = cluster.get_container("node-ldmsd_controller")
+cont.config_ldmsd([get_config_line(get_xprt_max_msg("ldmsd_controller"))])
+ldmsd_log = cont.read_file("/var/log/ldmsd.log")
+test.assert_test(LDMSD_CONTROLLER, get_msg(get_xprt_max_msg("ldmsd_controller")) in ldmsd_log,
+                 "LDMSD receives the correct message from ldmsd_controller.")
+
+# LDMSCTL
+cont = cluster.get_container("node-ldmsctl")
+cont.write_file("/db/ldmsctl.conf", get_config_line(get_xprt_max_msg("ldmsctl")))
+cont.exec_run("sync")
+cmd = "bash -c \"ldmsctl "
+cmd += f" -x {LDMSD_XPRT}"
+cmd += f" -p {LDMSD_PORT}"
+cmd += f" -h localhost"
+cmd += f" -s /db/ldmsctl.conf"
+cmd += "\""
+rc, out = cont.exec_run(cmd)
+if (rc):
+    raise RuntimeError(f"Failed to run ldmsctl. Error {rc}: {out}")
+ldmsd_log = cont.read_file("/var/log/ldmsd.log")
+test.assert_test(LDMSCTL, get_msg(get_xprt_max_msg("ldmsctl")) in ldmsd_log,
+                 "LDMSD receives the correct message from ldmsctl.")
