@@ -52,6 +52,7 @@ CONT_TEST_LIST=(
 	slurm_sampler2_test
 	run_inside_cont_test.py
 	libovis_log_test
+	ldmsd_long_config_line_test
 )
 
 # List of direct (non-containerized, running on host) tests
