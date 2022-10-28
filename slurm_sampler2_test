@@ -337,7 +337,7 @@ def make_event_data(cont, event, job, task_idx = None):
     if task_idx is not None:
         task = job._tasks[cont.hostname][task_idx]
     else:
-        task = None 
+        task = None
 
     data = {    "schema": "slurm_job_data",
                 "event" : None,
@@ -804,7 +804,7 @@ def test_slurm_notifier(node_name, set, exp_job_list, exp_task_list):
     if len(job_list) != len(exp_job_list):
         return (False, f"[{node_name}]: The job_list's length ({len(job_list)}) is not as expected ({len(exp_job_list)}).")
     if job_list != exp_job_list:
-    
+
         for a, b in zip(job_list, exp_job_list):
             if a != b:
                 return (False, f"[{node_name}]: The job_list is not as expected. {a} != {b}")
@@ -818,7 +818,7 @@ def test_slurm_notifier(node_name, set, exp_job_list, exp_task_list):
             return (False, f"[{node_name}]: The task list is not as expected. {a} != {b}")
     return (True, None)
 
-job_0_id = cluster.sbatch("/db/job.sh 1", 
+job_0_id = cluster.sbatch("/db/job.sh 1",
                         "--nodelist=node-[1-4]",
                        f"--ntasks-per-node={CPU_PER_NODE}")
 
@@ -844,7 +844,7 @@ for node in nodes:
 
     exp_job_list = [exp_job_0]
     exp_task_list = [exp_job_0_task, exp_job_0_task]
-    passed, reason = test_slurm_notifier(node.hostname, set, 
+    passed, reason = test_slurm_notifier(node.hostname, set,
                                          exp_job_list, exp_task_list)
     if not passed:
         break
@@ -950,3 +950,4 @@ results = ldms_ls_all()
 passed, reason = verify_results(results, node_jobs)
 test.assert_test(MULTI_TENANTS["job_exit"], passed,
                  "The metric values are as expected on all nodes." if passed else reason)
+EXIT_RC = 0
