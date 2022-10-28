@@ -229,7 +229,7 @@ spec = {
                 {
                     "name" : "agg",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 200000,
+                    "offset" : 250000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "node-{}".format(i*2+j),
@@ -250,7 +250,7 @@ spec = {
                 {
                     "name" : "aggregator",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 400000,
+                    "offset" : 500000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "agg-1{}".format(i),
@@ -506,6 +506,8 @@ log.info("job_two: {}".format(job_two))
 cluster.scancel(job_two)
 time.sleep(60)
 
+agg2.kill_ldmsd()
+time.sleep(5)
 for C in cluster.containers:
     C.kill_ldmsd()
 
