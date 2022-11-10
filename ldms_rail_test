@@ -1,0 +1,564 @@
+#!/usr/bin/python3
+#
+# Test LDMS rail feature (not `ldmsd`).
+
+import os
+import io
+import re
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test ldms_rail feature")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+
+#### spec #### -------------------------------------------------------
+
+def munge_key(i):
+    if i == 3:
+        return '3'*1024
+    return '0'*1024
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_rail test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+    }, # templates
+    "nodes" : [
+        # node-1, node-2 share the same munge key
+        # node-3 has a differnet munge key (to test auth rejection)
+        {
+            "hostname" : f"node-{i}",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "key"  : munge_key(i),
+                },
+            ],
+        } for i in range(1, 4)
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldms_rail_test",
+                 test_desc = "Test ldms_rail feature",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion( 1, "Start interactive LDMS server")
+test.add_assertion( 2, "Start interactive LDMS client")
+test.add_assertion( 3, "Client rail has 8 endpoints on 8 thread pools")
+test.add_assertion( 4, "Server rail has 8 endpoints on 8 thread pools")
+test.add_assertion( 5, "Sets on client are processed by different threads")
+test.add_assertion( 6, "Verify sets on the client")
+test.add_assertion( 7, "Start interactive LDMS client2")
+test.add_assertion( 8, "Client2 rail has 8 endpoints on 4 thread pools")
+test.add_assertion( 9, "Client3 (wrong auth) cannot connect")
+test.add_assertion(10, "Start interactive client4 (for push mode)")
+test.add_assertion(11, "Client4 got push callback from the corresponding thread")
+test.add_assertion(12, "Client5 started (for clean-up path test)")
+
+test.add_assertion(13, "Active-side close: client1 clean up")
+test.add_assertion(14, "Active-side close: server-side clean up")
+test.add_assertion(15, "Passive-side close: client2 clean up")
+test.add_assertion(16, "Passive-side close: server-side clean up")
+test.add_assertion(17, "Active-side term: server-side clean up")
+test.add_assertion(18, "Passive-side term: client5 clean up")
+
+test.add_assertion(19, "server -> client overspending send")
+test.add_assertion(20, "client -> server overspending send")
+test.add_assertion(21, "verify send credits on the server")
+test.add_assertion(22, "verify send credits on the client")
+test.add_assertion(23, "server unblock, verify recv data")
+test.add_assertion(24, "client unblock, verify recv data")
+test.add_assertion(25, "verify send credits on the server")
+test.add_assertion(26, "verify send credits on the client")
+test.add_assertion(27, "server -> client send after credited back")
+test.add_assertion(28, "client -> server send after credited back")
+test.add_assertion(29, "verify send credits on the server")
+test.add_assertion(30, "verify send credits on the client")
+test.add_assertion(31, "server unblock, verify recv data")
+test.add_assertion(32, "client unblock, verify recv data")
+test.add_assertion(33, "verify send credits on the server")
+test.add_assertion(34, "verify send credits on the client")
+test.add_assertion(35, "verify send-credit deposits on the server")
+test.add_assertion(36, "verify send-credit deposits on the client")
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+node3 = cluster.get_container("node-3")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(2)
+
+log.info("start ldms_rail_server.py and ldms_rail_client.py interactive sessions")
+# interactive server
+srv = node1.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i /tada-src/python/ldms_rail_server.py'")
+time.sleep(2)
+srv_out = srv.read()
+EXPECT(srv_out, ">>> ")
+# test.add_assertion( 1, "Start interactive LDMS server")
+test.assert_test(1, True, "OK")
+
+# interactive client (correct auth)
+cli = node2.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i /tada-src/python/ldms_rail_client.py'")
+time.sleep(2)
+cli_out =  cli.read()
+EXPECT(cli_out, ">>> ")
+# test.add_assertion( 2, "Start interactive LDMS client")
+test.assert_test(2, True, "OK")
+
+def pycmd(tty, cmd, retry = 3):
+    """cmd must be single command w/o new line"""
+    sio = io.StringIO()
+    tty.write(cmd)
+    # flush the echo
+    while tty.read() != '':
+        continue
+    # ENTER to execute
+    tty.write("\n")
+    count = 0
+    end = False
+    t0 = time.time() # for debugging
+    _count = 0 # for debugging
+    while count < retry and not end:
+        _count += 1
+        o = tty.read(idle_timeout=0.3)
+        if len(o):
+            count = 0 # reset
+        else:
+            count += 1
+        sio.write(o)
+        if sio.getvalue().endswith(">>> "):
+            t1 = time.time()
+            # print(f"HERE; count: {count}; _count: {_count}; dt: {t1 - t0}")
+            end = True
+            break
+    if not end:
+        raise RuntimeError("Python '{cmd}` not responding".format(**vars()))
+    o = sio.getvalue()
+    D.pyout = o
+    # remove the echoed cmd and the prompt
+    return o[ 2 : -4 ]
+
+# test.add_assertion( 3, "Client rail has 8 endpoints on 8 threads")
+while True: # will break
+    # Note: see python/ldms_rail_client.py
+    cli_out = pycmd(cli, "pool_idx_set == set(range(0, 8))")
+    if not cli_out or cli_out.strip() != "True":
+        test.assert_test(3, False, f"bad result: {cli_out}")
+        break
+    test.assert_test(3, True, "OK")
+    break
+
+# test.add_assertion( 4, "Server rail has 8 endpoints on 8 threads")
+while True: # will break
+    # Note: see python/ldms_rail_server.py
+    cmd = "r = list(xset)[0]; " \
+          "pool_idx = xprt_pool_idx(r); " \
+          "set(pool_idx) == set(range(0, 8))"
+    srv_out = pycmd(srv, cmd)
+    if not srv_out or srv_out.strip() != "True":
+        test.assert_test(4, False, f"bad result: {srv_out}")
+        break
+    test.assert_test(4, True, "OK")
+    break
+
+# test.add_assertion( 5, "Sets on client are processed by different threads")
+while True:
+    cli_out = pycmd(cli, "ep_threads == set_threads")
+    if not cli_out or cli_out.strip() != "True":
+        test.assert_test(5, False, f"bad result: {cli_out}")
+        break
+    test.assert_test(5, True, "OK")
+    break
+
+# test.add_assertion( 6, "Verify sets on the client")
+while True:
+    cli_out = pycmd(cli, "for s in lsets: verify_set(s, 1) \n")
+    if cli_out is None or cli_out.strip() != "":
+        test.assert_test(6, False, f"bad result: {cli_out}")
+        break
+    test.assert_test(6, True, "OK")
+    break
+
+cli2 = node2.exec_interact("/bin/bash -c 'ZAP_POOLS=4 /usr/bin/python3 -i /tada-src/python/ldms_rail_client.py'")
+time.sleep(2)
+cli2_out =  cli2.read()
+EXPECT(cli2_out, ">>> ")
+# test.add_assertion( 7, "Start interactive LDMS client2")
+test.assert_test(7, True, "OK")
+
+# test.add_assertion( 8, "Client2 rail has 8 endpoints on 4 thread pools")
+while True: # will break
+    # Note: see python/ldms_rail_client.py
+    cli2_out = pycmd(cli2, "pool_indices == [0,1,2,3,0,1,2,3]")
+    if not cli2_out or cli2_out.strip() != "True":
+        test.assert_test(8, False, f"bad result: {cli2_out}")
+        break
+    test.assert_test(8, True, "OK")
+    break
+
+# test.add_assertion( 9, "Client3 (wrong auth) cannot connect")
+cli3 = node3.exec_interact("/bin/bash -c 'ZAP_POOLS=4 /usr/bin/python3 -i /tada-src/python/ldms_rail_client.py'")
+time.sleep(2)
+cli3_out =  cli3.read()
+idx = cli3_out.find("ECONNREFUSED")
+if idx < 0:
+    test.assert_test(9, False, f"bad result: {cli3_out}")
+else:
+    test.assert_test(9, True, "OK")
+
+# test.add_assertion(10, "Start interactive client4 (for push mode)")
+cli4 = node2.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i "
+                           "/tada-src/python/ldms_rail_client_push.py'")
+time.sleep(2)
+cli4_out =  cli4.read()
+EXPECT(cli4_out, ">>> ")
+test.assert_test(10, True, "OK")
+
+# test.add_assertion(11, "Client4 got push callback from the corresponding thread")
+while True: # will break
+    log.info("waiting push ...")
+    cli4.write("wait_push()\n")
+    cli4_out = cli4.read()
+    assert(cli4_out.strip().endswith("wait_push"))
+    log.info("server: sampling new data (2)")
+    srv_out = pycmd(srv, "for s in SETS: sample(s, 2)\n")
+    cli4_out = cli4.read()
+    EXPECT(cli4_out, ">>> ")
+    log.info("client4: set pushes received")
+    log.info("client4: verifying data in sets")
+    cli4_out = pycmd(cli4, "for s in lsets: verify_set(s, 2)\nelse: True\n")
+    if cli4_out.strip() != "True":
+        test.assert_test(11, False, f"set data verification failed: {cli4_out}")
+    log.info("client4: verifying threads-sets-endpoints spread")
+    cli4_out = pycmd(cli4, "len(ep_threads)")
+    if cli4_out.strip() != "8":
+        test.assert_test(11, False, f"bad number of endpoint threads: {cli4_out}")
+    cli4_out = pycmd(cli4, "pool_indices")
+    if cli4_out.strip() != str(list(range(0, 8))):
+        test.assert_test(11, False, f"bad endpoint indices: {cli4_out}")
+    cli4_out = pycmd(cli4, "set_threads == ep_threads")
+    if cli4_out.strip() != "True":
+        test.assert_test(11, False, f"ep_threads != set_threads")
+    test.assert_test(11, True, f"OK")
+    break
+
+# for transport termination test
+cli5 = node2.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i "
+                           "/tada-src/python/ldms_rail_client_push.py'")
+time.sleep(2)
+cli5_out =  cli5.read()
+EXPECT(cli5_out, ">>> ")
+test.assert_test(12, True, f"OK")
+
+log.info(f"xprt close by client1")
+cli_out_rm_sets = pycmd(cli, "rm_sets()")
+cli_out_close = pycmd(cli, "r.close()")
+time.sleep(2)
+cli_out_xprt_free_list = pycmd(cli, "len(xprt_free_list)")
+xfl_len = cli_out_xprt_free_list.strip()
+# test.add_assertion(13, "Active-side close: client1 clean up")
+if xfl_len == "1":
+    test.assert_test(13, True, f"OK")
+else:
+    test.assert_test(13, False, f"bad xprt_free_list length: {xfl_len}")
+
+# check on the server side
+# test.add_assertion(14, "Active-side close: server-side clean up")
+srv_out_xprt_free_list = pycmd(srv, "len(xprt_free_list)")
+xfl_len = cli_out_xprt_free_list.strip()
+if xfl_len == "1":
+    test.assert_test(14, True, f"OK")
+else:
+    test.assert_test(14, False, f"bad xprt_free_list length: {xfl_len}")
+
+# xprt close from the passive side
+cli2_out = pycmd(cli2, "rm_sets()") # remove the sets first
+srv_out = pycmd(srv, "xset[0].close()")
+time.sleep(2)
+cli2_out = pycmd(cli2, "len(xprt_free_list)")
+cli2_free_list_len = cli2_out.strip()
+srv_out =  pycmd(srv,  "len(xprt_free_list)")
+srv_free_list_len = srv_out.strip()
+# test.add_assertion(15, "Passive-side close: client2 clean up")
+if cli2_free_list_len == "1":
+    test.assert_test(15, True, f"OK")
+else:
+    test.assert_test(15, False, f"bad xprt_free_list length: {cli2_free_list_len}")
+# test.add_assertion(16, "Passive-side close: server-side clean up")
+if srv_free_list_len == "2":
+    test.assert_test(16, True, f"OK")
+else:
+    test.assert_test(16, False, f"bad xprt_free_list length: {srv_free_list_len}")
+
+# active-side process termination
+cli4.term()
+time.sleep(2)
+srv_out =  pycmd(srv,  "len(xprt_free_list)")
+srv_free_list_len = srv_out.strip()
+# test.add_assertion(17, "Active-side term: server-side clean up")
+if srv_free_list_len == "3":
+    test.assert_test(17, True, f"OK")
+else:
+    test.assert_test(17, False, f"bad xprt_free_list length: {srv_free_list_len}")
+
+pycmd(cli5, "rm_sets()")
+srv.term()
+cli5_out =  pycmd(cli5,  "len(xprt_free_list)")
+cli5_free_list_len = cli5_out.strip()
+if cli5_free_list_len == "1":
+    test.assert_test(18, True, f"OK")
+else:
+    test.assert_test(18, False, f"bad xprt_free_list length: {cli5_free_list_len}")
+
+cli.term()
+cli2.term()
+cli3.term()
+# cli4 already terminated
+cli5.term()
+# srv already terminated
+
+def verify_send_credits(test_id, tty, expected):
+    v = pycmd(tty, "r.send_credits").strip()
+    if v != str(expected):
+        test.assert_test(test_id, False, f"Expecing {expected} send credits, "
+                                         f"but got {v}")
+        return False
+    test.assert_test(test_id, True, "OK")
+    return True
+
+# === For send recv w/ credit test === #
+while True: # will break
+    srv = node1.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i " \
+                          "/tada-src/python/ldms_rail_send_recv_server.py'")
+    time.sleep(2)
+    cli = node2.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i " \
+                          "/tada-src/python/ldms_rail_send_recv_client.py'")
+    time.sleep(2)
+    srv_out = srv.read()
+    cli_out = cli.read()
+    EXPECT(srv_out, ">>> ")
+    EXPECT(cli_out, ">>> ")
+    pycmd(srv, "r = xset[0]")
+
+    # test.add_assertion(19, "server -> client overspending send")
+    srv_out1 = pycmd(srv, "r.send(b'a'*15)").strip()
+    srv_out2 = pycmd(srv, "r.send(b'a'*15)").strip()
+    srv_out3 = pycmd(srv, "r.send(b'a'*15)").strip()
+    if srv_out1 != "" or srv_out2 != "" or srv_out3.find("ENOBUFS") == -1:
+        test.assert_test(19, False, f"Unexpected output:\n"
+                                    f"srv_out1: {srv_out1}\n"
+                                    f"srv_out2: {srv_out2}\n"
+                                    f"srv_out3: {srv_out3}\n")
+        break
+    else:
+        test.assert_test(19, True, "error message verified")
+
+    # test.add_assertion(20, "client -> server overspending send")
+    cli_out1 = pycmd(cli, "r.send(b'a'*15)").strip()
+    cli_out2 = pycmd(cli, "r.send(b'a'*15)").strip()
+    cli_out3 = pycmd(cli, "r.send(b'a'*15)").strip()
+    if cli_out1 != "" or cli_out2 != "" or cli_out3.find("ENOBUFS") == -1:
+        test.assert_test(20, False, f"Unexpected output:\n"
+                                    f"cli_out1: {cli_out1}\n"
+                                    f"cli_out2: {cli_out2}\n"
+                                    f"cli_out3: {cli_out3}\n")
+        break
+    else:
+        test.assert_test(20, True, "error message verified")
+
+    # test.add_assertion(21, "verify send credits on the server")
+    if not verify_send_credits(21, srv, [2]+[32]*7):
+        break
+
+    # test.add_assertion(22, "verify send credits on the client")
+    if not verify_send_credits(22, cli, [2]+[32]*7):
+        break
+
+    # test.add_assertion(23, "server unblock, verify recv data")
+    srv_out = pycmd(srv, "blocker.unblock(); time.sleep(1); blocker.unblock();").strip()
+    if srv_out != "":
+        test.assert_test(23, False, f"Unexpected output: {srv_out}")
+        break
+    srv_out = pycmd(srv, "recv_data").strip()
+    if srv_out != "[b'aaaaaaaaaaaaaaa', b'aaaaaaaaaaaaaaa']":
+        test.assert_test(23, False, f"bad recv data: f{srv_out}")
+        break
+    else:
+        test.assert_test(23, True, f"recv data verified")
+
+    # test.add_assertion(24, "client unblock, verify recv data")
+    cli_out = pycmd(cli, "blocker.unblock(); time.sleep(1); blocker.unblock();").strip()
+    if cli_out != "":
+        test.assert_test(24, False, f"Unexpected output: {cli_out}")
+        break
+    cli_out = pycmd(cli, "recv_data").strip()
+    if cli_out != "[b'aaaaaaaaaaaaaaa', b'aaaaaaaaaaaaaaa']":
+        test.assert_test(24, False, f"bad recv data: f{cli_out}")
+        break
+    else:
+        test.assert_test(24, True, f"recv data verified")
+
+    # test.add_assertion(25, "verify send credits on the server")
+    if not verify_send_credits(25, srv, [32]*8):
+        break
+
+    # test.add_assertion(26, "verify send credits on the client")
+    if not verify_send_credits(26, cli, [32]*8):
+        break
+
+    # test.add_assertion(27, "server -> client send after credited back")
+    srv_out = pycmd(srv, "r.send(b'b'*15)").strip()
+    if srv_out != "":
+        test.assert_test(27, False, f"Unexpected output: {srv_out}")
+        break
+    test.assert_test(27, True, f"OK")
+
+    # test.add_assertion(28, "client -> server send after credited back")
+    cli_out = pycmd(cli, "r.send(b'b'*15)").strip()
+    if cli_out != "":
+        test.assert_test(28, False, f"Unexpected output: {cli_out}")
+        break
+    test.assert_test(28, True, f"OK")
+
+    # test.add_assertion(29, "verify send credits on the server")
+    if not verify_send_credits(29, srv, [17]+[32]*7):
+        break
+
+    # test.add_assertion(30, "verify send credits on the client")
+    if not verify_send_credits(30, cli, [17]+[32]*7):
+        break
+
+    # test.add_assertion(31, "server unblock, verify recv data")
+    expected_recv = str([ 15*b'a', 15*b'a', 15*b'b' ])
+    srv_out = pycmd(srv, "blocker.unblock(); recv_data").strip()
+    if srv_out != expected_recv:
+        test.assert_test(31, False, f"Bad recv data: {srv_out}")
+        break
+    else:
+        test.assert_test(31, True, "OK")
+
+    # test.add_assertion(32, "client unblock, verify recv data")
+    expected_recv = str([ 15*b'a', 15*b'a', 15*b'b' ])
+    cli_out = pycmd(cli, "blocker.unblock(); recv_data").strip()
+    if cli_out != expected_recv:
+        test.assert_test(32, False, f"Bad recv data: {cli_out}")
+        break
+    else:
+        test.assert_test(32, True, "OK")
+
+    # test.add_assertion(33, "verify send credits on the server")
+    if not verify_send_credits(33, srv, [32]*8):
+        break
+
+    # test.add_assertion(34, "verify send credits on the client")
+    if not verify_send_credits(34, cli, [32]*8):
+        break
+
+    # test.add_assertion(35, "verify send-credit deposits on the server")
+    expected_credit_list = '[(17, 0), (32, 0), (32, 0)]'
+    srv_credit_list = pycmd(srv, "credit_list").strip()
+    test.assert_test(35, expected_credit_list == srv_credit_list,
+                    f"expected {expected_credit_list}, got {srv_credit_list}")
+
+    # test.add_assertion(36, "verify send-credit deposits on the client")
+    expected_credit_list = '[(17, 0), (32, 0), (32, 0)]'
+    cli_credit_list = pycmd(cli, "credit_list").strip()
+    test.assert_test(36, expected_credit_list == cli_credit_list,
+                    f"expected {expected_credit_list}, got {cli_credit_list}")
+
+    break
+
+# see at_exit()
