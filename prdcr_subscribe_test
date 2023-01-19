@@ -222,10 +222,17 @@ def stream_client_dump(node):
     else:
         raise NotImplementedError("stream_client_dump is not supported (yet) in v5")
     rc, out = node.config_ldmsd([txt])
-    obj = json.loads(out)
-    lst = [ (s["name"], c["cb_fn"], c["ctxt"]) \
-                    for s in obj["streams"] \
-                    for c in s["clients"] ]
+    lines = out.split("\n")[2:]
+    lst = []
+    for l in lines:
+        if l == "":
+            continue
+        x = l.strip().split(None, 1)
+        if len(x) == 1:
+            stream_name = x[0]
+        else:
+            (ctxt, cb_fn) = (x[0], x[1])
+            lst.append((stream_name, cb_fn, ctxt)) 
     return lst
 
 def verify_msg(test, assert_no, msg, json_data, err_text):
