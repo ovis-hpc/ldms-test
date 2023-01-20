@@ -137,12 +137,12 @@ else
 	INFO "Using default parameters, config file does not exists: ${CFG}"
 fi
 
-OVIS_REPO=${OVIS_REPO:-https://github.com/ovis-hpc/ovis}
-OVIS_BRANCH=${OVIS_BRANCH:-OVIS-4}
-SOS_REPO=${SOS_REPO:-https://github.com/ovis-hpc/sos}
-SOS_BRANCH=${SOS_BRANCH:-SOS-6}
-MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
-MAESTRO_BRANCH=${MAESTRO_BRANCH:-master}
+export OVIS_REPO=${OVIS_REPO:-https://github.com/ovis-hpc/ovis}
+export OVIS_BRANCH=${OVIS_BRANCH:-OVIS-4}
+export SOS_REPO=${SOS_REPO:-https://github.com/ovis-hpc/sos}
+export SOS_BRANCH=${SOS_BRANCH:-SOS-6}
+export MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
+export MAESTRO_BRANCH=${MAESTRO_BRANCH:-master}
 
 NEW_GIT_SHA=( $( git ls-remote ${OVIS_REPO} ${OVIS_BRANCH} ) )
 OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {

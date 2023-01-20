@@ -72,17 +72,44 @@ OVIS_BUILD_OPTS=(
 
 pushd ${WORK_DIR}
 
+export OVIS_REPO=${OVIS_REPO:-https://github.com/ovis-hpc/ovis}
+export OVIS_BRANCH=${OVIS_BRANCH:-OVIS-4}
+export SOS_REPO=${SOS_REPO:-https://github.com/ovis-hpc/sos}
+export SOS_BRANCH=${SOS_BRANCH:-SOS-6}
+export MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
+export MAESTRO_BRANCH=${MAESTRO_BRANCH:-master}
 
 INFO "== Checking out SOS =="
-[[ -d sos ]] || git clone -b SOS-6 https://github.com/ovis-hpc/sos
+[[ -d sos ]] || {
+	mkdir sos
+	pushd sos
+	git init .
+	git remote add github ${SOS_REPO}
+	git fetch github --tags
+	git fetch github ${SOS_BRANCH}
+	git checkout FETCH_HEAD
+	popd
+}
 INFO "== Checking out OVIS =="
-[[ -d ovis ]] || git clone https://github.com/ovis-hpc/ovis
+[[ -d ovis ]] || {
+	mkdir ovis
+	pushd ovis
+	git init .
+	git remote add github ${OVIS_REPO}
+	git fetch github --tags
+	git fetch github ${OVIS_BRANCH}
+	git checkout FETCH_HEAD
+	popd
+}
 INFO "== Checkout maestro =="
-[[ -d maestro ]] || git clone https://github.com/ovis-hpc/maestro
-[[ -z "${MAESTRO_COMMIT}" ]] || {
-	INFO "checking out maestro commit id: ${MAESTRO_COMMIT}"
+[[ -d maestro ]] || {
+	mkdir maestro
 	pushd maestro
-	git checkout ${MAESTRO_COMMIT}
+	git init .
+	git remote add github ${MAESTRO_REPO}
+	git fetch github --tags
+	git fetch github ${MAESTRO_BRANCH}
+	git checkout FETCH_HEAD
 	popd
 }
 
