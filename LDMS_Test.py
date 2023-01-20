@@ -2672,7 +2672,8 @@ def assertion_id_get():
         id += 1
 
 def create_updtr_status(name, interval, offset, state, prdcrs,
-                        sync = True, mode = "Pull", auto = False):
+                        sync = True, mode = "Pull", auto = False,
+                        outstanding = 0, oversampled = 0):
     return {'name' : name,
              'interval' : str(interval),
              'offset' : str(offset),
@@ -2680,7 +2681,9 @@ def create_updtr_status(name, interval, offset, state, prdcrs,
              'mode' : mode,
              'auto' : "true" if auto else "false",
              'state' : state,
-             'producers' : prdcrs}
+             'producers' : prdcrs,
+             'outstanding count' : outstanding,
+             'oversampled count' : oversampled}
 
 def create_updtr_prdcr_status(name, host, port, xprt, state):
     return {'name' : name,
