@@ -362,7 +362,7 @@ if __name__ == "__main__":
     clustername = args.clustername
     COMMIT_ID = args.commit_id
 
-    spec["OVIS_PREFIX"] = args.prefix
+    spec["OVIS_PREFIX"] = args.direct_prefix
     spec["name"] = clustername
     spec["templates"]["ENV"]["TADA_USER"] = args.user
     spec["templates"]["ENV"]["TADA_ADDR"] = args.tada_addr

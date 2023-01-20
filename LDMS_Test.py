@@ -354,6 +354,9 @@ def add_common_args(parser):
     parser.add_argument("--prefix", type = str,
             default = guess_ovis_prefix(),
             help = "The OVIS installation path on the host. This will be mounted to /opt/ovis in containers.")
+    parser.add_argument("--direct-prefix", type = str,
+            default = guess_ovis_prefix(),
+            help = "The path of the OVIS binaries installation path for the host.")
     parser.add_argument("--src", type = str,
             help = "The path to OVIS source tree (for gdb). " \
             "If not specified, src tree won't be mounted.")
@@ -384,6 +387,7 @@ def process_config_file(path = None):
     _DEFAULT_CONFIG = {
             "ldms-test": {
                 "prefix": guess_ovis_prefix(),
+                "direct_prefix": guess_ovis_prefix(),
                 "runtime": "docker",
                 "clustername": None,
                 "user": _USER,

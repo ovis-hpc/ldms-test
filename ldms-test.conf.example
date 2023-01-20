@@ -36,6 +36,10 @@ runtime = singularity
 # Optionally specify the ovis installation prefix. If not specified, LDMS_Test
 # will try to determine from `which ldmsd`.
 
+#direct_prefix = /opt/ovis
+# `direct_prefix` is used in `direct_*` tests. This points to the binaries of
+# the direct (non-containerized) on-host installation prefix.
+
 #src = /home/alice/ovis
 # Optionally specify the path to the ovis source code. This is useful for gdb
 # in the container. If specified, it is equivalent to having
