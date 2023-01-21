@@ -35,7 +35,7 @@ CONT_TEST_LIST=(
 	ldms_record_test
 	ldms_schema_digest_test
 	ldmsd_decomp_test
-	ldmsd_stream_dir_test
+	ldmsd_stream_status_test
 	store_list_record_test
 	maestro_raft_test
 	ovis_json_test
