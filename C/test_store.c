@@ -8,13 +8,14 @@
 #include "ldms/ldms.h"
 #include "ldms/ldmsd.h"
 #include "ovis_util/util.h"
+#include "ovis_log/ovis_log.h"
 
 #define STORE_NAME "test_store"
 #define DATA_SUFFIX ".data"
 #define HEADER_SUFFIX ".header"
 
 #define LOG_(level, ...) do {\
-	msglog(level, "test_store: "__VA_ARGS__); \
+	ovis_log(mylog, level, ##__VA_ARGS__); \
 } while(0);
 
 typedef struct test_store_inst_s {
@@ -27,9 +28,10 @@ typedef struct test_store_inst_s {
 
 static LIST_HEAD(test_store_handle_list, test_store_inst_s) test_store_handle_list;
 
-static ldmsd_msg_log_f msglog;
 static pthread_mutex_t cfg_lock;
 static char *root_path;
+
+static ovis_log_t mylog;
 
 static char *create_key(const char *container, const char *schema)
 {
@@ -378,9 +380,10 @@ static struct ldmsd_store test_store = {
 	.flush = flush_store,
 };
 
-struct ldmsd_plugin *get_plugin(ldmsd_msg_log_f pf)
+struct ldmsd_plugin *get_plugin()
 {
-	msglog = pf;
+	mylog = ovis_log_create("store.test", "Messages for test_store");
+	assert(mylog);
 	return &test_store.base;
 }
 

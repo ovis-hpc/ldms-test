@@ -70,6 +70,7 @@
 #include <grp.h>
 #include <coll/htbl.h>
 #include <ovis_json/ovis_json.h>
+#include <ovis_log/ovis_log.h>
 #include <assert.h>
 #include <sched.h>
 #include "ldms/ldms.h"
@@ -78,9 +79,10 @@
 
 #include "ovis-ldms-config.h" /* for OVIS_GIT_LONG */
 
+static ovis_log_t mylog;
+
 static char tada_user[64]; /* populated in get_plugin */
 
-static ldmsd_msg_log_f msglog;
 static char *stream;
 
 static const char *usage(struct ldmsd_plugin *self)
@@ -124,7 +126,7 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct
 	out = fopen(value, "w");
 	if (!out) {
 		rc = errno;
-		ldmsd_log(LDMSD_LERROR, "test_stream_sampler: "
+		ovis_log(mylog, OVIS_LERROR, "test_stream_sampler: "
 			  "cannot open file '%s'\n", value);
 	} else {
 		rc = 0;
@@ -181,13 +183,14 @@ static struct ldmsd_sampler test_stream_sampler = {
 	.sample = sample
 };
 
-struct ldmsd_plugin *get_plugin(ldmsd_msg_log_f pf)
+struct ldmsd_plugin *get_plugin()
 {
-	msglog = pf;
 	char *__user = getenv("TADA_USER");
 	if (__user)
 		snprintf(tada_user, sizeof(tada_user), "%s", __user);
 	else
 		getlogin_r(tada_user, sizeof(tada_user));
+	mylog = ovis_log_create("sampler.test_stream", "Messages for the test_stream_sampler");
+	assert(mylog);
 	return &test_stream_sampler.base;
 }
