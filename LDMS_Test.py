@@ -13,6 +13,9 @@ import signal
 import subprocess as sp
 import logging
 
+from collections import namedtuple
+from dataclasses import dataclass, field
+
 import fcntl
 from array import array
 import struct
@@ -948,6 +951,151 @@ class StreamData(object):
 
     def __repr__(self):
         return f"StreamData{self.as_tuple()}"
+
+def obj_xeq(a, b):
+    if isinstance(a, list):
+        return list_xeq(a, b)
+    if isinstance(a, dict):
+        return dict_xeq(a, b)
+    if isinstance(a, XCmp):
+        return a.xeq(b)
+    return a == b
+
+def list_xeq(l0, l1):
+    if len(l0) != len(l1):
+        return False
+    lx = list(l1)
+    for a in l0:
+        for i in range(0, len(lx)):
+            b = lx[i]
+            if obj_xeq(a, b):
+                break
+        else:
+            return False
+        lx.pop(i)
+    return True
+
+def dict_xeq(d0, d1):
+    k0 = list(d0.keys())
+    k0.sort()
+    k1 = list(d1.keys())
+    k1.sort()
+    if k0 != k1:
+        return False
+    for k in k0:
+        v0 = d0[k]
+        v1 = d1[k]
+        if not obj_xeq(v0, v1):
+            return False
+    return True
+
+def list_xsort(l):
+    for o in l:
+        if isinstance(o,XCmp):
+            o.xsort()
+    l.sort()
+
+def dict_xsort(d):
+    for o in d.values():
+        if isinstance(o,XCmp):
+            o.xsort()
+
+class XCmp(object):
+    def xeq(self, other):
+        if type(self) != type(other):
+            raise TypeError(f'TypeMismatch, expecting {type(self)}, got {type(other)}')
+        for k in self.__dict__.keys():
+            v0 = getattr(self, k)
+            v1 = getattr(other, k)
+            if v0 is None or v1 is None:
+                continue # skip on None attributes
+            if not obj_xeq(v0, v1):
+                return False
+        return True
+
+    def xsort(self):
+        for k,v in self.__dict__.items():
+            if isinstance(v, list):
+                list_xsort(v)
+            elif isinstance(v, dict):
+                dict_xsort(v)
+            elif isinstance(v, XCmp):
+                v.xsort()
+
+    def __lt__(self, other):
+        if type(self) != type(other):
+            raise TypeError(f'TypeMismatch, expecting {type(self)}, got {type(other)}')
+        for k in type(self).__dataclass_fields__.keys():
+            v0 = getattr(self, k)
+            v1 = getattr(other, k)
+            if v0 is None:
+                if v1 is None:
+                    continue
+                return True
+            if v0 < v1:
+                return True
+        return False
+
+IP4_ADDR_PORT = re.compile('(\d+)\.(\d+)\.(\d+).(\d+)(?:\:(\d+))?')
+
+@dataclass(frozen = True)
+class StreamAddr(XCmp):
+    addr: tuple = None
+    port: int   = None
+
+    @classmethod
+    def from_str(cls, s):
+        m = IP4_ADDR_PORT.match(s)
+        if not m:
+            raise ValueError(f"'{s}' is not in the form of IP4_ADDR[:PORT]")
+        g = m.groups()
+        g = tuple( int(a) if a is not None else None for a in g )
+        ip_addr = g[0:4]
+        port = g[4]
+        return cls(ip_addr, port)
+
+@dataclass()
+class TimeSpec(XCmp):
+    tv_sec:  int = None
+    tv_nsec: int = None
+
+@dataclass()
+class StreamCounters(XCmp):
+    first_ts: TimeSpec = None
+    last_ts:  TimeSpec = None
+    count:    int      = None
+    bytes:    int      = None
+
+@dataclass()
+class StreamSrcStats(XCmp):
+    src: StreamAddr     = None
+    rx:  StreamCounters = None
+
+@dataclass()
+class StreamClientPairStats(XCmp):
+    stream_name:  str            = None
+    client_match: str            = None
+    client_desc:  str            = None
+    is_regex:     int            = None
+    tx:           StreamCounters = None
+    drops:        StreamCounters = None
+
+@dataclass()
+class StreamStats(XCmp):
+    rx:      StreamCounters = None
+    sources: dict           = None
+    clients: dict           = None
+    name:    str            = None
+
+@dataclass()
+class StreamClientStats(XCmp):
+    tx:       StreamCounters = None
+    drops:    StreamCounters = None
+    streams:  dict           = None
+    dest:     StreamAddr     = None
+    is_regex: int            = None
+    match:    str            = None
+    desc:     str            = None
 
 ################################################################################
 

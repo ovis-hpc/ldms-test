@@ -1,0 +1,1433 @@
+#!/usr/bin/python3
+#
+# SYNOPSIS
+# --------
+# Test `ldms_stream` features. The test script creates 7 containers: node-1 to
+# node-7. They each run an interactive Python process that LDMS-listen on a port
+# and have the following connectivity:
+#
+#
+#          client-8-foo
+#               ^
+#               |
+#             srv-1  ............. [ level-3 ]
+#               ^
+#               |
+#       .-------+-------.
+#       |               |
+#     srv-2           srv-3  ..... [ level-2 ]
+#       ^               ^
+#       |               |
+#   .---+---.       .---+---.
+#   |       |       |       |
+# srv-4   srv-5   srv-6   srv-7 .. [ level-1 ]
+#   ^ ^     ^       ^       ^
+#   | '-.   |       |       |
+# pub-4 | pub-5   pub-6   pub-7 .. [ publishers ]
+#       +--------.
+#       |        |
+#   pub-4-foo   pub-4-bar
+#
+# - srv-<NUM> are server processes (see `python/ldms_stream_server.py`) on
+#   the corresponding node-<NUM>, running under `root` (privileged) user.
+# - pub-<NUM> are publisher processes (see `python/ldms_stream_publish.py`) on
+#   the corresponding node-<NUM>, running under `root` (privileged) user.
+# - The pub-4-foo is the publisher process on node-4 running under `foo`
+#   (non-privileged) user.
+# - The pub-4-bar is the publisher process on node-4 running under `bar`
+#   (non-privileged) user.
+# - `foo` and `bar` are both in `users` group.
+# - The client-8-foo is the client process (subscriber) on node-8, running under
+#   `foo` user (non-privileged).
+# - the stream data all originated from the publishers.
+# - 'l1-stream' is the stream that aims to stop at level-1 on the left side of
+#   the tree.
+# - 'l2-stream' is the stream that aims to stop at level-2 on the left side of
+#   the tree.
+# - 'l3-stream' is the stream that aims to stop at level-3 on the left side of
+#   the tree.
+# - These are achieved by selectively subscribe to certain streams for the
+#   server processes on the left side of the tree.
+# - The server processes on the right side of the tree subscribe for '.*-stream'
+#   streams (to also test the regular expression matching).
+# - Each server process have (local) stream clients for the following stream
+#   matching:
+#   - 'l1-stream'
+#   - 'l2-stream'
+#   - 'l3-stream'
+#   - '.*-stream'
+#   - '.*' (all stream data reaching the process)
+# - Each process shall inspect data in each of its client to verify the stream
+#   results.
+# - Publishing data:
+#   - Oversized data
+#   - STRING
+#   - JSON
+#   - as self
+#   - as other user
+# - Publish data over these streams:
+#   - 'l1-stream'
+#   - 'l2-stream'
+#   - 'l3-stream'
+#   - 'x-stream'
+#   - 'nada': to test the no-matching case (except '.*')
+#
+# Verifies that
+# - The non-privileged process gets an error when trying to send as other user
+#   or group.
+# - The non-privileged process shall be able to publish with gid it belongs to.
+# - The `client-8-foo` shall not see protected data (e.g. root's data with
+#   0o400 permission).
+# - The `client-8-foo` shall see `bar` data that publishes with `users` group
+#   and 0o440 permission.
+# - The servers receive data accordingly (according to remote subscription).
+# - The endpoints get clean up properly when remote peer disconnected (remote
+#   subscription client will take a reference on the endpoint; hence if the
+#   endpoint get clean up properly, the remote subscription client is also
+#   cleaned up properly).
+
+import os
+import io
+import re
+import pdb
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from dataclasses import dataclass, field
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, \
+                      StreamAddr, TimeSpec, StreamCounters, StreamSrcStats, \
+                      StreamClientPairStats, StreamStats, StreamClientStats, \
+                      list_xsort, list_xeq
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test ldms_stream features")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+
+#### spec #### -------------------------------------------------------
+
+def munge_key(i):
+    return '0'*1024
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_stream test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"node-{i}",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "key"  : munge_key(i),
+                },
+            ],
+        } for i in range(1, 9)
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldms_stream_test",
+                 test_desc = "Test ldms_stream on rail feature",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion( 1, "Publishing oversize data results in an error")
+test.add_assertion( 2, "JSON support (l3-stream)")
+
+test.add_assertion( 3, "l3-stream delivery")
+test.add_assertion( 301, "send-credit taken")
+test.add_assertion( 302, "send-credit returned")
+test.add_assertion( 303, "stream delivery spread among rails")
+
+test.add_assertion( 4, "l2-stream delivery")
+test.add_assertion( 5, "l1-stream delivery")
+test.add_assertion( 6, "x-stream delivery")
+test.add_assertion( 7, "nada delivery")
+
+test.add_assertion( 8, "l3-stream by 'root' with 0400 permission")
+test.add_assertion( 9, "l3-stream by 'root' as 'foo' with 0400 permission")
+test.add_assertion(10, "l3-stream by 'root' as 'bar' with 0400 permission")
+test.add_assertion(11, "l3-stream by 'root' as 'bar' with 0440 permission")
+
+test.add_assertion(12, "l3-stream by 'foo' as 'bar' results in an error")
+
+test.add_assertion(13, "l3-stream by 'foo' with 0440 permission")
+test.add_assertion(14, "l3-stream by 'bar' with 0440 permission")
+
+test.add_assertion(15, "Blocking client and asynchronous client have the same data")
+
+test.add_assertion(16, "srv-6 clean up properly after srv-3 exited")
+test.add_assertion(17, "srv-7 clean up properly after srv-3 exited")
+test.add_assertion(18, "srv-1 clean up properly after srv-3 exited")
+
+test.add_assertion(19, "l3-stream successfully delivered after srv-3 restarted")
+
+test.add_assertion(20, "l3-stream publish from L1 (srv4)")
+test.add_assertion(21, "nada publish from L1 (srv4)")
+
+test.add_assertion(22, "Check stream stats in each process")
+test.add_assertion(23, "Check stream client stats in each process")
+
+# Test switches for convenience while debugging
+test1  = True
+test2  = True
+test3  = True
+test4  = True
+test5  = True
+test6  = True
+test7  = True
+test8  = True
+test9  = True
+test10 = True
+test11 = True
+test12 = True
+test13 = True
+test14 = True
+test15 = True
+test16to19 = True
+test20 = True
+test21 = True
+test22 = True
+test23 = True
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+node3 = cluster.get_container("node-3")
+node4 = cluster.get_container("node-4")
+node5 = cluster.get_container("node-5")
+node6 = cluster.get_container("node-6")
+node7 = cluster.get_container("node-7")
+node8 = cluster.get_container("node-8")
+nodes = [ node1, node2, node3, node4, node5, node6, node7, node8 ]
+
+# add `foo` and `bar` users
+log.info("-- Adding 'foo' and 'bar' users --")
+for node in nodes:
+    node.exec_run("useradd foo && usermod -aG users foo")
+    node.exec_run("useradd bar && usermod -aG users bar")
+
+FOO_UID = 1000
+FOO_GID = 1000
+BAR_UID = 1001
+BAR_GID = 1001
+USERS_GID = 100
+
+UID_TBL = { 'foo': FOO_UID, FOO_UID: FOO_UID,
+            'bar': BAR_UID, BAR_UID: BAR_UID,
+            'root': 0, 0: 0 }
+GID_TBL = { 'foo': FOO_GID, FOO_GID: FOO_GID,
+            'bar': BAR_GID, BAR_GID: BAR_GID,
+            'root': 0, 0: 0 }
+
+GROUPS_TBL = {
+        0:       [ 0        ],
+        FOO_UID: [ FOO_GID, USERS_GID ],
+        BAR_UID: [ BAR_GID, USERS_GID ],
+    }
+
+def get_uid(obj):
+    return UID_TBL[obj]
+
+def get_gid(obj):
+    return GID_TBL[obj]
+
+def get_groups(uid):
+    uid = get_uid(uid)
+    return GROUPS_TBL[uid]
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(2)
+
+# raise Exception("BREAK")
+
+# start interactive stream servers
+log.info("start interactive stream servers")
+
+LOCAL = StreamAddr( (0,0,0,0), 0 )
+
+# This will be attached to obj returned by py_pty
+# def stream_publish(name, stream_data, stream_type=None, perm=0o444, uid=None, gid=None):
+def py_pty_stream_publish(tty, name, stream_data, stream_type=None, perm=None, uid=None, gid=None):
+    cmd = f'r.stream_publish({repr(name)}, {repr(stream_data)}'
+    kwargs = dict()
+    if stream_type is not None:
+        cmd += f', stream_type={repr(stream_type)}'
+    if perm is not None:
+        cmd += f', perm={repr(perm)}'
+        kwargs['perm'] = perm
+    if uid is not None:
+        cmd += f', uid={repr(uid)}'
+        kwargs['uid'] = uid
+    if gid is not None:
+        cmd += f', gid={repr(gid)}'
+        kwargs['gid'] = gid
+    cmd += '); r.send_credits'
+    out = tty.pycmd(cmd)
+    if out.find('Traceback') == -1:
+        if uid is None:
+            kwargs['uid'] = tty.uid
+        if gid is None:
+            kwargs['gid'] = tty.gid
+        tty.remote_tracker.recv_track(name, stream_data, tty._addr, **kwargs)
+    return out
+
+def py_pty_ldms_stream_publish(tty, name, stream_data, stream_type=None, perm=None, uid=None, gid=None):
+    cmd = f'ldms.stream_publish({repr(name)}, {repr(stream_data)}'
+    kwargs = dict()
+    if stream_type is not None:
+        cmd += f', stream_type={repr(stream_type)}'
+    if perm is not None:
+        cmd += f', perm={repr(perm)}'
+        kwargs['perm'] = perm
+    if uid is not None:
+        cmd += f', uid={repr(uid)}'
+        kwargs['uid'] = uid
+    if gid is not None:
+        cmd += f', gid={repr(gid)}'
+        kwargs['gid'] = gid
+    cmd += ')'
+    out = tty.pycmd(cmd)
+    if out.find('Traceback') == -1:
+        tty.tracker.recv_track(name, stream_data, LOCAL, **kwargs)
+    return out
+
+def py_pty_stream_stats_get(pty):
+    out = pty.pycmd('ldms.stream_stats_get()')
+    lcl = dict()
+    exec(f'ret = {out}', globals(), lcl)
+    ret = lcl['ret']
+    # list_xsort(ret)
+    ret.sort(key = lambda o: o.name)
+    return ret
+
+def py_pty_stream_client_stats_get(pty):
+    out = pty.pycmd('ldms.stream_client_stats_get()')
+    lcl = dict()
+    exec(f'ret = {out}', globals(), lcl)
+    ret = lcl['ret']
+    # list_xsort(ret)
+    ret.sort(key = lambda o: o.match)
+    return ret
+
+# This will be attached to obj returned by py_pty
+def py_pty_pycmd(tty, cmd, retry = 3):
+    """cmd must be single command w/o new line"""
+    _begin = time.time()
+    sio = io.StringIO()
+    tty.write(cmd)
+    _mark0 = time.time()
+    # flush the echo
+    while tty.read(idle_timeout = 0.1) != '':
+        continue
+    _mark1 = time.time()
+    # ENTER to execute
+    tty.write("\n")
+    _mark2 = time.time()
+    count = 0
+    end = False
+    _mark3 = time.time()
+    t0 = time.time() # for debugging
+    _count = 0 # for debugging
+    while count < retry and not end:
+        _count += 1
+        o = tty.read(idle_timeout=0.1)
+        if len(o):
+            count = 0 # reset
+        else:
+            count += 1
+        sio.write(o)
+        if sio.getvalue().endswith(">>> "):
+            t1 = time.time()
+            # print(f"HERE; count: {count}; _count: {_count}; dt: {t1 - t0}")
+            end = True
+            break
+    _mark4 = time.time()
+    if not end:
+        raise RuntimeError("Python '{cmd}` not responding".format(**vars()))
+    o = sio.getvalue()
+    D.pyout = o
+    _end = time.time()
+    if False:
+        log.info(f"[pycmd] t1-t0: {t1-t0} secs")
+        log.info(f"[pycmd] begin-to-end: {_end - _begin} secs")
+        log.info(f"[pycmd] _mark0: {_mark0 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark1: {_mark1 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark2: {_mark2 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark3: {_mark3 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark4: {_mark4 - _begin:.3f} secs")
+    # remove the echoed cmd and the prompt
+    return o[ 2 : -4 ]
+
+def py_pty_get_pub_addr(tty):
+    """Get the publishing address of this process"""
+    # for publisher script
+    if tty.cmd.find('ldms_stream_publish.py') >= 0:
+        out = tty.pycmd('r.get_stream_addr()')
+        if out.find('Traceback') > -1:
+            raise RuntimeError(f'error, output: {out}')
+        lcl, rmt = eval(out)
+        return lcl
+    # for server
+    if tty.cmd.find('ldms_stream_server.py') >= 0:
+        return StreamAddr.from_str(tty.node.ip_addr + ':411')
+    # for client
+    if tty.cmd.find('ldms_stream_client.py') >= 0:
+        return StreamAddr.from_str(tty.node.ip_addr)
+    raise RuntimeError("Unsupported script")
+
+def bind(inst, name, fn):
+    setattr(inst, name, fn.__get__(inst, type(inst)))
+
+def py_pty(node, script_path, user = None):
+    as_user = f"as {user}" if user is not None else ""
+    log.info(f"starting {script_path} on {node.name} {as_user}")
+    _cmd = f"ZAP_POOLS=8 /usr/bin/python3 -i {script_path}"
+    if user:
+        shell = f"su -s /bin/bash {user}"
+    else:
+        shell = f"/bin/bash"
+    cmd = f"{shell} -c '{_cmd}'"
+    _pty = node.exec_interact(cmd)
+    _pty.cmd = cmd
+    _pty.node = node
+    time.sleep(2)
+    _out = _pty.read()
+    EXPECT(_out, ">>> ")
+    bind(_pty, "pycmd", py_pty_pycmd)
+    bind(_pty, "stream_publish", py_pty_stream_publish)
+    bind(_pty, "ldms_stream_publish", py_pty_ldms_stream_publish)
+    bind(_pty, "stream_stats_get", py_pty_stream_stats_get)
+    bind(_pty, "stream_client_stats_get", py_pty_stream_client_stats_get)
+    bind(_pty, "get_pub_addr", py_pty_get_pub_addr)
+    _pty._addr = _pty.get_pub_addr()
+    return _pty
+
+def start_stream_server(node):
+    return py_pty(node, "/tada-src/python/ldms_stream_server.py")
+
+srv7 = start_stream_server(node7)
+srv6 = start_stream_server(node6)
+srv5 = start_stream_server(node5)
+srv4 = start_stream_server(node4)
+srv3 = start_stream_server(node3)
+srv2 = start_stream_server(node2)
+srv1 = start_stream_server(node1)
+
+servers = [ srv1, srv2, srv3, srv4, srv5, srv6, srv7 ]
+servers_lbl = [ f"srv{i}" for i in range(1, 8) ]
+
+# easier to debug / report
+for srv, lbl in zip(servers, servers_lbl):
+    srv.name = lbl
+
+pub4 = py_pty(node4, "/tada-src/python/ldms_stream_publish.py")
+pub5 = py_pty(node5, "/tada-src/python/ldms_stream_publish.py")
+pub6 = py_pty(node6, "/tada-src/python/ldms_stream_publish.py")
+pub7 = py_pty(node7, "/tada-src/python/ldms_stream_publish.py")
+
+pub4foo = py_pty(node4, "/tada-src/python/ldms_stream_publish.py", "foo")
+pub4bar = py_pty(node4, "/tada-src/python/ldms_stream_publish.py", "bar")
+cli8foo = py_pty(node8, "/tada-src/python/ldms_stream_client.py", "foo")
+
+publishers = [ pub4, pub5, pub6, pub7, pub4foo, pub4bar ]
+clients = [ cli8foo ]
+
+# set pty uid/gid
+for srv in servers:
+    srv.uid = srv.gid = 0
+pub4.uid = pub4.gid = 0
+pub5.uid = pub5.gid = 0
+pub6.uid = pub6.gid = 0
+pub7.uid = pub7.gid = 0
+pub4foo.uid = FOO_UID
+pub4foo.gid = FOO_GID
+pub4bar.uid = BAR_UID
+pub4bar.gid = BAR_GID
+cli8foo.uid = FOO_UID
+cli8foo.gid = FOO_GID
+
+def term_all():
+    for t in clients + publishers + servers:
+        t.term()
+
+# test.add_assertion( 1, "Publishing oversize data results in an error")
+while test1: # will break
+    out = pub4.pycmd("r.stream_publish('big', 1024*'a')")
+    test.assert_test(1, out.find('ldms_stream_publish() failed, rc: 105') > 0, "checking...")
+    break
+
+class SData(object):
+    """StreamData representation"""
+
+    __slots__ = ('name', 'src', 'tid', 'uid', 'gid', 'perm', 'is_json', 'data')
+    __cmp_fields__ = ('name', 'src', 'uid', 'gid', 'perm', 'is_json', 'data')
+    # cmp_fields omitted 'tid'
+
+    def __init__(self, *args, **kwargs):
+        if args and kwargs:
+            raise ValueError("SData can be initialized with either *args or **kwargs but not both")
+        for k in self.__slots__:
+            setattr(self, k, None)
+        if args:
+            if len(args) != len(self.__slots__):
+                raise ValueError()
+            for k,v in zip(self.__slots__, args):
+                setattr(self, k, v)
+        elif kwargs:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        else:
+            raise ValueError("Missing initialize parameters")
+
+    def as_list(self):
+        return [ getattr(self, f) for f in self.__slots__ ]
+
+    def as_tuple(self):
+        return tuple( getattr(self, f) for f in self.__slots__ )
+
+    def __eq__(self, other):
+        if type(other) != SData:
+            return False
+        # compare all fields, except when it is None
+        for k in self.__cmp_fields__:
+            v0 = getattr(self, k)
+            v1 = getattr(other, k)
+            if v0 is None or v1 is None:
+                continue # skip
+            if v0 != v1:
+                return False
+        return True
+
+    @classmethod
+    def fromStreamData(cls, _str):
+        if not _str:
+            return None
+        _s = _str.replace('StreamData', 'SData')
+        o = eval(_s)
+        return o
+
+    def __repr__(self):
+        return f"SData{self.as_tuple()}"
+
+
+def get_cdata(pty):
+    """Get client data"""
+    names = [ 'dot_star', 'l1', 'l2', 'l3', 'dot_star_stream' ]
+    ret = list()
+    for name in names:
+        out = pty.pycmd(f"get_data({name}, {name}_data)")
+        ret.append(SData.fromStreamData(out))
+    return ret
+
+def get_all_cdata():
+    ret = list()
+    i = 0
+    for pty in [ srv1, srv2, srv3, srv4, srv5, srv6, srv7 ]:
+        i += 1
+        log.info(f"getting data from srv{i}")
+        ret.append( get_cdata(pty) )
+    log.info(f"getting data from cli8foo")
+    ret.append( get_cdata(cli8foo) )
+    return ret
+
+def all_cdata_assert(test_id, expect, all_cdata, assert_true = True):
+    srv_labels = [ f'srv{i}' for i in range(1, 8) ]
+    cli_labels = [ 'dot_star', 'l1', 'l2', 'l3', 'dot_star_stream' ]
+    if len(expect) != len(all_cdata):
+        test.assert_test(test_id, False, "'expect' and 'client_data' lengths are unequal")
+        return False
+    for se, sd, slbl in zip(expect, all_cdata, srv_labels):
+        if len(se) != len(sd):
+            test.assert_test(test_id, False, f"'expect[{slbl}]' and 'client_data[{slbl}]' lengths are unequal")
+            return False
+        for ce, cd, clbl in zip(se, sd, cli_labels):
+            if ce != cd:
+                test.assert_test(test_id, False,
+                        f"'expect[{slbl}][{clbl}]' and 'client_data[{slbl}][{clbl}]' do not match")
+                return False
+    if assert_true:
+        test.assert_test(test_id, True, "client data verified")
+    return True
+
+DOT_STAR_STREAM = re.compile('^.*-stream$')
+
+class ClientTrack(object):
+    def __init__(self, match, is_regex, dest, desc=None, remote=None, uid=0, gid=0):
+        self._stats = StreamClientStats(
+                        tx       = StreamCounters(None, None, 0, 0),
+                        drops    = StreamCounters(None, None, 0, 0),
+                        streams  = None,
+                        dest     = dest,
+                        match    = match,
+                        is_regex = is_regex,
+                        desc     = desc,
+                )
+        self._streams = dict()
+        if is_regex:
+            self._match = re.compile(match)
+        else:
+            self._match = match
+        self.remote = remote
+        self.uid = uid
+        self.gid = gid
+        self.groups = get_groups(self.uid)
+
+    def has_access(self, uid, gid, perm):
+        """Check if this client should have access to the stream with given authz"""
+        if self.uid == 0:
+            return True # root can access everything
+        if self.uid == uid:
+            return True
+        if (perm & 0o040) and (gid == self.gid or gid in self.groups):
+            return True
+        if (perm & 0o004):
+            return True
+        return False
+
+    def match(self, stream):
+        if type(self._match) == str:
+            return self._match == stream
+        else:
+            return self._match.match(stream) is not None
+
+    def deliver(self, stream, _bytes, src = None, uid=None, gid=None, perm=0o777):
+        assert(self.match(stream))
+        self._stats.tx.count += 1
+        self._stats.tx.bytes += _bytes
+        s = self._streams.setdefault(stream, StreamClientPairStats(
+                                stream_name  = stream,
+                                client_match = self._stats.match,
+                                client_desc  = self._stats.desc,
+                                is_regex     = self._stats.is_regex,
+                                tx           = StreamCounters(None, None, 0, 0),
+                                drops        = StreamCounters(None, None, 0, 0),
+                            ))
+        s.tx.count += 1
+        s.tx.bytes += _bytes
+        if self.remote:
+            self.remote.deliver(stream, _bytes, src, uid, gid, perm)
+
+    def init_stream(self, stream):
+        s = self._streams.setdefault(stream, StreamClientPairStats(
+                                stream_name  = stream,
+                                client_match = self._stats.match,
+                                client_desc  = self._stats.desc,
+                                is_regex     = self._stats.is_regex,
+                                tx           = StreamCounters(None, None, 0, 0),
+                                drops        = StreamCounters(None, None, 0, 0),
+                            ))
+
+    def getStats(self):
+        ret = StreamClientStats( ** self._stats.__dict__ )
+        ret.streams = list()
+        for s in self._streams.values():
+            ret.streams.append(s)
+        ret.xsort()
+        return ret
+
+
+class StreamTrack(object):
+    def __init__(self, stream):
+        self._name = stream
+        self._rx = StreamCounters(None, None, 0, 0)
+        self._sources = dict()
+
+    def recv(self, src, _bytes):
+        if src != LOCAL and not src.port:
+            raise Exception("CAUGHT")
+        self._rx.count += 1
+        self._rx.bytes += _bytes
+        _ss = self._sources.setdefault(src, StreamSrcStats(
+                                        src=src,
+                                        rx = StreamCounters(None, None, 0, 0),
+                                        ))
+        _ss.rx.count += 1
+        _ss.rx.bytes += _bytes
+
+    def getStats(self):
+        # The stats.clients will be filled by ProcessTrack later
+        ss = StreamStats( rx = self._rx,
+                          sources = list(self._sources.values()),
+                          clients = None,
+                          name = self._name )
+        ss.xsort()
+        return ss
+
+
+class ProcessTrack(object):
+    def __init__(self, pty, uid=0, gid=0):
+        self._st = dict()
+        self._ct = list()
+        self._pty = pty
+        pty.tracker = self
+        self._addr = pty._addr
+        self.uid = get_uid(uid)
+        self.gid = get_uid(gid)
+        # add basic local clients according to ldms_stream_server.py
+        tmp = [ ('.*', True), ('l1-stream', False), ('l2-stream', False),
+                ('l3-stream', False), ('.*-stream', True) ]
+        for s, r in tmp:
+            self.add_client(s, r)
+            self.add_client(s, r) # twice ..
+
+    def add_client(self, match, is_regex, remote=None):
+        dest = LOCAL if not remote else \
+                StreamAddr(remote._addr.addr, None) # mask ephemeral port
+        desc = "" if not remote else "remote_client"
+        uid = remote.uid if remote else self.uid
+        gid = remote.gid if remote else self.gid
+        ct = ClientTrack(match, is_regex, dest, desc, remote, uid, gid)
+        self._ct.append(ct)
+        if not is_regex:
+            self.init_stream(match)
+        else:
+            # needs to match existing steams to track initialization
+            for s in self._st.values():
+                if ct.match(s._name):
+                    ct.init_stream(s._name)
+
+    def init_stream(self, stream):
+        st = self._st.setdefault(stream, StreamTrack(stream))
+        for cli in self._ct:
+            if cli.match(stream):
+                cli.init_stream(stream)
+
+    def deliver(self, stream, _bytes, src, uid=None, gid=None, perm=0o777):
+        if uid is None:
+            uid = self.uid
+        uid = get_uid(uid)
+        if gid is None:
+            gid = self.gid
+        gid = get_gid(gid)
+        st = self._st.setdefault(stream, StreamTrack(stream))
+        st.recv(src, _bytes)
+        for cli in self._ct:
+            if cli.match(stream) and cli.has_access(uid, gid, perm):
+                _addr = self._addr if cli.remote and src == LOCAL else src
+                cli.deliver(stream, _bytes, _addr, uid, gid, perm)
+
+    def getStreamStats(self):
+        ret = list()
+        for st in self._st.values():
+            ss = st.getStats()
+            ss.clients = list()
+            for ct in self._ct:
+                for _s in ct._streams.values():
+                    if _s.stream_name != ss.name:
+                        continue
+                    ss.clients.append(_s)
+            ret.append(ss)
+        ret.sort(key = lambda o: o.name)
+        return ret
+
+    def getClientStats(self):
+        ret = list(ct.getStats() for ct in self._ct)
+        ret.sort(key = lambda o: o.match)
+        return ret
+
+    def recv_track(self, stream, data, src, uid=None, gid=None, perm=0o777):
+        if type(data) is not str:
+            data = json.dumps(data)
+        data_len = len(data)
+        self.deliver(stream, data_len, src, uid, gid, perm)
+
+ps1 = ProcessTrack(srv1)
+ps2 = ProcessTrack(srv2)
+ps3 = ProcessTrack(srv3)
+ps4 = ProcessTrack(srv4)
+ps5 = ProcessTrack(srv5)
+ps6 = ProcessTrack(srv6)
+ps7 = ProcessTrack(srv7)
+cl8 = ProcessTrack(cli8foo)
+
+# setup remote_trackers
+pub4.remote_tracker = ps4
+pub5.remote_tracker = ps5
+pub6.remote_tracker = ps6
+pub7.remote_tracker = ps7
+pub4foo.remote_tracker = ps4
+pub4bar.remote_tracker = ps4
+
+ps1.add_client('.*',        True,  cl8)
+ps2.add_client('l3-stream', False, ps1)
+ps3.add_client('.*-stream', True,  ps1)
+ps4.add_client('l2-stream', False, ps2)
+ps4.add_client('l3-stream', False, ps2)
+ps5.add_client('l2-stream', False, ps2)
+ps5.add_client('l3-stream', False, ps2)
+ps6.add_client('.*-stream', True,  ps3)
+ps7.add_client('.*-stream', True,  ps3)
+
+# test.add_assertion( 2, "JSON support (l3-stream)")
+while test2: # will break
+    out = pub4.stream_publish('l3-stream', {'attr': 'value', 'array':[1,2,3]})
+    all_cdata = get_all_cdata()
+    e = SData(name = 'l3-stream', uid=0, gid=0, is_json=1, data={'attr': 'value', 'array':[1,2,3]})
+    edata = [ e, None, None, e, e ]
+    none = 5*[None]
+    all_edata = [ edata, edata, none, edata, none, none, none, edata ]
+    all_cdata_assert(2, all_edata, all_cdata)
+    break
+
+# test.add_assertion( 3, "l3-stream delivery")
+# test.add_assertion( 301, "send-credit taken")
+# test.add_assertion( 302, "send-credit returned")
+# test.add_assertion( 303, "stream delivery spread among rails")
+while test3: # will break
+    log.info("publishing 'four' on l3-stream by pub4")
+    out4 = pub4.stream_publish('l3-stream', 'four')
+    log.info("publishing 'five' on l3-stream by pub5")
+    out5 = pub5.stream_publish('l3-stream', 'five')
+    log.info("publishing 'six' on l3-stream by pub6")
+    out6 = pub6.stream_publish('l3-stream', 'six')
+    log.info("publishing 'seven' on l3-stream by pub7")
+    out7 = pub7.stream_publish('l3-stream', 'seven')
+
+    full_credit = 4*[128]
+
+    cr4a = eval(out4.strip())
+    test.assert_test(301, cr4a < full_credit, f"credits: {cr4a}")
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+    log.info('obtaining all client data (2)')
+    all_cdata2 = get_all_cdata()
+    log.info('obtaining all client data (3)')
+    all_cdata3 = get_all_cdata()
+
+    out4 = pub4.pycmd("r.send_credits")
+    cr4b = eval(out4.strip())
+
+    test.assert_test(302, cr4b == full_credit, f"credits: {cr4b}")
+
+    e4 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='four')
+    e5 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='five')
+    e6 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='six')
+    e7 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata5 = [ e5, None, None, e5, e5 ]
+    edata6 = [ e6, None, None, e6, e6 ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    all_edata0 = [ edata4, edata4, edata6, edata4, edata5, edata6, edata7, edata4 ]
+    all_edata1 = [ edata5, edata5, edata7,   none,   none,   none,   none, edata5 ]
+    all_edata2 = [ edata6,   none,   none,   none,   none,   none,   none, edata6 ]
+    all_edata3 = [ edata7,   none,   none,   none,   none,   none,   none, edata6 ]
+
+    cli_cdata = [ all_cdata0[-1][0], all_cdata1[-1][0], all_cdata2[-1][0], all_cdata3[-1][0] ]
+    tids = set( c.tid for c in cli_cdata )
+    test.assert_test(303, len(tids) > 1, f"tids: {tids}")
+
+    all_cdata_assert(3, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(3, all_edata1, all_cdata1, False) and \
+    all_cdata_assert(3, all_edata2, all_cdata2, False) and \
+    all_cdata_assert(3, all_edata3, all_cdata3, True)
+    break
+
+# test.add_assertion( 4, "l2-stream delivery")
+while test4: # will break
+    log.info("publishing 'four' on l2-stream by pub4")
+    out4 = pub4.stream_publish('l2-stream', 'four')
+    log.info("publishing 'five' on l2-stream by pub5")
+    out5 = pub5.stream_publish('l2-stream', 'five')
+    log.info("publishing 'six' on l2-stream by pub6")
+    out6 = pub6.stream_publish('l2-stream', 'six')
+    log.info("publishing 'seven' on l2-stream by pub7")
+    out7 = pub7.stream_publish('l2-stream', 'seven')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+
+    e4 = SData(name = 'l2-stream', uid=0, gid=0, is_json=0, data='four')
+    e5 = SData(name = 'l2-stream', uid=0, gid=0, is_json=0, data='five')
+    e6 = SData(name = 'l2-stream', uid=0, gid=0, is_json=0, data='six')
+    e7 = SData(name = 'l2-stream', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, e4, None, e4 ]
+    edata5 = [ e5, None, e5, None, e5 ]
+    edata6 = [ e6, None, e6, None, e6 ]
+    edata7 = [ e7, None, e7, None, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata6, edata4, edata6, edata4, edata5, edata6, edata7, edata6 ]
+    all_edata1 = [ edata7, edata5, edata7,   none,   none,   none,   none, edata7 ]
+
+    all_cdata_assert(4, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(4, all_edata1, all_cdata1, True)
+    break
+
+# test.add_assertion( 5, "l1-stream delivery")
+while test5: # will break
+    log.info("publishing 'four' on l1-stream by pub4")
+    out4 = pub4.stream_publish('l1-stream', 'four')
+    log.info("publishing 'five' on l1-stream by pub5")
+    out5 = pub5.stream_publish('l1-stream', 'five')
+    log.info("publishing 'six' on l1-stream by pub6")
+    out6 = pub6.stream_publish('l1-stream', 'six')
+    log.info("publishing 'seven' on l1-stream by pub7")
+    out7 = pub7.stream_publish('l1-stream', 'seven')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+
+    e4 = SData(name = 'l1-stream', uid=0, gid=0, is_json=0, data='four')
+    e5 = SData(name = 'l1-stream', uid=0, gid=0, is_json=0, data='five')
+    e6 = SData(name = 'l1-stream', uid=0, gid=0, is_json=0, data='six')
+    e7 = SData(name = 'l1-stream', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, e4, None, None, e4 ]
+    edata5 = [ e5, e5, None, None, e5 ]
+    edata6 = [ e6, e6, None, None, e6 ]
+    edata7 = [ e7, e7, None, None, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata6,   none, edata6, edata4, edata5, edata6, edata7, edata6 ]
+    all_edata1 = [ edata7,   none, edata7,   none,   none,   none,   none, edata6 ]
+
+    all_cdata_assert(5, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(5, all_edata1, all_cdata1, True)
+    break
+
+# test.add_assertion( 6, "x-stream delivery")
+while test6: # will break
+    log.info("publishing 'four' on x-stream by pub4")
+    out4 = pub4.stream_publish('x-stream', 'four')
+    log.info("publishing 'five' on x-stream by pub5")
+    out5 = pub5.stream_publish('x-stream', 'five')
+    log.info("publishing 'six' on x-stream by pub6")
+    out6 = pub6.stream_publish('x-stream', 'six')
+    log.info("publishing 'seven' on x-stream by pub7")
+    out7 = pub7.stream_publish('x-stream', 'seven')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+
+    e4 = SData(name = 'x-stream', uid=0, gid=0, is_json=0, data='four')
+    e5 = SData(name = 'x-stream', uid=0, gid=0, is_json=0, data='five')
+    e6 = SData(name = 'x-stream', uid=0, gid=0, is_json=0, data='six')
+    e7 = SData(name = 'x-stream', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, None, e4 ]
+    edata5 = [ e5, None, None, None, e5 ]
+    edata6 = [ e6, None, None, None, e6 ]
+    edata7 = [ e7, None, None, None, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata6,   none, edata6, edata4, edata5, edata6, edata7, edata6 ]
+    all_edata1 = [ edata7,   none, edata7,   none,   none,   none,   none, edata6 ]
+
+    all_cdata_assert(6, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(6, all_edata1, all_cdata1, True)
+    break
+
+
+# test.add_assertion( 7, "nada delivery")
+while test7: # will break
+    log.info("publishing 'four' on nada by pub4")
+    out4 = pub4.stream_publish('nada', 'four')
+    log.info("publishing 'five' on nada by pub5")
+    out5 = pub5.stream_publish('nada', 'five')
+    log.info("publishing 'six' on nada by pub6")
+    out6 = pub6.stream_publish('nada', 'six')
+    log.info("publishing 'seven' on nada by pub7")
+    out7 = pub7.stream_publish('nada', 'seven')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+
+    e4 = SData(name = 'nada', uid=0, gid=0, is_json=0, data='four')
+    e5 = SData(name = 'nada', uid=0, gid=0, is_json=0, data='five')
+    e6 = SData(name = 'nada', uid=0, gid=0, is_json=0, data='six')
+    e7 = SData(name = 'nada', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, None, None ]
+    edata5 = [ e5, None, None, None, None ]
+    edata6 = [ e6, None, None, None, None ]
+    edata7 = [ e7, None, None, None, None ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ none, none, none, edata4, edata5, edata6, edata7, none ]
+
+    all_cdata_assert(7, all_edata0, all_cdata0, True)
+    break
+
+# test.add_assertion( 8, "l3-stream by 'root' with 0400 permission")
+while test8: # will break
+    log.info("publishing 'four' on l3-stream by pub4 (0400)")
+    out4 = pub4.stream_publish('l3-stream', 'four', perm=0o400)
+    log.info("publishing 'five' on l3-stream by pub5 (0400)")
+    out5 = pub5.stream_publish('l3-stream', 'five', perm=0o400)
+    log.info("publishing 'six' on l3-stream by pub6 (0400)")
+    out6 = pub6.stream_publish('l3-stream', 'six', perm=0o400)
+    log.info("publishing 'seven' on l3-stream by pub7 (0400)")
+    out7 = pub7.stream_publish('l3-stream', 'seven', perm=0o400)
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+    log.info('obtaining all client data (2)')
+    all_cdata2 = get_all_cdata()
+    log.info('obtaining all client data (3)')
+    all_cdata3 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=0, gid=0, perm=0o400, is_json=0, data='four')
+    e5 = SData(name = 'l3-stream', uid=0, gid=0, perm=0o400, is_json=0, data='five')
+    e6 = SData(name = 'l3-stream', uid=0, gid=0, perm=0o400, is_json=0, data='six')
+    e7 = SData(name = 'l3-stream', uid=0, gid=0, perm=0o400, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata5 = [ e5, None, None, e5, e5 ]
+    edata6 = [ e6, None, None, e6, e6 ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, edata6, edata4, edata5, edata6, edata7, none ]
+    all_edata1 = [ edata5, edata5, edata7,   none,   none,   none,   none, none ]
+    all_edata2 = [ edata6,   none,   none,   none,   none,   none,   none, none ]
+    all_edata3 = [ edata7,   none,   none,   none,   none,   none,   none, none ]
+
+    all_cdata_assert(8, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(8, all_edata1, all_cdata1, False) and \
+    all_cdata_assert(8, all_edata2, all_cdata2, False) and \
+    all_cdata_assert(8, all_edata3, all_cdata3, True)
+    break
+
+# test.add_assertion( 9, "l3-stream by 'root' as 'foo' with 0400 permission")
+while test9: # will break
+    log.info("publishing 'four' on l3-stream by pub4 (0400) root as foo")
+    out4 = pub4.stream_publish('l3-stream', 'four', perm=0o400, uid='foo', gid='foo')
+    log.info("publishing 'five' on l3-stream by pub5 (0400) root as foo")
+    out5 = pub5.stream_publish('l3-stream', 'five', perm=0o400, uid='foo', gid='foo')
+    log.info("publishing 'six' on l3-stream by pub6 (0400) root as foo")
+    out6 = pub6.stream_publish('l3-stream', 'six', perm=0o400, uid='foo', gid='foo')
+    log.info("publishing 'seven' on l3-stream by pub7 (0400) root as foo")
+    out7 = pub7.stream_publish('l3-stream', 'seven', perm=0o400, uid='foo', gid='foo')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+    log.info('obtaining all client data (2)')
+    all_cdata2 = get_all_cdata()
+    log.info('obtaining all client data (3)')
+    all_cdata3 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=FOO_UID, gid=FOO_GID, perm=0o400, is_json=0, data='four')
+    e5 = SData(name = 'l3-stream', uid=FOO_UID, gid=FOO_GID, perm=0o400, is_json=0, data='five')
+    e6 = SData(name = 'l3-stream', uid=FOO_UID, gid=FOO_GID, perm=0o400, is_json=0, data='six')
+    e7 = SData(name = 'l3-stream', uid=FOO_UID, gid=FOO_GID, perm=0o400, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata5 = [ e5, None, None, e5, e5 ]
+    edata6 = [ e6, None, None, e6, e6 ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, edata6, edata4, edata5, edata6, edata7, edata4 ]
+    all_edata1 = [ edata5, edata5, edata7,   none,   none,   none,   none, edata5 ]
+    all_edata2 = [ edata6,   none,   none,   none,   none,   none,   none, edata6 ]
+    all_edata3 = [ edata7,   none,   none,   none,   none,   none,   none, edata7 ]
+
+    all_cdata_assert(9, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(9, all_edata1, all_cdata1, False) and \
+    all_cdata_assert(9, all_edata2, all_cdata2, False) and \
+    all_cdata_assert(9, all_edata3, all_cdata3, True)
+    break
+
+# test.add_assertion(10, "l3-stream by 'root' as 'bar' with 0400 permission")
+while test10: # will break
+    log.info("publishing 'four' on l3-stream by pub4 (0400) root as bar")
+    out4 = pub4.stream_publish('l3-stream', 'four', perm=0o400, uid='bar', gid='bar')
+    log.info("publishing 'five' on l3-stream by pub5 (0400) root as bar")
+    out5 = pub5.stream_publish('l3-stream', 'five', perm=0o400, uid='bar', gid='bar')
+    log.info("publishing 'six' on l3-stream by pub6 (0400) root as bar")
+    out6 = pub6.stream_publish('l3-stream', 'six', perm=0o400, uid='bar', gid='bar')
+    log.info("publishing 'seven' on l3-stream by pub7 (0400) root as bar")
+    out7 = pub7.stream_publish('l3-stream', 'seven', perm=0o400, uid='bar', gid='bar')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+    log.info('obtaining all client data (2)')
+    all_cdata2 = get_all_cdata()
+    log.info('obtaining all client data (3)')
+    all_cdata3 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o400, is_json=0, data='four')
+    e5 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o400, is_json=0, data='five')
+    e6 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o400, is_json=0, data='six')
+    e7 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o400, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata5 = [ e5, None, None, e5, e5 ]
+    edata6 = [ e6, None, None, e6, e6 ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, edata6, edata4, edata5, edata6, edata7, none ]
+    all_edata1 = [ edata5, edata5, edata7,   none,   none,   none,   none, none ]
+    all_edata2 = [ edata6,   none,   none,   none,   none,   none,   none, none ]
+    all_edata3 = [ edata7,   none,   none,   none,   none,   none,   none, none ]
+
+    all_cdata_assert(10, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(10, all_edata1, all_cdata1, False) and \
+    all_cdata_assert(10, all_edata2, all_cdata2, False) and \
+    all_cdata_assert(10, all_edata3, all_cdata3, True)
+    break
+
+# test.add_assertion(11, "l3-stream by 'root' as 'bar' with 0440 permission")
+while test11: # will break
+    log.info("publishing 'four' on l3-stream by pub4 (0440) root as bar")
+    out4 = pub4.stream_publish('l3-stream', 'four', perm=0o440, uid='bar', gid='bar')
+    log.info("publishing 'five' on l3-stream by pub5 (0440) root as bar")
+    out5 = pub5.stream_publish('l3-stream', 'five', perm=0o440, uid='bar', gid='bar')
+    log.info("publishing 'six' on l3-stream by pub6 (0440) root as bar")
+    out6 = pub6.stream_publish('l3-stream', 'six', perm=0o440, uid='bar', gid='bar')
+    log.info("publishing 'seven' on l3-stream by pub7 (0440) root as bar")
+    out7 = pub7.stream_publish('l3-stream', 'seven', perm=0o440, uid='bar', gid='bar')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+    log.info('obtaining all client data (1)')
+    all_cdata1 = get_all_cdata()
+    log.info('obtaining all client data (2)')
+    all_cdata2 = get_all_cdata()
+    log.info('obtaining all client data (3)')
+    all_cdata3 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o440, is_json=0, data='four')
+    e5 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o440, is_json=0, data='five')
+    e6 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o440, is_json=0, data='six')
+    e7 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o440, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata5 = [ e5, None, None, e5, e5 ]
+    edata6 = [ e6, None, None, e6, e6 ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, edata6, edata4, edata5, edata6, edata7, edata4 ]
+    all_edata1 = [ edata5, edata5, edata7,   none,   none,   none,   none, edata5 ]
+    all_edata2 = [ edata6,   none,   none,   none,   none,   none,   none, edata6 ]
+    all_edata3 = [ edata7,   none,   none,   none,   none,   none,   none, edata7 ]
+
+    all_cdata_assert(11, all_edata0, all_cdata0, False) and \
+    all_cdata_assert(11, all_edata1, all_cdata1, False) and \
+    all_cdata_assert(11, all_edata2, all_cdata2, False) and \
+    all_cdata_assert(11, all_edata3, all_cdata3, True)
+    break
+
+# test.add_assertion(12, "l3-stream by 'foo' as 'bar' results in an error")
+while test12: # will break
+    out = pub4foo.stream_publish('l3-stream', 'four', perm=0o440, uid='bar', gid='bar')
+    test.assert_test(12, out.find('ldms_stream_publish() failed, rc: 1') > 0, "checking...")
+    break
+
+# test.add_assertion(13, "l3-stream by 'foo' with 0440 permission")
+while test13: # will break
+    log.info("publishing 'four' on l3-stream by pub4foo (0440)")
+    out4 = pub4foo.stream_publish('l3-stream', 'four', perm=0o440)
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=FOO_UID, gid=FOO_GID, perm=0o440, is_json=0, data='four')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, none, edata4, none, none, none, edata4 ]
+
+    all_cdata_assert(13, all_edata0, all_cdata0, True)
+    break
+
+# test.add_assertion(14, "l3-stream by 'bar' with 0440 permission")
+while test14: # will break
+    log.info("publishing 'four' on l3-stream by pub4bar (0440)")
+    out4 = pub4bar.stream_publish('l3-stream', 'four', perm=0o440)
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=BAR_UID, gid=BAR_GID, perm=0o440, is_json=0, data='four')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata4 = [ e4, None, None, e4, e4 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata4, edata4, none, edata4, none, none, none, edata4 ]
+
+    all_cdata_assert(14, all_edata0, all_cdata0, True)
+    break
+
+# test.add_assertion(15, "Blocking client and asynchronous client have the same data")
+while test15: # will break
+    for srv, lbl in zip(servers, servers_lbl):
+        out = srv.pycmd("compare_data()")
+        if out.strip() != "True":
+            test.assert_test(15, False, out)
+            break
+    test.assert_test(15, True, "verified")
+    break
+
+# precondition; xprt_free_list should be empty
+out1 = srv1.pycmd("xprt_free_list == []").strip()
+assert(out1 == "True")
+out6 = srv6.pycmd("xprt_free_list == []").strip()
+assert(out6 == "True")
+out7 = srv7.pycmd("xprt_free_list == []").strip()
+assert(out7 == "True")
+
+# test.add_assertion(20, "l3-stream publish from L1 (srv4)")
+while test20: # will break
+    log.info("publishing 'four' on l3-stream by srv4")
+    out4 = srv4.ldms_stream_publish('l3-stream', 'four')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+
+    e4 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='four')
+    e4lcl = SData(name = 'l3-stream', src=0, uid=0, gid=0, is_json=0, data='four')
+
+    # expected client data
+    edata4 = [ e4, None, None, e4, e4 ]
+    edata4lcl = [ e4lcl, None, None, e4lcl, e4lcl ]
+    none = 5*[None]
+
+    all_edata0 = [ edata4, edata4,   none, edata4lcl,   none,   none,   none, none ]
+
+    all_cdata_assert(20, all_edata0, all_cdata0, True)
+    break
+
+# test.add_assertion(21, "nada publish from L1 (srv4)")
+while test21: # will break
+    log.info("publishing 'four' on nada by srv4")
+    out4 = srv4.ldms_stream_publish('nada', 'four')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+
+    e4lcl = SData(name = 'nada', src=0, uid=0, gid=0, is_json=0, data='four')
+
+    # expected client data
+    edata4lcl = [ e4lcl, None, None, None, None ]
+    none = 5*[None]
+
+    all_edata0 = [ none, none, none, edata4lcl, none, none, none, none ]
+
+    all_cdata_assert(21, all_edata0, all_cdata0, True)
+    break
+
+# test.add_assertion(22, "Check stream stats in each process")
+while test22: # will break
+    for srv in servers:
+        tkr = srv.tracker
+        ss = srv.stream_stats_get()
+        ts = tkr.getStreamStats()
+        if not list_xeq(ss, ts):
+            test.assert_test(22, False,
+                    f"{srv.name} stream stats verification failed")
+    test.assert_test(22, True, "verified")
+    break
+
+# test.add_assertion(23, "Check stream client stats in each process")
+while test23: # will break
+    for srv in servers:
+        tkr = srv.tracker
+        ss = srv.stream_client_stats_get()
+        ts = tkr.getClientStats()
+        if not list_xeq(ss, ts):
+            test.assert_test(23, False,
+                    f"{srv.name} stream client stats verification failed")
+    test.assert_test(23, True, "verified")
+    break
+
+# test.add_assertion(16, "srv-6 clean up properly after srv-3 exited")
+# test.add_assertion(17, "srv-7 clean up properly after srv-3 exited")
+# test.add_assertion(18, "srv-1 clean up properly after srv-3 exited")
+# test.add_assertion(19, "l3-stream successfully delivered after srv-3 restarted")
+while test16to19: # will break; series of test16 - 19
+    # Terminate srv3
+    srv3.term()
+    time.sleep(1)
+    out1 = srv1.pycmd("len(xprt_free_list)").strip()
+    out6 = srv6.pycmd("len(xprt_free_list)").strip()
+    out7 = srv7.pycmd("len(xprt_free_list)").strip()
+    cond1 = out1 == "1"
+    cond6 = out6 == "1"
+    cond7 = out7 == "1"
+    test.assert_test(16, cond1, "checking...")
+    test.assert_test(17, cond6, "checking...")
+    test.assert_test(18, cond7, "checking...")
+    if not (cond1 and cond6 and cond7):
+        break
+
+    # resurrect srv3 + srv1 reconnect
+    srv3 = start_stream_server(node3)
+    out1 = srv1.pycmd("right_connect()").strip()
+    log.info("publishing 'seven' on l3-stream by pub7")
+    out7 = pub7.stream_publish('l3-stream', 'seven')
+
+    log.info('obtaining all client data (0)')
+    all_cdata0 = get_all_cdata()
+
+    e7 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='seven')
+
+    # expected client data
+    # [ dot_star, l1, l2, l3, dot_star_stream ]
+    edata7 = [ e7, None, None, e7, e7 ]
+    none = 5*[None]
+
+    # [ srv1, srv2, srv3, srv4, srv5, srv6, srv7, client8foo ]
+    # note: The right-side of the tree has '.*-stream' remote subscription.
+    all_edata0 = [ edata7, none, edata7, none, none, none, edata7, edata7 ]
+
+    all_cdata_assert(19, all_edata0, all_cdata0, True)
+    break
+
+# see at_exit()
