@@ -255,9 +255,11 @@ while ENABLE_LDMSD_CONTROLLER:
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
     lines = [ l for l in lines if l ]
-    elines = [cmd, "The producer specified does not exist.", "sock:agg-11:10000>"]
+    elines = [cmd,
+              "Error starting prdcr bogus: The producer specified does not exist.",
+              "sock:agg-11:10000>"]
     if lines != elines:
-        test.assert_test(3, False, "Unexpected output: {}".format(out))
+        test.assert_test(3, False, f"Unexpected output: {out}")
         break
     test.assert_test(3, True, "expected output verified")
     break
@@ -315,7 +317,7 @@ while ENABLE_LDMSD_CONTROLLER:
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
     lines = [ l for l in lines if l ]
-    elines = [cmd, "Failed to load the plugin 'bogus'.", "sock:agg-11:10000>"]
+    elines = [cmd, "Error loading plugin bogus: Failed to load the plugin 'bogus'.", "sock:agg-11:10000>"]
     if len(lines) != 3 or lines[0] != elines[0] \
                        or lines[2] != elines[2] \
                        or not lines[1].startswith(elines[1]):
