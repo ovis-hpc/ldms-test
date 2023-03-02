@@ -541,6 +541,8 @@ class DockerCluster(LDMSDCluster):
                 node = nodes[idx]
                 idx += 1
                 hostname = node
+                cont_image = image
+                cont_volumes = volumes
                 cont_name = "{}-{}".format(name, node)
                 tmpfs = None
                 try:
@@ -548,17 +550,20 @@ class DockerCluster(LDMSDCluster):
                     for _n in spec_nodes:
                         if _n["hostname"] == hostname:
                             tmpfs = _n.get("tmpfs")
+                            cont_image = _n.get("image", image)
+                            cont_volumes = _n.get("mounts", volumes)
                             break
                 except:
                     pass
                 cont_param = dict(
-                        image = image,
+                        image = cont_image,
                         name = cont_name,
-                        command = "/bin/bash",
+                        # command = "/bin/bash",
+                        entrypoint = [ "/bin/bash" ],
                         tty = True,
                         detach = True,
                         environment = env,
-                        volumes = volumes,
+                        volumes = cont_volumes,
                         cap_add = cap_add,
                         cap_drop = cap_drop,
                         #network = name,
