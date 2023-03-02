@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# Test store_sos storing lists
+# Test store_sos and store_csv storing lists of different value types
 
 import argparse
 import atexit
@@ -66,9 +66,19 @@ STORE_CSV_PATH = STORE_ROOT + "/csv"
 
 VALUE_TYPES = ["record", "u64", "u64_array"]
 NUM_LISTS = len(VALUE_TYPES)
+
+# 2 lists
 COMBINATION = [list(i) for i in combinations_with_replacement(VALUE_TYPES, NUM_LISTS)]
 for c in COMBINATION:
     random.shuffle(c)
+MULTI_LISTS_CFGFILE = COMBINATION[:int(len(COMBINATION)/2)-1]
+MULTI_LISTS_LDMSD_CONTROLLER = COMBINATION[int(len(COMBINATION)/2):]
+# 3 lists
+COMBINATION = [list(i) for i in combinations_with_replacement(VALUE_TYPES, NUM_LISTS - 1)]
+for c in COMBINATION:
+    random.shuffle(c)
+MULTI_LISTS_CFGFILE += COMBINATION[:int(len(COMBINATION)/2)-1]
+MULTI_LISTS_LDMSD_CONTROLLER += COMBINATION[int(len(COMBINATION)/2):]
 
 def schema_from_types(vtypes):
     return vtypes if isinstance(vtypes, str) else "_".join(vtypes)
@@ -82,7 +92,8 @@ spec = {
             "type" : "ldmsd",
             "listen" : [
                 { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
-            ]
+            ],
+            "log_level" : "ERROR",
         },
         "aggregator" : {
             "name" : "agg",
@@ -119,12 +130,12 @@ spec = {
                     ] + ["config name=test_sampler action=add_lists max_len=4 " \
                             "min_len=1 schema={schema} value_types={types}".format(
                             schema = schema_from_types(s), types = ",".join(s))
-                            for s in COMBINATION
+                            for s in (MULTI_LISTS_CFGFILE + MULTI_LISTS_LDMSD_CONTROLLER)
                     ] + ["config name=test_sampler action=add_set producer=sampler " \
                             "schema={0} instance=sampler/{0}".format(s) for s in VALUE_TYPES
                     ] + ["config name=test_sampler action=add_set producer=sampler " \
                             "schema={0} instance=sampler/{0}".format(schema_from_types(s))
-                            for s in COMBINATION
+                            for s in (MULTI_LISTS_CFGFILE + MULTI_LISTS_LDMSD_CONTROLLER)
                     ] + [ "start name=test_sampler interval={i} offset={o}".format(
                             i = SAMP_INTERVAL, o = SAMP_OFFSET)
                     ]
@@ -156,12 +167,14 @@ spec = {
                         "config name=store_sos path={}".format(STORE_SOS_PATH)
                     ] + [
                         "strgp_add name={0} plugin=store_sos " \
-                            "container={0} schema={0}".format(schema_from_types(s)) for s in COMBINATION
+                            "container={0} schema={0}".format(schema_from_types(s))
+                            for s in (MULTI_LISTS_CFGFILE + MULTI_LISTS_LDMSD_CONTROLLER)
                     ] + [
                         "strgp_add name={0} plugin=store_sos " \
                             "container={0} schema={0}".format(s) for s in VALUE_TYPES
                     ] + [
-                        "strgp_start name={}".format(schema_from_types(s)) for s in COMBINATION
+                        "strgp_start name={}".format(schema_from_types(s))
+                            for s in MULTI_LISTS_CFGFILE
                     ] + [
                         "strgp_start name={}".format(s) for s in VALUE_TYPES
                     ] + [
@@ -189,12 +202,14 @@ spec = {
                         "config name=store_csv path={}".format(STORE_CSV_PATH)
                     ] + [
                         "strgp_add name={0} plugin=store_csv " \
-                            "container={0} schema={0}".format(schema_from_types(s)) for s in COMBINATION
+                            "container={0} schema={0}".format(schema_from_types(s))
+                            for s in (MULTI_LISTS_CFGFILE + MULTI_LISTS_LDMSD_CONTROLLER)
                     ] + [
                         "strgp_add name={0} plugin=store_csv " \
                             "container={0} schema={0}".format(s) for s in VALUE_TYPES
                     ] + [
-                        "strgp_start name={}".format(schema_from_types(s)) for s in COMBINATION
+                        "strgp_start name={}".format(schema_from_types(s))
+                            for s in MULTI_LISTS_CFGFILE
                     ] + [
                         "strgp_start name={}".format(s) for s in VALUE_TYPES
                     ] + [
@@ -281,10 +296,11 @@ def sos_query(dcont, scont, schema, idx, cond = []):
     return data
 
 def csv_query(dcont, schema, min_time = None):
-    data = dcont.read_file(path = "{}/{}/{}".format(STORE_CSV_PATH, schema, schema))
+    path = f"{STORE_CSV_PATH}/{schema}/{schema}"
+    data = dcont.read_file(path = path)
     while 0 == len(data):
         sleep(5)
-        data = dcont.read_file(path = "{}/{}/{}".format(STORE_CSV_PATH, schema, schema))
+        data = dcont.read_file(path = path)
     data = data.split()
     keys = data[0][1:].split(',')
     keys = ['timestamp' if k == 'Time' else k for k in keys]
@@ -298,26 +314,12 @@ def csv_query(dcont, schema, min_time = None):
                 continue
     return d[start_idx:]
 
-id = assertion_id_get()
-
-SOS_AGG_RUNNING = next(id)
-CSV_AGG_RUNNING = next(id)
-
-SOS_DATABASE_CREATED = next(id)
-SOS_VERIFY_DATA = next(id)
-SOS_RESTART_VERIFY_DATA = next(id)
-
-CSV_DATABASE_CREATED = next(id)
-CSV_VERIFY_DATA = next(id)
-CSV_RESTART_VERIFY_DATA = next(id)
-
 def database_exist(cont, path):
-    db = ["{}/{}".format(path, s) for s in [schema_from_types(k) for k in COMBINATION]]
-    db += ["{}/{}".format(path, s) for s in VALUE_TYPES]
+    db = ["{}/{}".format(path, s) for s in VALUE_TYPES]
     for a in db:
         if not cont.files_exist(a, timeout = 10):
-            return (False, "agg.file_exists{}".format(a))
-    return (True, "agg.file_exists(a) for a in db_paths")
+            return (False, f"agg.file_exists({a})")
+    return (True, "file_exists(a) for a in supported_schema")
 
 def is_same_sample(prev_ts, ts):
     if 0 == prev_ts:
@@ -371,7 +373,42 @@ def verify_data(num_lists, schema, data):
             return (False, "round == d[{}]: {}".format(typ, d))
     return (True, "verify_data(db) for db in all_db")
 
+LOG_HANDLES = dict.fromkeys([n['hostname'] for n in spec['nodes']], None)
+
+def find_log_msg(cont, msg, begin = {'offset': None, 'whence': 0}, is_loop = True):
+    log_file = cont.ldmsd_spec['log_file']
+    lines = cont.read_file(log_file)
+    lines = lines.split("\n")
+    for l in lines:
+        if msg in l:
+            return True
+    return False
+
+def multilist_err_msg(schema, plugin):
+    if plugin == "store_sos":
+        msg = f"{plugin}: 'sampler/{schema}' contains multiple lists"
+    elif plugin == "store_csv":
+        msg = f"{plugin}: set 'sampler/{schema}' contains multiple lists"
+    return msg
+
 #### Test Definition ####
+id = assertion_id_get()
+
+SOS_AGG_RUNNING = next(id)
+CSV_AGG_RUNNING = next(id)
+
+SOS_DATABASE_CREATED = next(id)
+SOS_VERIFY_DATA = next(id)
+SOS_RESTART_VERIFY_DATA = next(id)
+SOS_MULTI_LISTS_ERROR_CFGFILE = next(id)
+SOS_MULTI_LISTS_ERROR_LDMSD_CONTROLLER = next(id)
+
+CSV_DATABASE_CREATED = next(id)
+CSV_VERIFY_DATA = next(id)
+CSV_RESTART_VERIFY_DATA = next(id)
+CSV_MULTI_LISTS_ERROR_CFGFILE = next(id)
+CSV_MULTI_LISTS_ERROR_LDMSD_CONTROLLER = next(id)
+
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
                  test_name = "store_sos_lists_test",
@@ -387,10 +424,18 @@ test.add_assertion(CSV_AGG_RUNNING, "aggregator with store_csv has started prope
 test.add_assertion(SOS_DATABASE_CREATED, "store_sos is storing data.")
 test.add_assertion(SOS_VERIFY_DATA, "store_sos stores data correctly.")
 test.add_assertion(SOS_RESTART_VERIFY_DATA, "store_sos stores data after restarted correctly.")
+test.add_assertion(SOS_MULTI_LISTS_ERROR_CFGFILE,
+                   "store_sos reports multiple list errror messages resulted by the config file.")
+test.add_assertion(SOS_MULTI_LISTS_ERROR_LDMSD_CONTROLLER,
+                   "store_sos reports multiple list errror messages resulted by ldmsd_controller.")
 
 test.add_assertion(CSV_DATABASE_CREATED, "store_csv is storing data.")
 test.add_assertion(CSV_VERIFY_DATA, "store_csv stores data correctly.")
 test.add_assertion(CSV_RESTART_VERIFY_DATA, "store_csv stores data after restarted correctly.")
+test.add_assertion(CSV_MULTI_LISTS_ERROR_CFGFILE,
+                   "store_csv reports multiple list errror messages resulted by the config file.")
+test.add_assertion(CSV_MULTI_LISTS_ERROR_LDMSD_CONTROLLER,
+                   "store_csv reports multiple list errror messages resulted by ldmsd_controller.")
 
 log.info("-- Get or create the cluster --")
 
@@ -426,7 +471,7 @@ sleep(1)
 result, reason = database_exist(agg_sos, STORE_SOS_PATH)
 test.assert_test(SOS_DATABASE_CREATED, result, reason)
 
-for value_types in (COMBINATION + VALUE_TYPES):
+for value_types in VALUE_TYPES:
     num_lists = 1 if isinstance(value_types, str) else len(value_types)
     schema = schema_from_types(value_types)
 
@@ -439,8 +484,8 @@ for value_types in (COMBINATION + VALUE_TYPES):
         break
 test.assert_test(SOS_VERIFY_DATA, good, reason)
 
-# Randomly stop and start 3 schema
-VT = random.sample(COMBINATION, 3)
+# # Randomly stop and start 3 schema
+VT = VALUE_TYPES
 for s in VT:
     agg_sos.config_ldmsd("strgp_stop name={}".format(schema_from_types(s)))
 
@@ -463,13 +508,37 @@ for s in VT:
         break
 test.assert_test(SOS_RESTART_VERIFY_DATA, good, reason)
 
+# Multiple lists
+res, cond = True, f"store_sos reported the multiple list error messages."
+for vt in MULTI_LISTS_CFGFILE:
+    s = schema_from_types(vt)
+    msg = multilist_err_msg(s, "store_sos")
+    have = find_log_msg(agg_sos, msg)
+    if not have:
+        res, cond = False, f"'{msg}' in the ldmsd log"
+        break
+test.assert_test(SOS_MULTI_LISTS_ERROR_CFGFILE, res, cond)
+
+for vt in MULTI_LISTS_LDMSD_CONTROLLER:
+    schema = schema_from_types(vt)
+    agg_sos.config_ldmsd(f"strgp_start name={schema}")
+sleep(1)
+res, cond = True, f"store_sos reported the multiple list error messages."
+for vt in MULTI_LISTS_LDMSD_CONTROLLER:
+    msg = multilist_err_msg(schema_from_types(vt), "store_sos")
+    have = find_log_msg(agg_sos, msg)
+    if not have:
+        res, cond = False, f"'{msg}' in the ldmsd log"
+        break
+test.assert_test(SOS_MULTI_LISTS_ERROR_LDMSD_CONTROLLER, res, cond)
+
 #--------------------------------------------------------
 # store csv
 result, reason = database_exist(agg_csv, STORE_CSV_PATH)
 test.assert_test(CSV_DATABASE_CREATED, result, reason)
 
 sleep(5)
-for value_types in (COMBINATION + VALUE_TYPES):
+for value_types in VALUE_TYPES:
     num_lists = 1 if isinstance(value_types, str) else len(value_types)
     schema = schema_from_types(value_types)
     # Stop store_csv so that it would flush the data
@@ -481,8 +550,8 @@ for value_types in (COMBINATION + VALUE_TYPES):
         break
 test.assert_test(CSV_VERIFY_DATA, good, reason)
 
-# Randomly stop and start 3 schema
-VT = random.sample(COMBINATION, 3)
+# # Randomly stop and start 3 schema
+VT = VALUE_TYPES
 sleep(1)
 rc, agg_time = agg_csv.exec_run(cmd = "date +%s")
 agg_time = agg_time.strip()
@@ -503,3 +572,27 @@ for s in VT:
     if good is False:
         break
 test.assert_test(CSV_RESTART_VERIFY_DATA, good, reason)
+
+# Multiple lists
+res, cond = True, f"store_csv reported the multiple list error messages."
+for vt in MULTI_LISTS_CFGFILE:
+    s = schema_from_types(vt)
+    msg = multilist_err_msg(s, "store_csv")
+    have = find_log_msg(agg_csv, msg)
+    if not have:
+        res, cond = False, f"'{msg}' in the ldmsd log"
+        break
+test.assert_test(CSV_MULTI_LISTS_ERROR_CFGFILE, res, cond)
+
+for vt in MULTI_LISTS_LDMSD_CONTROLLER:
+    schema = schema_from_types(vt)
+    agg_csv.config_ldmsd(f"strgp_start name={schema}")
+sleep(1)
+res, cond =True, f"store_csv reported the multiple list error messages."
+for vt in MULTI_LISTS_LDMSD_CONTROLLER:
+    msg = multilist_err_msg(schema_from_types(vt), "store_csv")
+    have = find_log_msg(agg_csv, msg)
+    if not have:
+        res, cond = False, f"'{msg}' in the ldmsd log"
+        break
+test.assert_test(CSV_MULTI_LISTS_ERROR_LDMSD_CONTROLLER, res, cond)
