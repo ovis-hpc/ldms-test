@@ -322,7 +322,7 @@ UPDATED_METRICS = { 'job_init' : { 'job': { 'job_id'      : { 'attr' : "job_id",
                                               'task_exit_status'  : { 'attr' : "task_exit_status", 'value' : 0 }
                                             }
                                  },
-                    'task_exit' : { 'job' : { 'job_state'  : { 'attr' : None, 'value' : JOB_STATE_STOPPING }
+                    'task_exit' : { 'job' : { 'job_state'  : { 'attr' : None, 'value' : JOB_STATE_COMPLETE }
                                             },
                                     'task' : { 'task_exit_status' : { 'attr' : "task_exit_status", 'value' : None },
                                              }
@@ -433,6 +433,7 @@ class Task(object):
         self.task_pid = task_pid
         self.task_global_id = task_rank
         self.task_exit_status = task_exit_status
+        self._exited = False
 
         self.task_id = task_id
 
@@ -456,6 +457,7 @@ class Task(object):
 
     def task_exit(self):
         task_metrics = UPDATED_METRICS['task_exit']['task']
+        self._exited = True
         self.__update_exp_metric('task_exit')
 
 class Job(object):
@@ -519,7 +521,7 @@ class Job(object):
             elif job_metrics[k]['attr'] is not None:
                 attr = job_metrics[k]['attr']
                 if attr == "local_tasks":
-                    exp[k] = len(self._tasks[node.hostname])
+                    exp[k] = len([t for t in self._tasks[node.hostname] if not t._exited])
                 elif "subscriber_data" in attr:
                     exp[k] = self.__dict__["subscriber_data"][attr.split('.')[1]]
                 else:
@@ -685,6 +687,7 @@ def get_task_pid(job_id, rank):
 def test_all_step(job, nodes_job, assertion):
     for e in STEPD_EVENT:
         job.op[e](job)
+        sleep(1)
         results = ldms_ls_all()
         passed, reason = verify_results(results, node_jobs)
         test.assert_test(assertion[e], passed,
