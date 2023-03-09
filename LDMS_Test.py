@@ -1965,12 +1965,14 @@ class LDMSDCluster(ABC):
                 _add PYTHONPATH $(echo $PREFIX/lib/python*/site-packages)
                 _add PYTHONPATH $(echo $PREFIX/lib/python*/dist-packages)
 
-                export ZAP_LIBPATH=$PREFIX/lib/ovis-ldms
+                _add ZAP_LIBPATH $PREFIX/lib/ovis-ldms
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-ldms
                 _add ZAP_LIBPATH $PREFIX/lib/ovis-lib
                 _add ZAP_LIBPATH $PREFIX/lib64/ovis-lib
-                export LDMSD_PLUGIN_LIBPATH=$PREFIX/lib/ovis-ldms
+                export ZAP_LIBPATH
+                _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib/ovis-ldms
                 _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib64/ovis-ldms
+                export LDMSD_PLUGIN_LIBPATH
             """
             cont.write_file("/etc/profile.d/ovis.sh", profile)
             otherhosts = allhosts - set([cont.hostname])

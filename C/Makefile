@@ -41,7 +41,7 @@ ifeq ($(LDMSD_MINOR_VERSION), 3)
 	mkdir -p $(BUILDDIR)
 	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
 	    $^ -L$(OVIS_PREFIX)/lib -L$(BUILDDIR) -L$(OVIS_PREFIX)/lib64 \
-	    -lldmsd_stream -lovis_util -lcoll -pthread -lovis_json -ltada \
+	    -lldmsd_stream -lovis_util -lcoll -pthread -lovis_json -lovis_log -ltada \
 	    ${GCC_COMMON_FLAGS}
 	ln -fs $@ $@.0
 else
@@ -57,7 +57,7 @@ $(BUILDDIR)/libtest_store.so: test_store.c
 	mkdir -p $(BUILDDIR)
 	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
 	    $^ -L$(OVIS_PREFIX)/lib -L$(OVIS_PREFIX)/lib64 \
-	    -lldms \
+	    -lldms -lovis_log \
 	    ${GCC_COMMON_FLAGS}
 	ln -fs $@ $@.0
 
