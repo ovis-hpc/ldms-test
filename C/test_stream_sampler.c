@@ -190,7 +190,7 @@ struct ldmsd_plugin *get_plugin()
 		snprintf(tada_user, sizeof(tada_user), "%s", __user);
 	else
 		getlogin_r(tada_user, sizeof(tada_user));
-	mylog = ovis_log_create("sampler.test_stream", "Messages for the test_stream_sampler");
+	mylog = ovis_log_register("sampler.test_stream", "Messages for the test_stream_sampler");
 	assert(mylog);
 	return &test_stream_sampler.base;
 }
