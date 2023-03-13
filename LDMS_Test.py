@@ -2450,7 +2450,7 @@ class LDMSDProc(Proc):
             raise RuntimeError("Error: no LDMS connection")
         verb, args = ( cmd_line.split(" ", 1) + [None] )[:2]
         attr_list = []
-        from ldmsd.ldmsd_request import LDMSD_Request, LDMSD_Req_Attr
+        from ldmsd.ldmsd_communicator import LDMSD_Request, LDMSD_Req_Attr
         if args:
             attr_s = []
             attr_str_list = args.split()
