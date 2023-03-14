@@ -27,6 +27,9 @@ p.add_argument("--host", "-h", default = "localhost",
                help = "Host (default: localhost)")
 p.add_argument("--lookup", "-l", default = False, action = "store_true",
                help = "Also lookup, update and print metric data (default: False)")
+p.add_argument("--auth", "-a", help = "Authentication method.")
+p.add_argument("--auth_opts", "-A", action = "append",
+               help = "Authentication arguments (name=value).")
 args = p.parse_args()
 
 ldms.init(64*1024*1024)
@@ -111,7 +114,17 @@ def lookup_cb(xprt, status, more, lset, ctxt):
 ##########################
 # `ldms_ls` main routine #
 ##########################
-x = ldms.Xprt(args.xprt)
+auth_opts = {}
+if args.auth_opts is not None:
+    for a in args.auth_opts:
+        k, v = a.split("=")
+        auth_opts[k] = v
+else:
+    auth_opts = None
+auth = "none"
+if args.auth is not None:
+    auth = args.auth
+x = ldms.Xprt(args.xprt, auth = auth, auth_opts = auth_opts)
 x.connect(host = args.host, port = args.port)
 sets = x.dir()
 sets = { s.name: dir2dict(s) for s in sets }
