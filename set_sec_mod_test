@@ -1,0 +1,454 @@
+#!/usr/bin/env python3
+
+import argparse
+import atexit
+import logging
+import json
+import os
+import TADA
+import sys
+
+from distutils.spawn import find_executable
+from time import sleep
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, parse_ldms_ls, \
+                      assertion_id_get
+import errno
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values ####
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing ####
+ap = argparse.ArgumentParser(description = "Run test against the slurm_sampler2 plugin")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### Config Variables ####
+LDMSD_XPRT = "sock"
+LDMSD_PORT_NONE = "10000"
+LDMSD_PORT_NAIVE = "10001"
+
+DEFAULT_UID = "1000"
+NEW_UID = "1111"
+NEW_USERNAME = "my_user"
+
+DEFAULT_GID = "1000"
+NEW_GID = "1111"
+NEW_GRPNAME = "my_group"
+
+DEFAULT_PERM = "0440"
+NAIVE_AUTH = "naive"
+NAIVE_AUTH_OPTS = {'uid': DEFAULT_UID, 'gid': DEFAULT_GID}
+
+ALLOW_USER = "0400"
+ALLOW_GROUP = "0440"
+ALLOW_OTHER = "0444"
+
+PERM_LIST = [ "0400", "0040", "0004" ]
+
+NEW_SEC_PARAMS = ["exist_username", "not_exist_username", "valid_uid", "invalid_uid",
+            "exist_groupname", "not_exist_groupname", "valid_gid", "invalid_gid",
+            "valid_perm", "invalid_perm"]
+
+TEST = ["The change reflects on agg", "new client can't access sets"]
+
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s set_sec_test",
+    "type" : "NA",
+    "templates" : {
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "auth" : [
+                {
+                    "name": "naive",
+                    "uid" : f"{DEFAULT_UID}",
+                    "gid" : f"{DEFAULT_GID}"
+                }
+            ],
+            "listen" : [
+                {
+                  "port" : LDMSD_PORT_NAIVE,
+                  "xprt" : LDMSD_XPRT,
+                  "auth" : "naive",
+                },
+                {
+                  "port" : LDMSD_PORT_NONE,
+                  "xprt" : LDMSD_XPRT
+                }
+            ]
+        }
+    }, # Templates
+    "nodes" : [
+        {   "hostname" : "samplerd",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        f"metric_sets_default_authz uid={DEFAULT_UID} gid={DEFAULT_GID} perm={DEFAULT_PERM}",
+                        "load name=test_sampler",
+                        "config name=test_sampler action=add_schema schema=test num_metrics=2 type=U64",
+                    ] + [
+                        f"config name=test_sampler action=add_set schema=test producer=samplerd instance=set_{id}"
+                        for id in range(1, 11)
+                    ] + [
+                        "start name=test_sampler interval=1000000 offset=0"
+                    ]
+                }
+            ]
+        },
+        {
+            "hostname" : "agg",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                    "prdcrs" : [
+                        {
+                            "name" : "samplerd",
+                            "host" : "samplerd",
+                            "port" : LDMSD_PORT_NONE,
+                            "xprt" : "sock",
+                            "type" : "active",
+                            "interval" : 1000000
+                        }
+                    ],
+                    "config" : [
+                        "prdcr_start name=samplerd",
+                        "updtr_add name=all interval=1000000 offset=0",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ]
+                }
+            ]
+        }
+    ], # nodes
+
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "mounts" :  args.mount +
+                [f"{os.path.realpath(sys.path[0])}:/tada-src/:ro"] +
+                ([ f"{args.src}:{args.arg}:ro"] if args.src else [])
+}
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None and args.debug < 2:
+        cluster.remove()
+    os._exit(rc)
+
+def __ldms_ls(cont, cmd):
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"ldms_ls.py error {rc}, out: {out}")
+    obj = json.loads(out)
+    return obj
+
+def set_sec_mod(cont, regex, uid = None, gid = None, perm = None,
+                auth = None, auth_opts = None):
+    cmd = f"set_sec_mod regex={regex}"
+    if uid is not None:
+        cmd += f" uid={uid}"
+    if gid is not None:
+        cmd += f" gid={gid}"
+    if perm is not None:
+        cmd += f" perm={perm}"
+    ex = f"python3 /tada-src/ldmsd_request_send.py -x {LDMSD_XPRT} -H localhost"
+    if auth is None or auth == "none":
+        ex += f" -p {LDMSD_PORT_NONE}"
+    elif auth == "naive":
+        ex += f" -p {LDMSD_PORT_NAIVE} -a {auth}"
+        if auth_opts is None:
+            ex += f" -A uid={DEFAULT_UID} -A gid={DEFAULT_GID}"
+        else:
+            if 'uid' in auth_opts.keys():
+                ex += f" -A uid={auth_opts['uid']}"
+            else:
+                ex += f" -A uid={DEFAULT_UID}"
+            if 'gid' in auth_opts.keys():
+                ex += f" -A gid={auth_opts['gid']}"
+            else:
+                ex += f" -A gid={DEFAULT_GID}"
+    ex += f" --cmd '{cmd}'"
+    return cont.exec_run(ex)
+
+def ldms_ls_none(cont, port = LDMSD_PORT_NONE, xprt = LDMSD_XPRT, host = "localhost"):
+    cmd = f"/tada-src/python/ldms_ls.py -x {xprt} -h {host} -p {port}"
+    return __ldms_ls(cont, cmd)
+
+def ldms_ls_naive(cont, port = LDMSD_PORT_NAIVE, xprt = LDMSD_XPRT, host = "localhost",
+                  uid = DEFAULT_UID, gid = DEFAULT_GID):
+    cmd = f"/tada-src/python/ldms_ls.py -x {xprt} -h {host} -p {port}"
+    cmd += f" -a naive -A uid={uid} -A gid={gid}"
+    return __ldms_ls(cont, cmd)
+
+def sec_param_get(ldms_ls_obj, set_names):
+
+    def perm_octal(s):
+        PERM_MAP = {'x' : 1, 'w' : 2, 'r' : 4 }
+        _s = s[1:]
+        owner = 0
+        group = 0
+        other = 0
+        for i in range(0, 9):
+            if i / 3 < 1 and _s[i] != "-":
+                # owner
+                owner += PERM_MAP[_s[i]]
+            elif i / 3 > 1 and _s[i] != "-":
+                # other
+                other += PERM_MAP[_s[i]]
+            else:
+                # group
+                if _s[i] == "-":
+                    continue
+                group += PERM_MAP[_s[i]]
+        return f"0{owner}{group}{other}"
+
+    r = {}
+    if set_names is None:
+        for k, o in ldms_ls_obj.items():
+            r[s] = {'uid': o['uid'],
+                    'gid': o['gid'],
+                    'perm': perm_octal(o['perm'])}
+    else:
+        if type(set_names) != list:
+            set_names = [set_names]
+        for s in set_names:
+            o = ldms_ls_obj[s]
+            r[s] = {'uid': o['uid'],
+                    'gid': o['gid'],
+                    'perm': perm_octal(o['perm'])
+                   }
+    return r
+
+def exp_new(set_name, uid = DEFAULT_UID, gid = DEFAULT_GID, perm = DEFAULT_PERM):
+    return {set_name: {'uid': int(uid), 'gid': int(gid), 'perm': perm}}
+
+
+id = assertion_id_get()
+
+# username/UID
+EXIST_USER_NO = next(id)
+NOT_EXIST_USER_NO = next(id)
+VALID_UID_NO = next(id) # in-range UID
+INVALID_UID_NO = next(id) # Out-of-range UID
+# Group name /GID
+EXIST_GROUPNAME_NO = next(id)
+NOT_EXIST_GROUPNAME_NO = next(id)
+VALID_GID_NO = next(id)
+INVALID_GID_NO = next(id)
+# Permission bits
+VALID_PERM_NO = next(id)
+INVALID_PERM_NO = next(id)
+
+# Clients
+AGG_UPDATED_NO = next(id)
+CLIENT_ACCESS_NO = next(id)
+CLIENT_ACCESS_NO_1 = CLIENT_ACCESS_NO + 0.1
+CLIENT_ACCESS_NO_2 = CLIENT_ACCESS_NO + 0.2
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "set_sec_test",
+                 test_desc = "Test the set_sec_mod configuration command",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(EXIST_USER_NO,
+                   "Change UID to an existing username")
+test.add_assertion(NOT_EXIST_USER_NO,
+                   "Change UID to a not-existing username")
+test.add_assertion(VALID_UID_NO,
+                   "Change UID to a valid UID")
+test.add_assertion(INVALID_UID_NO,
+                   "Change UID to an invalid UID")
+test.add_assertion(EXIST_GROUPNAME_NO,
+                   "Change GID to an existing groupname")
+test.add_assertion(NOT_EXIST_GROUPNAME_NO,
+                   "Change GID to a not-existing groupname")
+test.add_assertion(VALID_GID_NO,
+                   "Change GID to a valid GID")
+test.add_assertion(INVALID_GID_NO,
+                   "Change GID to an invalid GID")
+test.add_assertion(VALID_PERM_NO,
+                   "Change permission bits to a valid permission value")
+test.add_assertion(INVALID_PERM_NO,
+                   "Change permission bits to an invalid permission value")
+test.add_assertion(AGG_UPDATED_NO,
+                   "Verify that the aggregator got sets' new security info")
+test.add_assertion(CLIENT_ACCESS_NO_1,
+                   "Clients with different UID and the same GID cannot access 0400 sets.")
+test.add_assertion(CLIENT_ACCESS_NO_2,
+                   "Clients with different UID and GID cannot access 04## sets.")
+
+
+cluster = None
+test.start()
+
+log.info("---Get or create the cluster ---")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+log.info("--- Start daemons ---")
+cluster.start_daemons()
+cluster.make_known_hosts()
+sleep(1)
+
+cont_smplr = cluster.get_container("samplerd")
+
+# Add user and group
+out = cont_smplr.exec_run(f"groupadd -g {NEW_GID} {NEW_GRPNAME}")
+out = cont_smplr.exec_run(f"useradd -g {NEW_GID} -u {NEW_UID} {NEW_USERNAME}")
+
+# Existing username
+SNAME = "set_1"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", uid = NEW_USERNAME)
+if rc != 0:
+    test.assert_test(EXIST_USER_NO, False, f"errcode ({rc}) == expected (0)")
+else:
+    result = sec_param_get(ldms_ls_none(cont_smplr), SNAME)
+    exp = exp_new(SNAME, NEW_UID)
+    test.assert_test(EXIST_USER_NO, result == exp, f"{result} == {exp}")
+
+# Not existing username
+SNAME = "set_2"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", uid = "foo")
+test.assert_test(NOT_EXIST_USER_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
+
+# Valid uid
+SNAME = "set_3"
+UID = "2222"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", uid = UID)
+if rc != 0:
+    test.assert_test(VALID_UID_NO, False, f"errcode ({rc}) == expected (0)")
+else:
+    result = sec_param_get(ldms_ls_none(cont_smplr), SNAME)
+    exp = exp_new(SNAME, UID)
+    test.assert_test(VALID_UID_NO, result == exp, f"{result} == {exp}")
+
+# Invalid uid
+UID = "-1000"
+SNAME = "set_4"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", uid = UID)
+test.assert_test(INVALID_UID_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
+
+# Existing group name
+GID = NEW_GRPNAME
+SNAME = "set_5"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", gid = GID)
+if rc != 0:
+    test.assert_test(EXIST_GROUPNAME_NO, False, f"errcode ({rc}) == expected (0)")
+else:
+    result = sec_param_get(ldms_ls_none(cont_smplr), SNAME)
+    exp = exp_new(SNAME, gid = NEW_GID)
+    test.assert_test(EXIST_GROUPNAME_NO, result == exp, f"{result} == {exp}")
+
+# Not-existing group name
+GID = "bad_group"
+SNAME = "set_6"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", gid = GID)
+test.assert_test(NOT_EXIST_GROUPNAME_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
+
+# Valid GID
+GID = "2222"
+SNAME = "set_7"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", gid = GID)
+if rc != 0:
+    test.assert_test(INVALID_GID_NO, False, f"errcode ({rc}) == expected (0)")
+else:
+    result = sec_param_get(ldms_ls_none(cont_smplr), SNAME)
+    exp = exp_new(SNAME, gid = GID)
+    test.assert_test(VALID_GID_NO, result == exp, f"{result} == {exp}")
+
+# Invalid GID
+GID = "-200"
+SNAME = "set_8"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", gid = GID)
+test.assert_test(INVALID_GID_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
+
+# Valid Permission bits
+PERM = "0400"
+SNAME = "set_9"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", perm = PERM)
+if rc != 0:
+    test.assert_test(VALID_PERM_NO, False, f"errcode ({rc}) == expected (0)")
+else:
+    result = sec_param_get(ldms_ls_none(cont_smplr), SNAME)
+    exp = exp_new(SNAME, perm = PERM)
+    test.assert_test(VALID_PERM_NO, result == exp, f"{result} == {exp}")
+
+# Invalid permission bits
+PERM = "0900"
+SNAME = "set_10"
+rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", perm = PERM)
+test.assert_test(INVALID_PERM_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
+
+# Verify the agg got sets' new security parameters
+cont_agg = cluster.get_container("agg")
+result = sec_param_get(ldms_ls_none(cont_agg), None)
+exp = {}
+exp.update(exp_new('set_1', uid = NEW_UID))
+exp.update(exp_new('set_2'))
+exp.update(exp_new('set_3', uid = "2222"))
+exp.update(exp_new('set_4'))
+exp.update(exp_new('set_5', gid = NEW_GID))
+exp.update(exp_new('set_6'))
+exp.update(exp_new('set_7', gid = "2222"))
+exp.update(exp_new('set_8'))
+exp.update(exp_new('set_9', perm = "0400"))
+exp.update(exp_new('set_10'))
+test.assert_test(AGG_UPDATED_NO, result == exp, f"{result} == {exp}")
+
+# New Clients with wrong permission cannot access sets
+# Different UID, Same group
+result = sec_param_get(ldms_ls_naive(cont_smplr, port = LDMSD_PORT_NAIVE,
+                                     uid = "3333", gid = DEFAULT_GID))
+exp = {}
+exp.update(exp_new('set_1', uid = NEW_UID))
+exp.update(exp_new('set_2'))
+exp.update(exp_new('set_3', uid = "2222"))
+exp.update(exp_new('set_4'))
+exp.update(exp_new('set_5', gid = NEW_GID))
+exp.update(exp_new('set_6'))
+exp.update(exp_new('set_7', gid = "2222"))
+exp.update(exp_new('set_8'))
+exp.update(exp_new('set_10')) 
+test.assert_test(CLIENT_ACCESS_NO_1, result == exp, f"{result} == {exp}")
+
+# Different UID, Different group
+result = sec_param_get(ldms_ls_naive(cont_smplr, port = LDMSD_PORT_NAIVE,
+                                     uid = "3333", gid = "3333"))
+exp = {}
+test.assert_test(CLIENT_ACCESS_NO_2, result == exp, f"{result} == {exp}")
