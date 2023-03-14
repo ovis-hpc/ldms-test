@@ -13,7 +13,7 @@ from collections import namedtuple
 from ovis_ldms import ldms
 from config import *
 
-from ldmsd.ldmsd_request import LDMSD_Request, LDMSD_Req_Attr
+from ldmsd.ldmsd_communicator import LDMSD_Request, LDMSD_Req_Attr
 
 logger = logging.getLogger(__name__)
 
