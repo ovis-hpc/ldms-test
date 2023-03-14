@@ -3,8 +3,8 @@
 import argparse
 
 from ldmsd.ldmsd_config import ldmsdInbandConfig as Ctrl
-from ldmsd.ldmsd_request import  LDMSD_Request as Req
-from ldmsd.ldmsd_request import LDMSD_Req_Attr as ReqAttr
+from ldmsd.ldmsd_communicator import  LDMSD_Request as Req
+from ldmsd.ldmsd_communicator import LDMSD_Req_Attr as ReqAttr
 import sys
 
 def parse_auth_args(args):
