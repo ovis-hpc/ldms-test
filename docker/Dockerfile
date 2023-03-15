@@ -132,3 +132,27 @@ RUN set -e ;\
     curl -LO https://archive.apache.org/dist/kafka/2.1.0/kafka_2.12-2.1.0.tgz ;\
     tar xzf kafka_2.12-2.1.0.tgz ; \
     mkdir kafka_2.12-2.1.0/logs/ ;
+
+# avro
+RUN /bin/echo >/etc/yum.repos.d/confluent.repo -e "\
+[Confluent]\n\
+name=Confluent repository\n\
+baseurl=https://packages.confluent.io/rpm/7.3\n\
+gpgcheck=1\n\
+gpgkey=https://packages.confluent.io/rpm/7.3/archive.key\n\
+enabled=1\n\
+\n\
+[Confluent-Clients]\n\
+name=Confluent Clients repository\n\
+baseurl=https://packages.confluent.io/clients/rpm/centos/\$releasever/\$basearch\n\
+gpgcheck=1\n\
+gpgkey=https://packages.confluent.io/clients/rpm/archive.key\n\
+enabled=1\n\
+"
+
+RUN /bin/bash -c '\
+set -e ; \
+set -x ; \
+yum -y install avro-c-devel confluent-libserdes-devel jansson-devel ; \
+yum clean all ; \
+'
