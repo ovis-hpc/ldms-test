@@ -814,6 +814,141 @@ def ssh(host, _input=None, port=22):
         bio.write(out)
     return (p.returncode, bio.getvalue().decode())
 
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+def pycmd(tty, cmd, retry = 3):
+    """cmd must be single command w/o new line"""
+    global loggger
+    log = logger
+    _begin = time.time()
+    sio = io.StringIO()
+    tty.write(cmd)
+    _mark0 = time.time()
+    # flush the echo
+    while tty.read(idle_timeout = 0.1) != '':
+        continue
+    _mark1 = time.time()
+    # ENTER to execute
+    tty.write("\n")
+    _mark2 = time.time()
+    count = 0
+    end = False
+    _mark3 = time.time()
+    t0 = time.time() # for debugging
+    _count = 0 # for debugging
+    while count < retry and not end:
+        _count += 1
+        o = tty.read(idle_timeout=0.1)
+        if len(o):
+            count = 0 # reset
+        else:
+            count += 1
+        sio.write(o)
+        if sio.getvalue().endswith(">>> "):
+            t1 = time.time()
+            # print(f"HERE; count: {count}; _count: {_count}; dt: {t1 - t0}")
+            end = True
+            break
+    _mark4 = time.time()
+    if not end:
+        raise RuntimeError("Python '{cmd}` not responding".format(**vars()))
+    o = sio.getvalue()
+    D.pyout = o
+    _end = time.time()
+    if False:
+        log.info(f"[pycmd] t1-t0: {t1-t0} secs")
+        log.info(f"[pycmd] begin-to-end: {_end - _begin} secs")
+        log.info(f"[pycmd] _mark0: {_mark0 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark1: {_mark1 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark2: {_mark2 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark3: {_mark3 - _begin:.3f} secs")
+        log.info(f"[pycmd] _mark4: {_mark4 - _begin:.3f} secs")
+    # remove the echoed cmd and the prompt
+    return o[ 2 : -4 ]
+
+def py_pty(node, script_path, user = None):
+    global loggger
+    log = logger
+    as_user = f"as {user}" if user is not None else ""
+    log.info(f"starting {script_path} on {node.name} {as_user}")
+    _cmd = f"ZAP_POOLS=8 /usr/bin/python3 -i {script_path}"
+    if user:
+        shell = f"su -s /bin/bash {user}"
+    else:
+        shell = f"/bin/bash"
+    cmd = f"{shell} -c '{_cmd}'"
+    _pty = node.exec_interact(cmd)
+    time.sleep(2)
+    _out = _pty.read()
+    EXPECT(_out, ">>> ")
+    return _pty
+
+class PyPty(object):
+    """PyPty(node, script_path, user = None)
+
+    PTY for Pyton program inside a container"""
+    def __init__(self, node, script_path, user = None):
+        self.pty = py_pty(node, script_path, user)
+
+    def cmd(self, cmd, retry = 3):
+        """Issue a `cmd` to the Python PTY and returns the output"""
+        return pycmd(self.pty, cmd, retry)
+
+
+class StreamData(object):
+    """StreamData representation"""
+
+    __slots__ = ('name', 'src', 'tid', 'uid', 'gid', 'perm', 'is_json', 'data')
+    __cmp_fields__ = ('name', 'src', 'uid', 'gid', 'perm', 'is_json', 'data')
+    # cmp_fields omitted 'tid'
+
+    def __init__(self, *args, **kwargs):
+        if args and kwargs:
+            raise ValueError("StreamData can be initialized with either *args or **kwargs but not both")
+        for k in self.__slots__:
+            setattr(self, k, None)
+        if args:
+            if len(args) != len(self.__slots__):
+                raise ValueError()
+            for k,v in zip(self.__slots__, args):
+                setattr(self, k, v)
+        elif kwargs:
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+        else:
+            raise ValueError("Missing initialize parameters")
+
+    def as_list(self):
+        return [ getattr(self, f) for f in self.__slots__ ]
+
+    def as_tuple(self):
+        return tuple( getattr(self, f) for f in self.__slots__ )
+
+    def __eq__(self, other):
+        if type(other) != StreamData:
+            return False
+        # compare all fields, except when it is None
+        for k in self.__cmp_fields__:
+            v0 = getattr(self, k)
+            v1 = getattr(other, k)
+            if v0 is None or v1 is None:
+                continue # skip
+            if v0 != v1:
+                return False
+        return True
+
+    @classmethod
+    def fromRepr(cls, _str):
+        if not _str:
+            return None
+        o = eval(_str)
+        return o
+
+    def __repr__(self):
+        return f"StreamData{self.as_tuple()}"
+
 ################################################################################
 
 
