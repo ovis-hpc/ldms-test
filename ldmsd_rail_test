@@ -1,0 +1,299 @@
+#!/usr/bin/python3
+#
+#
+#  .--------------.
+#  | agg2 (ldmsd) | (node-1)
+#  '--------------'
+#      |
+#      v
+#  .--------------------------.
+#  | srv  (ldmsd_rail_srv.py) | (node-2)
+#  '--------------------------'
+#      |
+#      v
+#  .--------------.
+#  | samp (ldmsd) | (node-3)
+#  '--------------'
+#
+#
+# Setup
+# - 3 daemons on 3 nodes connected as shown.
+# - The arrows go from the active side to the passive side of the connection.
+# - agg2:
+#   - agg2->srv will be 4-ep-rail with 128 bytes credit
+#   - agg2 has stream_dump
+# - samp will listen with 128 bytes default credit
+#   - Note that this is not a real sampler. It is an LDMS daemon with a
+#     stream_dump plugin.
+#
+# Test
+# - srv will receive 'CONNECTED' event when agg2 connects to srv. Then, srv can
+#   verify that the connected rail contains 4 endpoints.
+# - srv send a stream data of 32 bytes to agg2. Then, verify the stream data
+#   from the stream_dump output on agg2
+# - srv send a stream data of 1024 bytes to agg2, expecting an error due to the
+#   credit limit.
+# - srv send a stream data of 32 bytes to samp. Then, verify the stream data
+#   from the stream_dump output on samp
+# - srv send a stream data of 1024 bytes to samp, expecting an error due to the
+#   credit limit.
+
+import os
+import io
+import re
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, \
+                      PyPty
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test rail and credits feature with ldmsd")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+RAIL = 4
+CREDITS = 128
+
+#### spec #### -------------------------------------------------------
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+base_daemons = [
+        { "name" : "sshd", "type" : "sshd" },
+        { "name" : "munged", "type" : "munged", "key"  : "0"*1024 },
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_rail test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "credits" : CREDITS,
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+            "config" : [
+                "load name=stream_dump",
+                "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=0",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"node-1",
+            "daemons" : base_daemons + [
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                    "prdcrs" : [
+                        {
+                            "name" : "srv",
+                            "host" : "node-2",
+                            "port" : LDMSD_PORT,
+                            "xprt" : "sock",
+                            "type" : "active",
+                            "interval" : 1000000,
+                            "credits" : CREDITS,
+                            "rail" : RAIL,
+                        }
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : f"node-2",
+            "daemons" : base_daemons,
+        },
+        {
+            "hostname" : f"node-3",
+            "daemons" : base_daemons + [
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                },
+            ],
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_rail_test",
+                 test_desc = "Test rail and credits feature with ldmsd",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion( 1, "agg2-srv xprt has correct number of rail endpoints (test prdcr_add 'rail' parameter")
+test.add_assertion( 2, "agg2-srv xprt has correct send credits (test prdcr_add 'credits' parameter)")
+test.add_assertion( 3, "srv-agg2 stream publish")
+test.add_assertion( 4, "srv-agg2 stream publish exceeding send credits")
+test.add_assertion( 5, "srv-samp xprt has correct number of rail endpoints")
+test.add_assertion( 6, "srv-samp xprt has correct send credits (test ldmsd -C option)")
+test.add_assertion( 7, "srv-samp stream publish")
+test.add_assertion( 8, "srv-samp stream publish exceeding send credits")
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+node3 = cluster.get_container("node-3")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+srv = PyPty(node2, "/tada-src/python/ldmsd_rail_srv.py")
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(2)
+
+# test.add_assertion( 1, "agg2-srv xprt has correct number of rail endpoints (test prdcr_add 'rail' parameter")
+out = srv.cmd("agg2 = xset[0]; agg2.get_threads()")
+thr = json.loads(out)
+if type(thr) is list and len(thr) == 4:
+    AGG2_OK = True
+    test.assert_test(1, True, f"len == {RAIL}")
+else:
+    AGG2_OK = False
+    test.assert_test(1, False, f"output: {out}")
+
+EXP_CREDITS = [CREDITS] * RAIL # expected credits
+# test.add_assertion( 2, "agg2-srv xprt has correct send credits (test prdcr_add 'credits' parameter)")
+if AGG2_OK:
+    out = srv.cmd("agg2.send_credits")
+    obj = json.loads(out)
+    if obj == EXP_CREDITS:
+        test.assert_test(2, True, "credits: {obj}")
+    else:
+        test.assert_test(2, False, "output: {out}")
+
+# test.add_assertion( 3, "srv-agg2 stream publish")
+if AGG2_OK:
+    out = srv.cmd("agg2.stream_publish('agg2', 'data_for_agg2')")
+    time.sleep(1) # wait a bit for stream delivery
+    txt = node1.read_file("/db/node-1.txt")
+    lines = txt.strip().split('\x01')
+    data = lines[-1].split(': ')[-1]
+    if data == 'data_for_agg2':
+        test.assert_test(3, True, "OK")
+    else:
+        test.assert_test(3, False, f"output: {out}")
+
+# test.add_assertion( 4, "srv-agg2 stream publish exceeding send credits")
+if AGG2_OK:
+    out = srv.cmd("agg2.stream_publish('agg2', '0'*1024)")
+    test.assert_test(4, out.find('ldms_stream_publish() failed, rc: 105') > 0, "checking...")
+
+# test.add_assertion( 5, "srv-samp xprt has correct number of rail endpoints")
+out0 = srv.cmd(f"samp = ldms.Xprt(rail_eps = {RAIL})")
+out1 = srv.cmd(f"samp.connect('node-3')")
+out2 = srv.cmd(f"samp.get_threads()")
+obj  = json.loads(out2)
+if type(obj) == list and len(obj) == RAIL:
+    SAMP_OK = True
+    test.assert_test(5, True, f"len == {RAIL}")
+else:
+    SAMP_OK = False
+    test.assert_test(5, False, f"output: {out0 + out1 + out2}")
+
+# test.add_assertion( 6, "srv-samp xprt has correct send credits (test ldmsd -C option)")
+if SAMP_OK:
+    out = srv.cmd("samp.send_credits")
+    obj = json.loads(out)
+    if obj == EXP_CREDITS:
+        test.assert_test(6, True, "credits: {obj}")
+    else:
+        test.assert_test(6, False, "output: {out}")
+
+# test.add_assertion( 7, "srv-samp stream publish")
+if SAMP_OK:
+    out = srv.cmd("samp.stream_publish('samp', 'data_for_samp')")
+    time.sleep(1) # wait a bit for stream delivery
+    txt = node3.read_file("/db/node-3.txt")
+    lines = txt.strip().split('\x01')
+    data = lines[-1].split(': ')[-1]
+    if data == 'data_for_samp':
+        test.assert_test(7, True, "OK")
+    else:
+        test.assert_test(7, False, f"output: {out}")
+
+# test.add_assertion( 8, "srv-samp stream publish exceeding send credits")
+if SAMP_OK:
+    out = srv.cmd("samp.stream_publish('samp', '0'*1024)")
+    test.assert_test(8, out.find('ldms_stream_publish() failed, rc: 105') > 0, "checking...")
