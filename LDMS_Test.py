@@ -1407,9 +1407,12 @@ class LDMSDContainer(ABC):
             AUTH_OPT = "-a {listen_auth}".format(**spec)
         else:
             AUTH_OPT = ""
+        CREDIT_OPT = f"-C {spec['credits']}" if "credits" in spec else ""
+        VARS = dict(locals())
+        VARS.update(spec)
         cmd = "ldmsd {XPRT_OPT} {AUTH_OPT}" \
-              "      -c {config_file} -l {log_file} -v {log_level}" \
-              .format(XPRT_OPT=XPRT_OPT, AUTH_OPT=AUTH_OPT, **spec)
+              " -c {config_file} -l {log_file} -v {log_level}" \
+              " {CREDIT_OPT}".format(**VARS)
         return cmd
 
     def ldms_ls(self, *args):
