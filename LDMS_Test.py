@@ -2841,11 +2841,11 @@ from abc import ABC, abstractmethod
 class ContainerTest(ABC):
     """The parent class of a test to be run inside a container
 
-    The test scripts that are intended to be run inside a container 
+    The test scripts that are intended to be run inside a container
     must define a _single_ class that inherits from ContainerTest.
 
-    If a test script contains more than one classes that are 
-    ContainerTest's children, it will not be run and an error is reported 
+    If a test script contains more than one classes that are
+    ContainerTest's children, it will not be run and an error is reported
     by run_inside_cont_test.py.
     """
 
