@@ -1534,7 +1534,7 @@ if not rc:
     raise RuntimeError(f"Log file {cont_path} does not exist.")
 out = cont.read_file(cont_path)
 subsys_info = json.loads(out.strip())
-exp = [{"name": "test",
+exp = [{"name": "test (default)",
         "desc": "The default log subsystem",
         "level" : "CRITICAL,"}]
 for n, l in zip(names, levels):
