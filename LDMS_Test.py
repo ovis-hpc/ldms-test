@@ -805,7 +805,8 @@ def ssh(host, _input=None, port=22):
     p.stdout = p.stdout.detach()
     if _input:
         p.stdin.write(BYTES(_input))
-        p.stdin.close()
+        p.stdin.flush()
+    p.stdin.close()
     bio = io.BytesIO()
     while True:
         out = p.stdout.read()
@@ -2502,7 +2503,7 @@ class LDMSDProc(Proc):
             cat >{conf_file} <<EOF\n{ldmsd_config}\nEOF
             {env_cmd}
             ldmsd -c {conf_file} -r {pid_file} -l {log_file} \
-                    -v {log_level} {mem_opt}
+                    -v {log_level} {mem_opt} >/dev/null 2>&1
         """.format(**vars(self)))
         if rc == errno.EALREADY:
             logger.info(out)
@@ -2528,7 +2529,7 @@ class LDMSDProc(Proc):
         """.format(**vars(self)))
 
     def _remote_cleanup(self):
-        rc, out = ssh(self.host, port = self.ssh_port, script = """
+        rc, out = ssh(self.host, port = self.ssh_port, _input = """
             if test -f {pid_file}; then
                 PID=$(cat {pid_file})
                 if test -d /proc/${{PID}}; then
