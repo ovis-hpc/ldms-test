@@ -317,7 +317,7 @@ try:
             " --prefix "+CFG_PREFIX + " 2>/dev/null"
     cmd = "bash -c '{}'".format(cmd)
     rc, out = headnode.exec_run(cmd)
-    expected_out = "LDMS aggregator configuration saved to etcd cluster.\n"
+    expected_out = "LDMS cluster configuration saved to etcd cluster.\n"
     if expected_out == out:
         test.assert_test(1, True, "etcd cluster loaded successfully")
     else:
