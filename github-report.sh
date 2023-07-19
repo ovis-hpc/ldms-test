@@ -93,8 +93,9 @@ fi
 
 # caller set OVIS_GIT_SHA
 OVIS_GIT_SHA_SHORT=${OVIS_GIT_SHA:0:7} # abcdef0
+LDMS_TEST_GIT_SHA_SHORT=${LDMS_TEST_GIT_SHA:0:7}
 
-LABEL="weekly test on ${OVIS_GIT_SHA_SHORT}"
+LABEL="weekly test on ovis:${OVIS_GIT_SHA_SHORT} and ldms-test:${LDMS_TEST_GIT_SHA_SHORT}"
 
 cat > status.json <<EOF
 {
