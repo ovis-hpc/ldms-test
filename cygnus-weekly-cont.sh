@@ -144,8 +144,8 @@ export SOS_BRANCH=${SOS_BRANCH:-SOS-6}
 export MAESTRO_REPO=${MAESTRO_REPO:-https://github.com/ovis-hpc/maestro}
 export MAESTRO_BRANCH=${MAESTRO_BRANCH:-master}
 
-NEW_GIT_SHA=( $( git ls-remote ${OVIS_REPO} ${OVIS_BRANCH} ) )
-OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
+OVIS_NEW_GIT_SHA=( $( git ls-remote ${OVIS_REPO} ${OVIS_BRANCH} ) )
+OVIS_OLD_GIT_SHA=$( [[ -x /opt/ovis/sbin/ldmsd ]] && {
 		/opt/ovis/sbin/ldmsd -V | grep git | sed 's/git-SHA: //'
 	} || echo "" )
 
@@ -156,14 +156,21 @@ else
 	CONT_GIT_SHA=""
 fi
 
-INFO "NEW_GIT_SHA: ${NEW_GIT_SHA}"
-INFO "OLD_GIT_SHA: ${OLD_GIT_SHA}"
-INFO "CONT_GIT_SHA: ${CONT_GIT_SHA}"
-
-export NEW_GIT_SHA
-export OLD_GIT_SHA
+export OVIS_NEW_GIT_SHA
+export OVIS_OLD_GIT_SHA
 export CONT_GIT_SHA
-export OVIS_GIT_SHA=${NEW_GIT_SHA}
+export OVIS_GIT_SHA=${OVIS_NEW_GIT_SHA}
+
+# Get the ldms-test repo's old and new git sha
+LDMS_TEST_REPO=${LDMS_TEST_REPO:-https://github.com/ovis-hpc/ldms-test}
+LDMS_TEST_BRANCH=${LDMS_TEST_BRANCH:-master}
+LDMS_TEST_NEW_GIT_SHA=( $( git ls-remote ${LDMS_TEST_REPO} ${LDMS_TEST_BRANCH} ) )
+LDMS_TEST_OLD_GIT_SHA=$( git rev-parse ${LDMS_TEST_BRANCH} )
+LDMS_TEST_GIT_SHA=${LDMS_TEST_NEW_GIT_SHA}
+
+export LDMS_TEST_NEW_GIT_SHA
+export LDMS_TEST_OLD_GIT_SHA
+export LDMS_TEST_GIT_SHA
 
 export PASSED=0
 export FAILED=0
@@ -174,6 +181,16 @@ set -o pipefail
 {
 INFO "WORK_DIR: ${WORK_DIR}"
 INFO "LOG: ${LOG}"
+
+INFO "OVIS_NEW_GIT_SHA: ${OVIS_NEW_GIT_SHA}"
+INFO "OVIS_OLD_GIT_SHA: ${OVIS_OLD_GIT_SHA}"
+INFO "CONT_GIT_SHA: ${CONT_GIT_SHA}"
+
+INFO "-----------------------------------------------"
+INFO "LDMS_TEST_REPO: ${LDMS_TEST_REPO}"
+INFO "LDMS_TEST_BRANCH: ${LDMS_TEST_BRANCH}"
+INFO "LDMS_TEST_NEW_GIT_SHA: ${LDMS_TEST_NEW_GIT_SHA}"
+INFO "LDMS_TEST_OLD_GIT_SHA: ${LDMS_TEST_OLD_GIT_SHA}"
 
 pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
@@ -188,7 +205,7 @@ if [[ "$SKIP_BUILD" -ne 0 ]]; then
 	INFO "Force-skip building on host (SKIP_BUILD: ${SKIP_BUILD})"
 elif [[ -z "$HAVE_RDMA" ]]; then
 	INFO "Does not have RDMA, skip building on host"
-elif [[ "$NEW_GIT_SHA" != "$OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
+elif [[ "$OVIS_NEW_GIT_SHA" != "$OVIS_OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 	INFO "==== start building on host ===="
 	${SCRIPT_DIR}/scripts/clean-build.sh
 else
@@ -200,7 +217,7 @@ if [[ "$SKIP_BUILD" -ne 0 ]]; then
 	INFO "Force-skip building containerized binary (SKIP_BUILD: ${SKIP_BUILD})"
 elif [[ ! -f ${CONT_OVIS}/sbin/ldmsd ]] ||
      [[ "${FORCE_BUILD}0" -gt 0 ]] ||
-     ! strings ${CONT_OVIS}/sbin/ldmsd | grep ${NEW_GIT_SHA} ; then
+     ! strings ${CONT_OVIS}/sbin/ldmsd | grep ${OVIS_NEW_GIT_SHA} ; then
 	pushd ${LDMS_CONTAINERS_DIR}
 	sed -i "s|^\\s*OVIS=.*|OVIS=${CONT_OVIS}|" config.sh
 	sed -i "s|^\\s*OVIS_REPO=.*|OVIS_REPO=${OVIS_REPO}|" config.sh
@@ -220,8 +237,8 @@ export PYTHONPATH=$( echo /opt/ovis/lib/python*/site-packages )
 INFO "-- Installation process succeeded --"
 INFO "---------------------------------------------------------------"
 
-if [[  "$NEW_GIT_SHA" == "$CONT_GIT_SHA" ]] && [[ "${FORCE_TEST}0" -eq 0 ]]; then
-	INFO "Skip the test. SHA does not change: ${NEW_GIT_SHA}"
+if [[  "$OVIS_NEW_GIT_SHA" == "$CONT_GIT_SHA" ]] && [[ "${FORCE_TEST}0" -eq 0 ]]; then
+	INFO "Skip the test. SHA does not change: ${OVIS_NEW_GIT_SHA}"
 	INFO "----------------------------------------------"
 	exit 0
 fi
