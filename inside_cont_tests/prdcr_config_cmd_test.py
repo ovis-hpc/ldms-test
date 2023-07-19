@@ -324,12 +324,13 @@ class PrdcrConfigCMDTest(ContainerTest):
         ("add-1", "prdcr_add an active producer"),
         ("add-2", "prdcr_add a passive producer"),
         ("add-3", "prdcr_add with a string interval"),
-        ("add-4", "prdcr_add with a negative interval"),
-        ("add-5", "prdcr_add with zero interval"),
+        ("add-4", "prdcr_add with a negative reconnect"),
+        ("add-5", "prdcr_add with zero reconnect"),
         ("add-6", "prdcr_add with an invalid type"),
         ("add-7", "prdcr_add with a negative port"),
         ("add-8", "prdcr_add with a non-existing host"),
         ("add-9", "prdcr_add an existing producer"),
+        ("add-10", "prdcr_add using the interval attribute"),
         # prdcr_start
         ("start-1", "prdcr_start a non-existing producer"),
         ("start-2.1", "prdcr_start a stopped producer -- checking the errcode"),
@@ -369,13 +370,14 @@ def prdcr_status(comm, **kwargs):
     return ({'errcode' : errcode, 'msg': msg},
                 json.loads(msg) if errcode == 0 else None)
 
-def prdcr_add(comm, name, host = "samplerd", type = "active", interval = 1000000,
+def prdcr_add(comm, name, host = "samplerd", type = "active",
+              interval = None, reconnect = 1000000,
               xprt = PrdcrConfigCMDTest.LDMSD_XPRT,
               port = PrdcrConfigCMDTest.LDMSD_PORT):
+    reconnect_v = reconnect if reconnect is not None else interval
     errcode, msg = comm.prdcr_add(name = name, host = host, ptype = type,
-                     reconnect = interval, xprt = xprt, port = port)
+                     reconnect = reconnect_v, xprt = xprt, port = port)
     return {'errcode': errcode, 'msg' : msg }
-    
 
 def prdcr_start(comm, name):
     errcode,msg = comm.prdcr_start(name = name, regex = False)
@@ -470,15 +472,15 @@ def prdcr_add_test(suite, comms):
     suite.save_assertion("add-2", **errcode_cond(resp, 0))
 
     # String interval
-    resp = prdcr_add(agg_comm, name = "interval_character", interval = "foo")
+    resp = prdcr_add(agg_comm, name = "interval_character", reconnect = "foo")
     suite.save_assertion("add-3", **errcode_cond(resp, errno.EINVAL))
 
     # Negative interval
-    resp = prdcr_add(agg_comm, name = "negative_interval", interval = -1000000)
+    resp = prdcr_add(agg_comm, name = "negative_interval", reconnect = -1000000)
     suite.save_assertion("add-4", **errcode_cond(resp, errno.EINVAL))
 
     # zero interval
-    resp = prdcr_add(agg_comm, name = "zero_interval", interval = 0)
+    resp = prdcr_add(agg_comm, name = "zero_interval", reconnect = 0)
     suite.save_assertion("add-5", **errcode_cond(resp, errno.EINVAL))
 
     # Invalid type
@@ -496,6 +498,10 @@ def prdcr_add_test(suite, comms):
     # Existing host
     resp = prdcr_add(agg_comm, name = "type_active")
     suite.save_assertion("add-9", **errcode_cond(resp, errno.EEXIST))
+
+    resp = prdcr_add(agg_comm, name = "depre_intrvl", interval = 1000000,
+            reconnect = None)
+    suite.save_assertion("add-10", **errcode_cond(resp, 0))
     suite.log("prdcr_add_test -- end")
 
 def prdcr_start_test(suite, comms):
