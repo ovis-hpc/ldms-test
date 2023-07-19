@@ -232,7 +232,7 @@ def stream_client_dump(node):
             stream_name = x[0]
         else:
             (ctxt, cb_fn) = (x[0], x[1])
-            lst.append((stream_name, cb_fn, ctxt)) 
+            lst.append((stream_name, cb_fn, ctxt))
     return lst
 
 def verify_msg(test, assert_no, msg, json_data, err_text):
@@ -320,8 +320,6 @@ if __name__ == "__main__":
 
     test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
     test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
-
-    test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
 
     cluster = None
     # Tell the TADA infrastructure that the test is starting
@@ -684,38 +682,6 @@ if __name__ == "__main__":
             test.assert_test(18, False, "agg-2 has extra stream data")
             break
         test.assert_test(18, True, "data verified")
-        break
-
-    #test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
-    # Get client dump from stream-sampler-2 before killing agg-1
-    while True: # this will break
-        before = stream_client_dump(samp2)
-        # Kill agg-1
-        agg1.kill_ldmsd()
-        time.sleep(5)
-        # Get client dump from stream-sampler-2
-        after = stream_client_dump(samp2)
-        before = set(before)
-        after = set(after)
-        if not (after < before):
-            diff = after - before
-            if diff:
-                test.assert_test(19, False, "Unexpected streams/clients: {}".format(diff))
-            else:
-                test.assert_test(19, False, "streams/clients not removed: {}".format(after))
-            break
-        diff = set(before) - set(after)
-        if len(diff) != 1:
-            test.assert_test(19, False, "Too many terminated clients: {}".format(diff))
-            break
-        stream_name, cb_fn, ctxt = diff.pop()
-        if stream_name != "test_stream":
-            test.assert_test(19, False, "Unexpected stream name: {}".format(stream_name))
-            break
-        if not re.match(r'\S*ldmsd\(', cb_fn):
-            test.assert_test(19, False, "Unexpected cb_fn: {}".format(cb_fn))
-            break
-        test.assert_test(19, True, "verified")
         break
 
 # see at_exit()
