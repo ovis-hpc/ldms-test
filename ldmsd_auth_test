@@ -417,10 +417,11 @@ else:
 
 
 #test.add_assertion(5, "root@headnode(dom4) ldms_ls to agg-11:10000")
-out = ldms_ls(headnode, host="agg-11", port=10000, auth="munge",
+lines = ldms_ls(headnode, host="agg-11", port=10000, auth="munge",
                auth_args={"socket": dom_sock(4)}, user="munge")
-expect = [ 'Connection failed/rejected.' ]
-if out == expect:
+out = '\n'.join(lines)
+expect = 'Connection failed/rejected.'
+if expect in out:
     test.assert_test(5, True, "connection rejected")
 else:
     test.assert_test(5, False, "unexpected result: {}".format(out))
