@@ -345,7 +345,7 @@ while ENABLE_LDMSCTL:
 
 def prdcr_updtr_routine(_id, ls_host, ctrl, prompt):
     cmds = [ "prdcr_add name=prdcr host=node-1 xprt=sock port={port}"
-             " type=active interval=1000000\n" \
+             " type=active reconnect=1000000\n" \
                      .format(port=LDMSD_PORT),
              "prdcr_start name=prdcr\n",
              "updtr_add name=updtr interval=1000000 offset=500000\n",
