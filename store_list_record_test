@@ -388,7 +388,7 @@ def multilist_err_msg(schema, plugin):
     if plugin == "store_sos":
         msg = f"{plugin}: 'sampler/{schema}' contains multiple lists"
     elif plugin == "store_csv":
-        msg = f"{plugin}: set 'sampler/{schema}' contains multiple lists"
+        msg = f"{plugin}: Set 'sampler/{schema}' contains multiple lists"
     return msg
 
 #### Test Definition ####
