@@ -503,7 +503,8 @@ def strgp_status_cond(status, exp):
                 "cond_str": "status is as expected" if cond else f"{a} == {b}"
            }
 
-def exp_status(name, container, schema, plugin, state, prdcrs = None, metrics = None):
+def exp_status(name, container, schema, plugin, state, prdcrs = None,
+                         metrics = None, regex = None, decomp = None):
     d = {
             "name" : name,
             "container" : container,
@@ -520,6 +521,14 @@ def exp_status(name, container, schema, plugin, state, prdcrs = None, metrics = 
         d['metrics'] = metrics
     else:
         d['metrics'] = []
+    if regex is None:
+        d['regex'] = "-"
+    else:
+        d['regex' ] = regex
+    if decomp is None:
+        d['decomp'] = "-"
+    else:
+        d['decomp'] = decomp
     return d
 
 def strgp_status(comm, name = None):
