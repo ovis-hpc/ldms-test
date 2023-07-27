@@ -508,7 +508,7 @@ while True: # will break
 #test.add_assertion(5, "Restarted ldmsd is configured")
 agg4.start_ldmsd()
 t1 = time.time()
-time.sleep(4)
+time.sleep(25) # allow some time for reconfiguration by maestro
 verify_ldmsds(5)
 
 #test.add_assertion(6, "New data are presented in the store")
