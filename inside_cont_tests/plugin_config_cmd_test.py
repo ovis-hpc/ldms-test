@@ -6,8 +6,6 @@ import sys
 
 from time import sleep
 
-from ldmsd.ldmsd_communicator import Communicator
-
 from LDMS_Test import ContainerTest
 
 class PluginConfigCMDTst(ContainerTest):
@@ -106,7 +104,7 @@ def exp_status(name, type, interval = None, offset = None):
             "type" : type,
             "sample_interval_us" : 1000000 if interval is None else interval,
             "sample_offset_us" : 0 if offset is None else offset,
-            "libpath" : f"/opt/ovis/lib/ovis-ldms/lib{name}.so" 
+            "libpath" : f"/opt/ovis/lib/ovis-ldms/lib{name}.so"
            }
 
 def errcode_cond(resp, exp_errcode, op = "=="):
@@ -122,7 +120,7 @@ def errcode_cond(resp, exp_errcode, op = "=="):
 def plugn_status_cond(status, exp):
     a = sorted(status, key = lambda item: sorted(item.items()))
     b = sorted(exp, key = lambda item: sorted(item.items()))
-    cond = a == b 
+    cond = a == b
     return {
                 "cond" : cond,
                 "cond_str": "status is as expected" if cond else f"{a} == {b}"
@@ -166,6 +164,8 @@ def plugn_term(comm, name):
     return {'errcode': errcode, 'msg': msg}
 
 def get_comm(host, xprt, port):
+
+    from ldmsd.ldmsd_communicator import Communicator
     comm = Communicator(host = host, xprt = xprt, port = port)
     rc = comm.connect()
     if rc:
@@ -254,7 +254,7 @@ def plugin_start_test(suite):
                       interval = 1000000, offset = 0)
           ]
     suite.save_assertion("start-8", **plugn_status_cond(status, exp))
-    comm.close() 
+    comm.close()
 
 def plugin_stop_test(suite):
     comm = get_comm(host = "node-1", port = suite.LDMSD_PORT, xprt = suite.LDMSD_XPRT)

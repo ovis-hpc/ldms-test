@@ -6,8 +6,6 @@ import sys
 
 from time import sleep
 
-from ldmsd.ldmsd_communicator import Communicator
-
 from LDMS_Test import ContainerTest
 
 class StrgpConfigCMDTest(ContainerTest):
@@ -497,7 +495,7 @@ def errcode_cond(resp, exp_errcode, op = "=="):
 def strgp_status_cond(status, exp):
     a = sorted(status, key = lambda item: sorted(item.items()))
     b = sorted(exp, key = lambda item: sorted(item.items()))
-    cond = a == b 
+    cond = a == b
     return {
                 "cond" : cond,
                 "cond_str": "status is as expected" if cond else f"{a} == {b}"
@@ -569,6 +567,7 @@ def strgp_del(comm, name):
     return {'errcode': errcode, 'msg': msg}
 
 def get_comm(host, xprt, port):
+    from ldmsd.ldmsd_communicator import Communicator
     comm = Communicator(host = host, xprt = xprt, port = port)
     rc = comm.connect()
     if rc != 0:
@@ -659,7 +658,7 @@ def strgp_add_test(suite):
                       state = "STOPPED")]
     suite.save_assertion("add-1.2", **strgp_status_cond(status, exp))
     # existing strgp
-    resp = strgp_add(comm, name = suite.STRGP_ALL_NAME, 
+    resp = strgp_add(comm, name = suite.STRGP_ALL_NAME,
                      container = suite.STRGP_ALL_NAME,
                      plugin = suite.STORE_CSV, schema = suite.SMP_SCHEMA_2_NAME)
     suite.save_assertion("add-2", **errcode_cond(resp, errno.EEXIST))
