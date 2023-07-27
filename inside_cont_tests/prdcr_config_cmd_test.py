@@ -6,8 +6,6 @@ import sys
 
 from time import sleep
 
-from ldmsd.ldmsd_communicator import Communicator
-
 from LDMS_Test import ContainerTest
 
 class PrdcrConfigCMDTest(ContainerTest):
@@ -443,7 +441,7 @@ def prdcr_status_test(suite, comms):
 
     # Result of a passive producer
     resp, status = prdcr_status(agg_comm, name = "prdcr-passive")
-    exp = [suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo", 
+    exp = [suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo",
                             state = "STOPPED", type = "passive")]
     suite.save_assertion("status-5", **prdcr_status_cond(status, exp))
 
@@ -660,6 +658,8 @@ def prdcr_del_test(suite, comms):
     suite.save_assertion("del-3.2", **prdcr_status_cond(status, exp))
 
 if __name__ == "__main__":
+
+    from ldmsd.ldmsd_communicator import Communicator
     ap = argparse.ArgumentParser()
     ap.add_argument("-o", "--outdir")
     args = ap.parse_args()
@@ -670,7 +670,7 @@ if __name__ == "__main__":
     COMM["samplerd"] = Communicator(host = "samplerd",
                                     xprt = suite.LDMSD_XPRT,
                                     port = suite.LDMSD_PORT)
-    COMM["samplerd-meminfo"] = Communicator(host = "samplerd-meminfo", 
+    COMM["samplerd-meminfo"] = Communicator(host = "samplerd-meminfo",
                                             xprt = suite.LDMSD_XPRT,
                                             port = suite.LDMSD_PORT)
     COMM.update(dict([(k, Communicator(host = f"{k}",
