@@ -107,7 +107,7 @@ def run_suite(suite):
     sleep(1)
 
     cleanup_test_data(suite)
-    if args.debug:
+    if args.debug and sys.flags.interactive:
         input("ready ...")
     log.info(f"{suite.test_name}: Running the test script")
     test_cont = cluster.get_container(suite.test_node_name)
@@ -127,7 +127,7 @@ def run_suite(suite):
         log.error(f"Cannot find the result of {suite.test_name}")
     suite.test.finish()
 
-    if args.debug:
+    if args.debug and sys.flags.interactive:
         input("Remove containers? ...")
     log.info(f"{suite.test_name}: done")
     suites.remove(suite)
@@ -195,7 +195,7 @@ for m in _list:
         log.info("===========================================================")
         run_suite(suite)
     except Exception as e:
-        if args.debug:
+        if args.debug and sys.flags.interactive:
             input("remove containers? ...")
-            suite.cluster.remove()
+        suite.cluster.remove()
         log.error(e)
