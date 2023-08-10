@@ -9,6 +9,7 @@ import TADA
 import time
 import json
 import atexit
+import socket
 import logging
 
 from os.path import realpath, dirname
@@ -259,15 +260,12 @@ def prdcr_unsubscribe(node, regex, stream):
         raise NotImplementedError("prdcr_unsubscribe is not supported (yet) in v5")
     return node.config_ldmsd([txt])
 
-def stream_client_dump(ldmsd):
-    """Dump stream clients in ldmsd on node as a list of (stream_name, cb_fn, cb_ctxt) tuples"""
-    ret = ldmsd.req("stream_client_dump")
+def stream_client_stats(ldmsd):
+    ret = ldmsd.req("stream_client_stats")
     if ret['errcode']:
-        raise RuntimeError("stream_client_dump error({errcode}): {msg}".format(**ret))
+        raise RuntimeError("stream_client_stats error({errcode}): {msg}".format(**ret))
     obj = json.loads(ret['msg'])
-    lst = [ (s["name"], c["cb_fn"], c["ctxt"]) \
-                    for s in obj["streams"] \
-                    for c in s["clients"] ]
+    lst = [ (o['match'], o['dest'], o['desc'] ) for o in obj ]
     return lst
 
 def verify_msg(test, assert_no, msg, json_data, err_text):
@@ -414,6 +412,7 @@ if __name__ == "__main__":
     test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
     test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
 
+    test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
 
     # Tell the TADA infrastructure that the test is starting
     test.start()
@@ -688,5 +687,40 @@ if __name__ == "__main__":
             test.assert_test(18, False, "agg-2 has extra stream data")
             break
         test.assert_test(18, True, "data verified")
+        break
+
+    #test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
+    # Get client dump from stream-sampler-2 before killing agg-1
+    while True: # this will break
+        samp2.connect(auth="munge", auth_opts={"socket":n_local.munged.sock_file})
+        before = stream_client_stats(samp2)
+        # Kill agg-1
+        log.info("stopping agg-1")
+        agg1.stop()
+        time.sleep(5)
+        # Get client dump from stream-sampler-2
+        after = stream_client_stats(samp2)
+        before = set(before)
+        after = set(after)
+        if not (after < before):
+            diff = after - before
+            if diff:
+                test.assert_test(19, False, f"Unexpected streams/clients: {diff}")
+            else:
+                test.assert_test(19, False, f"streams/clients not removed: {diff}")
+            break
+        diff = set(before) - set(after)
+        if len(diff) != 1:
+            test.assert_test(19, False, f"Too many terminated clients: {diff}")
+            break
+        _match, target, desc = diff.pop()
+        if _match != "test_stream":
+            test.assert_test(19, False, f"Unexpected stream match: {_match}")
+            break
+        expected_addr = socket.gethostbyname(agg1.host)
+        if not target.startswith(expected_addr):
+            test.assert_test(19, False, f"Unexpected target: {target}")
+            break
+        test.assert_test(19, True, "verified")
         break
     # see at_exit() for the cleanup code
