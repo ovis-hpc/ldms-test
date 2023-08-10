@@ -19,7 +19,7 @@ CONT_TEST_LIST=(
 	ldmsd_auth_ovis_test
 	ldmsd_auth_test
 	ldmsd_ctrl_test
-	ldmsd_stream_test
+	ldmsd_stream_test2
 	maestro_cfg_test
 	mt-slurm-test
 	ovis_ev_test
