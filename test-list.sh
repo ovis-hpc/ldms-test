@@ -57,6 +57,7 @@ CONT_TEST_LIST=(
 	ldms_stream_test
 	set_sec_mod_test
 	dump_cfg_test
+	ldmsd_stream_rate_test
 )
 
 INSIDE_CONT_TEST_LIST=(
