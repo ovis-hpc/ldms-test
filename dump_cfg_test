@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+
+# Synopsis: Test the dump_cfg configuration command
+#
+# - Start LDMSD: a sampler daemon w/ munged (S) and an aggregator w/o auth (A)
+# - Send dump_cfg to both LDMSD and save the generated config files
+# - Kill the daemons
+# - Start an LDMSD using the generated config file from S. The daemon is called S1.
+# - Start an LDMSD using the generated config file from A. The daemon is called A1.
+# - Send dump_cfg to both S1 and A1
+# - Compare the generated config files between S and S1. The test fails if they are not the same.
+# - Compare the generated config files between A and A1. The test fails if they are not the same. 
+
+# - command-line options
+# - stream subscribe on sampler daemons by prdcr_subscribe on aggregator
+# - plugin config attributes
+# - other config commands
+
+import argparse
+import logging
+import os
+import TADA
+import sys
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args
+import json
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test for the dump_cfg configuration request"
+ap = argparse.ArgumentParser(description = DESC)
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### -------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+
+LDMS_SAMP_PORT = 10000
+LDMS_PORT = 10001
+LDMS_XPRT = "sock"
+
+SMP_INTRVL = "1000000"
+SMP_PRODUCER = "samplerd-0"
+SMP_PI = "meminfo"
+RECONT_INTRVL = "5000000"
+UPDT_INTRVL = "1000000"
+UPDT_OFFSET = "100000"
+
+NUM_COMPUTE = 3
+
+MUNGE_CUSTOM_NAME = "munged_custom"
+MUNGE_CUSTOM_DOM = "dom_custom"
+MUNGE_CUSTOM_KEY = str(1) * 4096
+
+def munge_sock():
+    return f"/munge/{MUNGE_CUSTOM_DOM}/sock"
+
+common_plugin_config = [
+    "component_id=%component_id%",
+    "instance=%hostname%/%plugin%",
+    "producer=%hostname%"
+]
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : f"{USER}'s dump_cfg_test cluster",
+    "type" : "NA",
+    "templates" : {
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged"
+                },
+                {
+                    "name" : MUNGE_CUSTOM_NAME,
+                    "type" : "munged",
+                    "dom" : MUNGE_CUSTOM_DOM,
+                    "key" : MUNGE_CUSTOM_KEY
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler"
+                }
+            ]
+        },
+        "sampler_plugin" : {
+            "interval" : SMP_INTRVL,
+            "config" : common_plugin_config,
+            "start" : True
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                {
+                    "xprt" : LDMS_XPRT,
+                    "port" : LDMS_SAMP_PORT,
+                }
+            ]
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "!extends" : "sampler_plugin",
+                    "config" : common_plugin_config + [
+                                    "perm=0777"
+                               ]
+                },
+                {
+                    "plugin" : "vmstat",
+                    "!extends" : "sampler_plugin",
+                    "config" : common_plugin_config
+                }
+            ]
+        }
+    }, # Templates
+    "nodes" : [
+        {
+            "hostname" : f"node-{i}",
+            "component_id" : i,
+            "!extends" : "compute-node"
+        } for i in range(1, NUM_COMPUTE + 1)
+    ] + [
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged"
+                },
+                {
+                    "name" : MUNGE_CUSTOM_NAME,
+                    "type" : "munged",
+                    "dom" : MUNGE_CUSTOM_DOM,
+                    "key" : MUNGE_CUSTOM_KEY
+                },
+            ]
+        }
+    ], # nodes
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : args.image,
+    "ovis_prefix" : PREFIX,
+    "mounts" : [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro"
+    ] + args.mount +
+    ( [f"{SRC}:{SRC}:ro"] if SRC else [])
+}
+
+def write_ldmsd_config_file(cont, name, cfg):
+    fname = f"/db/{name}.conf"
+    cont.write_file(fname, cfg)
+    return fname
+
+def __get_pid(cont, pattern):
+    rc, out = cont.exec_run(f"bash -c 'pgrep -a ldmsd | grep {pattern}'")
+    if rc:
+        raise RuntimeError(f"Failed to get the LDMSD's PID. Error {rc}: {out}")
+    return out.split()[0]
+
+def __start_ldmsd(cont, cmd_line_opt = None, cfg = None):
+    cmd = "bash -c 'ldmsd"
+    if cmd_line_opt is not None:
+        cmd += f" {cmd_line_opt}"
+    if cfg is not None:
+        cmd += f" -c {cfg}"
+    cmd += "'"
+
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to start '{cmd}'. Error {rc}: {out}")
+
+def __kill_ldmsd(cont, ldmsd_pid):
+    cmd = f"bash -c 'kill -9 {ldmsd_pid}'"
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to kill LDMSD pid {ldmsd_pid}. Error {rc}: {out}.")
+
+def dump_cfg(cont, dname, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost", auth = None, auth_opt = []):
+    rc, out = cont.exec_run(f"bash -c 'mkdir -p /db/{dname}'")
+    if rc:
+        raise RuntimeError(f"Failed to create the directory {dname}. Error {rc}")
+    cmd = f"dump_cfg path=/db/{dname}"
+    x = f"/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H {host}"
+    if auth is not None:
+        x += f" -a {auth}"
+        for a in auth_opt:
+            x += f" -A {a}"
+    x += f" --cmd '{cmd}'"
+    rc, out = cont.exec_run(x)
+    if rc:
+        raise RuntimeError(f"Failed to send dump_cfg. Error {rc}: {out}")
+    cfg = cont.read_file(f"/db/{dname}/{host}-{LDMS_PORT}.conf")
+    lines = cfg.split("\n")
+    cfg = "\n".join([ l for l in lines if len(l) > 0 and l[0] != '#' ]) # remove the commented lines
+    return cfg
+
+def digest(cfg):
+    lines = cfg.strip().split("\n")
+    d = []
+    for l in lines:
+        if len(l) > 0:
+            d.append(" ".join(sorted(l.split())))
+    return d
+
+def cmp(expected, gen_file):
+    exp_d = digest(expected)
+    gen_d = digest(gen_file)
+    return set(exp_d) == set(gen_d)
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "dump_cfg_test",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1.1, "Specify the command-line options")
+test.add_assertion(1.2, "Specify host at the command-line")
+test.add_assertion(1.3, "Specify auth_opt at the command-line")
+test.add_assertion(2.1, "Specify the command-line options in a configuration file")
+test.add_assertion(3.1, "Sampler configuration commands")
+test.add_assertion(3.2, "Sampler configuration commands with plugin-specific attributes")
+test.add_assertion(4.1, "Simple aggregator configuration commands")
+test.add_assertion(5.1, "prdcr_subscribe configuration commands")
+
+### Start ###
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container('headnode')
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("-- Begin the test --")
+
+# ------------------------------------------------------------------------------
+# 1.1 command-line options
+case_name = "ldmsd-1.1"
+cmd_line_opt = f"-l /var/log/{case_name}.log -v INFO -n {case_name} " \
+               f"-r /var/log/{case_name}.pid -m 10MB -P 2"
+start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT} -a munge {cmd_line_opt}"
+__start_ldmsd(headnode, cmd_line_opt = start_opt)
+ldmsd_pid = __get_pid(headnode, LDMS_PORT)
+cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL")
+exp = f"""\
+option {cmd_line_opt} -B 1 -C -1
+auth_add name=DEFAULT plugin=munge
+listen xprt={LDMS_XPRT} port={LDMS_PORT} auth=DEFAULT
+"""
+gen_cfg = dump_cfg(headnode, case_name, auth = "munge")
+test.assert_test(1.1, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 1.2 -x sock:10001:host
+case_name = "ldmsd-1.2"
+cmd_line_opt = f"-l /var/log/{case_name}.log -v INFO -r /var/log/{case_name}.pid"
+start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT}:headnode"
+__start_ldmsd(headnode, cmd_line_opt = f"{start_opt} {cmd_line_opt}")
+ldmsd_pid = __get_pid(headnode, LDMS_PORT)
+cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL")
+exp = f"""\
+option {cmd_line_opt} -m 512kB -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=none
+listen xprt={LDMS_XPRT} port={LDMS_PORT} host=headnode auth=DEFAULT
+"""
+gen_cfg = dump_cfg(headnode, case_name, host = "headnode")
+test.assert_test(1.2, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 1.3 auth_opt -A
+case_name = "ldmsd-1.3"
+start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT} -a munge -A socket={munge_sock()}"
+__start_ldmsd(headnode, cmd_line_opt = start_opt)
+ldmsd_pid = __get_pid(headnode, LDMS_PORT)
+cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL") 
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=munge socket={munge_sock()}
+listen xprt={LDMS_XPRT} port={LDMS_PORT} auth=DEFAULT
+"""
+gen_cfg = dump_cfg(headnode, case_name, auth = "munge", auth_opt = [f"socket={munge_sock()}"])
+test.assert_test(1.3, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 2.1 command-line options in a configuration file
+case_name = "ldmsd-2.1"
+conf = f"""\
+auth_add name={MUNGE_CUSTOM_NAME} plugin=munge socket={munge_sock()}
+listen xprt={LDMS_XPRT} port={LDMS_PORT} auth={MUNGE_CUSTOM_NAME}
+"""
+cfg_name = write_ldmsd_config_file(headnode, case_name, conf)
+__start_ldmsd(headnode, cfg = cfg_name)
+ldmsd_pid = __get_pid(headnode, cfg_name)
+gen_cfg = dump_cfg(headnode, case_name, auth = "munge", auth_opt = [f"socket={munge_sock()}"])
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -B 1 -P 1 -C -1 -r /var/run/ldmsd.pid
+auth_add name=DEFAULT plugin=none
+{conf}
+"""
+test.assert_test(2.1, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 3.1 Sampler configuration commands
+case_name = "ldmsd-3.1"
+listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
+conf = f"""
+load name=meminfo
+config name=meminfo producer=samplerd instance=producer/meminfo perm=0777
+start name=meminfo interval={SMP_INTRVL}
+load name=vmstat
+config name=vmstat producer=samplerd instance=producer/vmstat schema=my_vmstat uid=0100 gid=0100
+start name=vmstat interval={SMP_INTRVL}
+"""
+cfg_name = write_ldmsd_config_file(headnode, case_name, listen_conf + conf)
+__start_ldmsd(headnode, cfg = cfg_name)
+ldmsd_pid = __get_pid(headnode, cfg_name)
+gen_cfg = dump_cfg(headnode, case_name)
+
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=none
+{listen_conf} auth=DEFAULT
+load name=meminfo
+config name=meminfo producer=samplerd instance=producer/meminfo perm=0777
+start name=meminfo interval={SMP_INTRVL} offset=0
+load name=vmstat
+config name=vmstat producer=samplerd instance=producer/vmstat schema=my_vmstat uid=0100 gid=0100
+start name=vmstat interval={SMP_INTRVL} offset=0
+"""
+test.assert_test(3.1, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 3.2 Sampler configuration commands with plugin-specific config arguments
+case_name = "ldmsd-3.2"
+listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
+conf = f"""
+load name=test_sampler
+config name=test_sampler action=add_schema schema=test_schema num_metrics=5 type=u64 perm=0700
+config name=test_sampler action=add_set schema=test_schema producer=samplerd instance=samplerd/my_set
+"""
+cfg_name = write_ldmsd_config_file(headnode, case_name, listen_conf + conf)
+__start_ldmsd(headnode, cfg = cfg_name)
+ldmsd_pid = __get_pid(headnode, cfg_name)
+gen_cfg = dump_cfg(headnode, case_name)
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=none
+{listen_conf} auth=DEFAULT
+{conf}
+"""
+test.assert_test(3.2, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 4.1 Aggregator configuration commands
+case_name = "ldmsd-4.1"
+decomp = {
+    "type" : "as_is",
+    "indices" : [
+        { "name" : "time_comp", "cols" : ["timestamp", "component_id"]}
+    ]
+}
+headnode.write_file(f"/db/{case_name}-decomp.json", json.dumps(decomp))
+listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
+conf = "\n"
+conf += "\n".join([f"prdcr_add name=node-{i} host=node-{i} xprt={LDMS_XPRT} port={LDMS_PORT} type=active interval={RECONT_INTRVL}" for i in range(1, NUM_COMPUTE+1)])
+conf += f"""
+prdcr_start_regex regex=n.*
+updtr_add name=updtr_meminfo interval={UPDT_INTRVL} offset={UPDT_OFFSET}
+updtr_prdcr_add name=updtr_meminfo regex=.*
+updtr_match_add name=updtr_meminfo regex=meminfo match=schema
+updtr_start name=updtr_meminfo
+load name=store_sos
+config name=store_sos path=/db/sos
+strgp_add name=strgp_meminfo container=meminfo plugin=store_sos schema=meminfo
+strgp_start name=strgp_meminfo
+strgp_add name=strgp_decomp container=vmstat plugin=store_sos regex=vmstat decomposition=/db/{case_name}-decomp.json
+strgp_prdcr_add name=strgp_decomp regex=node-1
+strgp_prdcr_add name=strgp_decomp regex=^node-2$
+strgp_start name=strgp_decomp
+"""
+cfg_name = write_ldmsd_config_file(headnode, case_name, listen_conf + conf)
+__start_ldmsd(headnode, cfg = cfg_name)
+ldmsd_pid = __get_pid(headnode, cfg_name)
+gen_cfg = dump_cfg(headnode, case_name)
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=none
+{listen_conf} auth=DEFAULT
+"""
+exp += "\n".join([ f"prdcr_add name=node-{i} xprt={LDMS_XPRT} host=node-{i} port={LDMS_PORT} type=active interval={RECONT_INTRVL} auth=DEFAULT uid=0 gid=0" for i in range(1, NUM_COMPUTE+1)])
+exp += f"""
+updtr_add name=updtr_meminfo interval={UPDT_INTRVL} offset={UPDT_OFFSET}
+"""
+exp += "\n".join([ f"updtr_prdcr_add name=updtr_meminfo regex=^node-{i}$" for i in range(1, NUM_COMPUTE+1) ])
+exp += f"""
+updtr_match_add name=updtr_meminfo match=schema regex=^meminfo$
+updtr_start name=updtr_meminfo
+load name=store_sos
+config name=store_sos path=/db/sos
+strgp_add name=strgp_meminfo container=meminfo plugin=store_sos schema=meminfo flush=0 perm=1016
+strgp_start name=strgp_meminfo
+strgp_add name=strgp_decomp plugin=store_sos container=vmstat regex=vmstat decomposition=/db/ldmsd-4.1-decomp.json flush=0 perm=1016
+strgp_prdcr_add name=strgp_decomp regex=node-1
+strgp_prdcr_add name=strgp_decomp regex=^node-2$
+strgp_start name=strgp_decomp
+"""
+test.assert_test(4.1, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+# ------------------------------------------------------------------------------
+# 5.1 stream
+case_name = "ldmsd-5.1"
+listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
+conf = "\n".join([f"prdcr_add name=node-{i} host=node-{i} xprt={LDMS_XPRT} port={LDMS_PORT} type=active interval={RECONT_INTRVL}" for i in range(1, NUM_COMPUTE+1)])
+conf += f"""
+prdcr_subscribe regex=.* stream=my_stream
+"""
+cfg_name = write_ldmsd_config_file(headnode, case_name, f"{listen_conf}\n{conf}")
+__start_ldmsd(headnode, cfg = cfg_name)
+ldmsd_pid = __get_pid(headnode, cfg_name)
+gen_cfg = dump_cfg(headnode, case_name)
+exp = f"""\
+option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+auth_add name=DEFAULT plugin=none
+{listen_conf} auth=DEFAULT
+"""
+exp_prdcr = [f"prdcr_add name=node-{i} xprt={LDMS_XPRT} host=node-{i} " \
+             f"port={LDMS_PORT} type=active interval={RECONT_INTRVL} auth=DEFAULT " \
+             f"uid=0 gid=0\n" \
+             f"prdcr_subscribe regex=^node-{i}$ stream=my_stream" for i in range(1, NUM_COMPUTE+1)]
+exp += "\n".join(exp_prdcr)
+test.assert_test(5.1, cmp(exp, gen_cfg), "The generated configuration is as expected.")
+__kill_ldmsd(headnode, ldmsd_pid)
+
+
+
+log.info("--- done ---")
+
+
