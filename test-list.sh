@@ -54,6 +54,7 @@ CONT_TEST_LIST=(
 	libovis_log_test
 	ldmsd_long_config_test
 	set_sec_mod_test
+	dump_cfg_test
 )
 
 # List of direct (non-containerized, running on host) tests
