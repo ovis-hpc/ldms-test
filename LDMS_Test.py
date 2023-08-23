@@ -1037,23 +1037,43 @@ class XCmp(object):
                 return True
         return False
 
-IP4_ADDR_PORT = re.compile('(\d+)\.(\d+)\.(\d+).(\d+)(?:\:(\d+))?')
+ADDR_PORT = re.compile(
+        r"""
+        ^\[?(?P<addr4>\d+\.\d+\.\d+.\d+)\]?(?:\:(?P<port4>\d+))?$ |
+        ^\[(?P<addr6>[0-9a-fA-F:]+)\](?:\:(?P<port6>\d+))?$ |
+        ^(?P<addr6a>[0-9a-fA-F:]+)$
+        """
+        ,
+        flags = re.VERBOSE)
 
 @dataclass(frozen = True)
-class StreamAddr(XCmp):
-    addr: tuple = None
-    port: int   = None
+class LdmsAddr(XCmp):
+    family: int = 0
+    port: int   = 0
+    addr: bytes = b'\x00'*16
 
     @classmethod
     def from_str(cls, s):
-        m = IP4_ADDR_PORT.match(s)
+        m = ADDR_PORT.match(s)
         if not m:
-            raise ValueError(f"'{s}' is not in the form of IP4_ADDR[:PORT]")
-        g = m.groups()
-        g = tuple( int(a) if a is not None else None for a in g )
-        ip_addr = g[0:4]
-        port = g[4]
-        return cls(ip_addr, port)
+            raise ValueError(f"Cannot parse address/port: {s}")
+        addr4, port4, addr6, port6, addr6a = m.groups()
+
+        port = int(port4) if port4 else int(port6) if port6 else 0
+
+        if addr4:
+            family = socket.AF_INET
+            addr = socket.inet_pton(socket.AF_INET, addr4)
+        a6 = addr6 if addr6 else addr6a
+        if a6:
+            family = socket.AF_INET6
+            addr = socket.inet_pton(socket.AF_INET6, a6)
+        return cls(family, port, addr)
+
+    def addr_str(self):
+        if self.family in [ socket.AF_INET, socket.AF_INET6 ] :
+            return socket.inet_ntop(self.family, self.addr)
+        return self.addr
 
 @dataclass()
 class TimeSpec(XCmp):
@@ -1069,7 +1089,7 @@ class StreamCounters(XCmp):
 
 @dataclass()
 class StreamSrcStats(XCmp):
-    src: StreamAddr     = None
+    src: LdmsAddr     = None
     rx:  StreamCounters = None
 
 @dataclass()
@@ -1093,7 +1113,7 @@ class StreamClientStats(XCmp):
     tx:       StreamCounters = None
     drops:    StreamCounters = None
     streams:  dict           = None
-    dest:     StreamAddr     = None
+    dest:     LdmsAddr     = None
     is_regex: int            = None
     match:    str            = None
     desc:     str            = None

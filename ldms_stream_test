@@ -104,7 +104,7 @@ from dataclasses import dataclass, field
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, \
-                      StreamAddr, TimeSpec, StreamCounters, StreamSrcStats, \
+                      LdmsAddr, TimeSpec, StreamCounters, StreamSrcStats, \
                       StreamClientPairStats, StreamStats, StreamClientStats, \
                       list_xsort, list_xeq
 
@@ -334,7 +334,7 @@ time.sleep(2)
 # start interactive stream servers
 log.info("start interactive stream servers")
 
-LOCAL = StreamAddr( (0,0,0,0), 0 )
+LOCAL = LdmsAddr()
 
 # This will be attached to obj returned by py_pty
 # def stream_publish(name, stream_data, stream_type=None, perm=0o444, uid=None, gid=None):
@@ -453,17 +453,17 @@ def py_pty_get_pub_addr(tty):
     """Get the publishing address of this process"""
     # for publisher script
     if tty.cmd.find('ldms_stream_publish.py') >= 0:
-        out = tty.pycmd('r.get_stream_addr()')
+        out = tty.pycmd('r.get_addr()')
         if out.find('Traceback') > -1:
             raise RuntimeError(f'error, output: {out}')
         lcl, rmt = eval(out)
         return lcl
     # for server
     if tty.cmd.find('ldms_stream_server.py') >= 0:
-        return StreamAddr.from_str(tty.node.ip_addr + ':411')
+        return LdmsAddr.from_str(f"[{tty.node.ip_addr}]:411")
     # for client
     if tty.cmd.find('ldms_stream_client.py') >= 0:
-        return StreamAddr.from_str(tty.node.ip_addr)
+        return LdmsAddr.from_str(tty.node.ip_addr)
     raise RuntimeError("Unsupported script")
 
 def bind(inst, name, fn):
@@ -763,7 +763,7 @@ class ProcessTrack(object):
 
     def add_client(self, match, is_regex, remote=None):
         dest = LOCAL if not remote else \
-                StreamAddr(remote._addr.addr, None) # mask ephemeral port
+                LdmsAddr(remote._addr.family, None, remote._addr.addr) # mask ephemeral port
         desc = "" if not remote else "remote_client"
         uid = remote.uid if remote else self.uid
         gid = remote.gid if remote else self.gid
@@ -1332,7 +1332,7 @@ while test20: # will break
     all_cdata0 = get_all_cdata()
 
     e4 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='four')
-    e4lcl = SData(name = 'l3-stream', src=0, uid=0, gid=0, is_json=0, data='four')
+    e4lcl = SData(name = 'l3-stream', src=LdmsAddr(), uid=0, gid=0, is_json=0, data='four')
 
     # expected client data
     edata4 = [ e4, None, None, e4, e4 ]
@@ -1352,7 +1352,7 @@ while test21: # will break
     log.info('obtaining all client data (0)')
     all_cdata0 = get_all_cdata()
 
-    e4lcl = SData(name = 'nada', src=0, uid=0, gid=0, is_json=0, data='four')
+    e4lcl = SData(name = 'nada', src=LdmsAddr(), uid=0, gid=0, is_json=0, data='four')
 
     # expected client data
     edata4lcl = [ e4lcl, None, None, None, None ]
