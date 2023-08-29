@@ -180,7 +180,7 @@ spec = {
     "cap_add" : ["SYS_PTRACE"],
     "image" : None,
     "ovis_prefix" : "REPLACE_ME",
-    "mounts" : [],
+    "mounts" : [f"{os.path.realpath(sys.path[0])}:/tada-src:ro"],
     "env" : {}
 }
 
@@ -192,7 +192,7 @@ def at_exit():
     os._exit(rc)
 
 def ldmsd_request_send(dcont, cmd):
-    x = "/db/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
+    x = "/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
         .format(xprt = LDMSD_XPRT, port = LDMSD_PORT, cmd = cmd)
     rc, out = dcont.exec_run(x)
     return (rc, out)
@@ -278,10 +278,6 @@ if __name__ == "__main__":
     smplr2 = cluster.get_container("sampler-2")
     agg = cluster.get_container("agg")
     containers = [smplr1, smplr2, agg]
-
-    for c in containers:
-        c.write_file("/db/ldmsd_request_send.py", open(SCRIPT_DIR + "/ldmsd_request_send.py").read())
-        c.exec_run("chmod 755 /db/ldmsd_request_send.py")
 
     log.info("-- Start daemons --")
     cluster.start_daemons()
