@@ -112,7 +112,9 @@ spec = {
               "LDMS_STREAM_STATS_LEVEL" : 2, # track stream src too
             },
     "mounts" : args.mount + ([f"{args.src}:{args.src}:ro"] if args.src else []) +
-                [f"{args.data_root}:/db:rw"]
+                [f"{args.data_root}:/db:rw",
+                 f"{os.path.realpath(sys.path[0])}:/tada-src:ro"
+                ]
 }
 
 @atexit.register
@@ -130,7 +132,7 @@ def stream_publish(dcont, stream_name, stream_type, fpath):
     return (rc, out)
 
 def ldmsd_request_send(dcont, cmd):
-    x = "/db/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
+    x = "/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
         .format(xprt = LDMSD_XPRT, port = LDMSD_PORT, cmd = cmd)
     rc, out = dcont.exec_run(x)
     return (rc, out)
@@ -279,9 +281,6 @@ FOO_SZ = len(FOO_DATA) + 1
 BAR_SZ = len(BAR_DATA) + 1
 
 for c in containers:
-    c.write_file("/db/ldmsd_request_send.py", open(SCRIPT_DIR + "/ldmsd_request_send.py").read())
-    c.exec_run("chmod 755 /db/ldmsd_request_send.py")
-
     c.write_file(FOO_FILE, FOO_DATA)
     c.write_file(BAR_FILE, BAR_DATA)
 
