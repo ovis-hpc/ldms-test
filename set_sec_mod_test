@@ -157,9 +157,8 @@ spec = {
     "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
     "image" : args.image,
     "ovis_prefix" : args.prefix,
-    "mounts" :  args.mount +
-                [f"{os.path.realpath(sys.path[0])}:/tada-src/:ro"] +
-                ([ f"{args.src}:{args.arg}:ro"] if args.src else [])
+    "mounts" : args.mount + ([f"{args.src}:{args.src}:ro"] if args.src else []) +
+                [f"{os.path.realpath(sys.path[0])}:/tada-src:ro"]
 }
 
 @atexit.register
@@ -185,7 +184,7 @@ def set_sec_mod(cont, regex, uid = None, gid = None, perm = None,
         cmd += f" gid={gid}"
     if perm is not None:
         cmd += f" perm={perm}"
-    ex = f"python3 /tada-src/ldmsd_request_send.py -x {LDMSD_XPRT} -H localhost"
+    ex = f"python3 /tada-src/python/ldmsd_request_send.py -x {LDMSD_XPRT} -H localhost"
     if auth is None or auth == "none":
         ex += f" -p {LDMSD_PORT_NONE}"
     elif auth == "naive":
