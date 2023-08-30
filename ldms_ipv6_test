@@ -1,0 +1,361 @@
+#!/usr/bin/python3
+#
+# Test LDMS/LDMSD IPv6 capability.
+#
+# - 3 nodes: samp, agg-1, agg-2
+# - Contents in '/etc/resolv.conf' were commented out so that we won't use
+#   docker IPv4 resolver
+# - /etc/hosts only contains IPv6 entries
+# - connectivities:
+#
+#      ldmsd@agg-2 ---(stream subscribe)--> pysub@agg-2
+#          ^
+#          |
+#      ldmsd@agg-1
+#          ^
+#          |
+#      ldmsd@samp <--(stream publish)--- pypub@samp
+#
+# - Test cases:
+#   - ldms_ls to samp using IPv6
+#   - ldms_ls to agg-2 using IPv6
+#   - ldms_ls to agg-2 contains 'samp/meminfo'
+#   - python stream publish using IPv6
+#   - python stream subscribe using IPv6
+#   - steam data contain IPv6 addressing
+#   - stream stats reported IPv6 addresses
+
+import os
+import io
+import re
+import pdb
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from dataclasses import dataclass, field
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, PyPty, \
+                      StreamData, LdmsAddr
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test IPv6 ability in LDMS.")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+#### spec #### -------------------------------------------------------
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+base_daemons = [
+        {
+            "name" : "sshd",
+            "type" : "sshd",
+        },
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_ipv6_test cluster".format(USER),
+    "type" : "NA",
+    "ipv6" : True,
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldmsd_daemon" : {
+            "name" : "ldmsd",
+            "type" : "ldmsd",
+            "listen" : [
+                # IPv6 (& 4 by default setting, see ipv6(7) IPV6_V6ONLY flag)
+                { "port" : LDMSD_PORT, "xprt" : "sock", "host": "::" },
+            ],
+        },
+        "samp_daemon" : {
+            "!extends" : "ldmsd_daemon",
+            "samplers" : [
+                {
+                    "plugin" : "meminfo",
+                    "interval" : 1000000,
+                    "offset" : 0,
+                    "config" : common_plugin_config,
+                    "start" : True,
+                },
+            ],
+        },
+        "compute_node" : {
+            "daemons" : base_daemons + [
+                { "!extends" : "samp_daemon" },
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"agg-2",
+            "daemons" : base_daemons + [
+                {
+                    "!extends" : "ldmsd_daemon",
+                    "offset" : 400000,
+                    "prdcrs" : [
+                        {
+                            "name" : "agg-1",
+                            "host" : "agg-1",
+                            "port" : LDMSD_PORT,
+                            "xprt" : "sock",
+                            "type" : "active",
+                            "interval" : 1000000,
+                        }
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "load name=stream_dump",
+                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=agg-1 stream=.*",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : f"agg-1",
+            "daemons" : base_daemons + [
+                {
+                    "!extends" : "ldmsd_daemon",
+                    "offset" : 200000,
+                    "prdcrs" : [
+                        {
+                            "name" : f"{h}",
+                            "host" : f"{h}",
+                            "port" : LDMSD_PORT,
+                            "xprt" : "sock",
+                            "type" : "active",
+                            "interval" : 1000000,
+                        } for h in [ "samp" ]
+                    ],
+                    "config" : [ # additional config applied after prdcrs
+                        "load name=stream_dump",
+                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=samp stream=test.*",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : f"samp",
+            "component_id" : 1,
+            "!extends" : "compute_node",
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR" ,
+        "LDMS_STREAM_STATS_LEVEL" : "2",
+        "LDMSD_PORT" : f"{LDMSD_PORT}",
+    },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldms_ipv6_test",
+                 test_desc = "Test LDMS Rail+Stream IPv6 ability",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion( 1, "ldms_ls to samp using IPv6")
+test.add_assertion( 2, "ldms_ls to agg-2 using IPv6")
+test.add_assertion( 3, "ldms_ls to agg-2 contains 'samp/meminfo'")
+
+test.add_assertion( 4, "python stream publish using IPv6")
+test.add_assertion( 5, "python stream subscribe using IPv6")
+test.add_assertion( 6, "steam data contain IPv6 addressing")
+test.add_assertion( 7, "stream stats reported IPv6 addresses")
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    global cluster
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+        time.sleep(3)
+        cluster = None
+        time.sleep(3)
+    os._exit(rc)
+
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+def disable_resolv_conf(cont):
+    cont.exec_run("sed 's/^/#/' /etc/resolv.conf > /tmp/resolv.conf && "
+                  "cat /tmp/resolv.conf > /etc/resolv.conf")
+
+agg2 = cluster.get_container("agg-2")
+agg1 = cluster.get_container("agg-1")
+samp = cluster.get_container("samp")
+nodes = [ agg2, agg1, samp ]
+
+for cont in nodes:
+    disable_resolv_conf(cont)
+
+log.info("-- Start daemons --")
+cluster.start_sshd()
+cluster.make_known_hosts()
+cluster.start_daemons()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(2)
+
+pypub = PyPty(samp, "/tada-src/python/pypubsub.py")
+pysub = PyPty(agg2, "/tada-src/python/pypubsub.py")
+time.sleep(2)
+
+LOCAL = LdmsAddr()
+
+ADDR_RE = re.compile("Address\s+:\s+([^\n]+)\n")
+
+# test.add_assertion( 1, "ldms_ls to samp using IPv6")
+rc1, out1 = agg2.exec_run("ldms_ls -h samp -vv")
+addr1 = ADDR_RE.findall(out1)
+cmp1  = [ samp.ipv6_addr ]
+test.assert_test(1, addr1 == cmp1, f"expecting {cmp1}, got {addr1}")
+
+# test.add_assertion( 2, "ldms_ls to agg-2 using IPv6")
+rc2, out2 = samp.exec_run("ldms_ls -h agg-2 -vv")
+addr2 = ADDR_RE.findall(out2)
+cmp2  = [ agg2.ipv6_addr ]
+test.assert_test(2, addr2 == cmp2, f"expecting {cmp1}, got {addr1}")
+
+# test.add_assertion( 3, "ldms_ls to agg-2 contains 'samp/meminfo'")
+if out2.find('samp/meminfo') > -1:
+    test.assert_test(3, True, "samp/meminfo found")
+else:
+    test.assert_test(3, False, f"samp/meminfo not found, output: {out2}")
+
+# test.add_assertion( 4, "python stream publish using IPv6")
+out3_0 = pysub.cmd("r.get_addr()")
+addr3  = eval(out3_0)
+out3_1 = pysub.cmd("r.stream_subscribe('.*', True)")
+time.sleep(2)
+while True: # will break
+    if type(addr3) != tuple or len(addr3) != 2:
+        test.assert_test(4, False, f"expecting tuple of length 2, but got {addr3}")
+        break
+    addr_str = addr3[1].addr_str()
+    addr_cmp = agg2.ipv6_addr
+    if addr_str != addr_cmp:
+        test.assert_test(4, False, f"expecting '{addr_cmp}', but got '{addr_str}'")
+        break
+    if out3_1 != '':
+        test.assert_test(4, False, f"expecting empty string, but got: {out3_1}")
+        break
+    test.assert_test(4, True, "verified")
+    break
+
+# test.add_assertion( 5, "python stream subscribe using IPv6")
+out4_0 = pypub.cmd("r.get_addr()")
+addr4  = eval(out4_0)
+out4_1 = pypub.cmd("r.stream_publish('test', 'Test Message')")
+time.sleep(2)
+while True: # will break
+    if type(addr4) != tuple or len(addr4) != 2:
+        test.assert_test(5, False, f"expecting tuple of length 2, but got {addr4}")
+        break
+    addr_str = addr4[1].addr_str()
+    addr_cmp = samp.ipv6_addr
+    if addr_str != addr_cmp:
+        test.assert_test(5, False, f"expecting '{addr_cmp}', but got '{addr_str}'")
+        break
+    if out4_1 != '':
+        test.assert_test(5, False, f"expecting empty string, but got: {out4_1}")
+        break
+    test.assert_test(5, True, "verified")
+    break
+
+# test.add_assertion( 6, "steam data contain IPv6 addressing")
+subdata_str = pysub.cmd("scli.get_data()")
+subdata     = eval(subdata_str)
+addr = subdata.src.addr_str()
+addr_cmp = samp.ipv6_addr
+test.assert_test(6, addr == addr_cmp, f"expecting {addr_cmp}, got {addr}")
+
+
+# test.add_assertion( 7, "stream stats reported IPv6 addresses")
+rc5, out5 = samp.exec_run("echo stream_client_stats json=1 |"
+                          "  ldmsd_controller -x sock -p 411 -h agg-1")
+obj5 = json.loads(out5)
+obj5f = list(filter( lambda o: o["desc"] == "remote_client", obj5 ))
+while True: # will break
+    if len(obj5f) != 1:
+        test.assert_test(7, False, f"unexpected remote clients: {obj5f}")
+        break
+    obj = obj5f[0]
+    addr = LdmsAddr.from_str(obj['dest'])
+    addr_str = addr.addr_str()
+    addr_cmp = agg2.ipv6_addr
+    test.assert_test(7, addr_cmp == addr_str, f"Expecting {addr_cmp}, got {addr_str}")
+    break
+
+# see at_exit()
