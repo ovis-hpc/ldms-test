@@ -169,16 +169,25 @@ class Container(LDMSDContainer):
 
     def get_ip_addr(self):
         try:
-            for name, addr in self.interfaces:
+            for name, addr, addr6 in self.interfaces:
                 if name == self.cluster.net.name:
                     return addr
             return None
         except:
             return None
 
+    def get_ipv6_addr(self):
+        try:
+            for name, addr, addr6 in self.interfaces:
+                if name == self.cluster.net.name:
+                    return addr6
+            return None
+        except:
+            return None
+
     def get_interfaces(self):
-        """Return a list() of (network_name, IP_address) of the container."""
-        return [ (k, v['IPAddress']) for k, v in \
+        """Return a list() of (network_name, ipv4_addr, ipv6_addr) of the container."""
+        return [ (k, v['IPAddress'], v.get('GlobalIPv6Address')) for k, v in \
                  self.attrs['NetworkSettings']['Networks'].items() ]
 
     def get_name(self):
@@ -252,6 +261,63 @@ class Container(LDMSDContainer):
         return self.obj.stop()
 
 
+def attr_grep(d, attr, lst = list()):
+    if type(d) is list:
+        for o in d:
+            if type(o) is dict:
+                attr_grep(o, attr, lst)
+        return lst
+    for k, v in d.items():
+        if k.lower().find(attr.lower()) > -1:
+            lst.append(v)
+            continue
+        if type(v) in [ dict, list ]:
+            attr_grep(v, attr, lst)
+            continue
+    return lst
+
+def next_subnet(net):
+    addr = int(net.network_address)
+    hostmask = int(net.hostmask)
+    next_addr = addr + hostmask + 1
+    if type(net) == ip.IPv4Network:
+        net_addr = ip.IPv4Address(next_addr)
+    elif type(net) == ip.IPv6Network:
+        net_addr = ip.IPv6Address(next_addr)
+    else:
+        raise RuntimeError(f"Unknown network type: {type(net)}")
+    net_str = f"{net_addr}/{net.prefixlen}"
+    return ip.ip_network(net_str)
+
+def next_ipv6_subnet():
+    client = docker.from_env()
+    nets = client.networks.list()
+    nets_attrs = [ n.attrs for n in nets ]
+
+    str_subnets = attr_grep(nets_attrs, 'subnet')
+    subnets = [ ip.ip_network(s) for s in str_subnets ]
+    ipv6_subnets = [ s for s in subnets if type(s) == ip.IPv6Network ]
+    if not ipv6_subnets: # empty
+        return ip.ip_network("fd00:0:0:1::/64")
+    ipv6_subnets.sort()
+    s = ipv6_subnets[-1]
+    return next_subnet(s)
+
+def next_ipv4_subnet():
+    client = docker.from_env()
+    nets = client.networks.list()
+    nets_attrs = [ n.attrs for n in nets ]
+
+    str_subnets = attr_grep(nets_attrs, "subnet")
+    subnets = [ ip.ip_network(s) for s in str_subnets ]
+    ipv4_subnets = [ s for s in subnets if type(s) == ip.IPv4Network and
+                                           str(s).startswith("172.") ]
+    if not ipv4_subnets: # empty
+        return ip.ip_network("172.172.0.0/24")
+    ipv4_subnets.sort()
+    s = ipv4_subnets[-1]
+    return next_subnet(s)
+
 class Network(object):
     """Docker Network Wrapper"""
 
@@ -260,10 +326,19 @@ class Network(object):
             raise TypeError("obj is not a docker Network object")
         self.obj = obj
         self.clients = get_docker_clients()
+        subnets = attr_grep(obj.attrs, "subnet")
+        self.net6 = None
+        self.net4 = None
+        for net_str in subnets:
+            net = ip.ip_network(net_str)
+            if type(net) == ip.IPv4Network:
+                self.net4 = ip.ip_network(f"{net.network_address}/24")
+            elif type(net) == ip.IPv6Network:
+                self.net6 = ip.ip_network(f"{net.network_address}/120")
 
     @classmethod
     def create(cls, name, driver='overlay', scope='swarm', attachable=True,
-                    labels = None, subnet = None):
+                    labels = None, subnet = None, ipv6 = False):
         """A utility to create and wrap the docker network"""
         client = docker.from_env()
         try:
@@ -282,11 +357,23 @@ class Network(object):
                 obj = client.networks.create(name=name, driver=driver,
                                      ipam=ipam_config,
                                      scope=scope, attachable=attachable,
-                                     labels = labels)
+                                     labels = labels,
+                                     enable_ipv6 = ipv6)
             else:
-                obj = client.networks.create(name=name, driver=driver,
-                                     scope=scope, attachable=attachable,
-                                     labels = labels)
+                params = dict(name=name, driver=driver, scope=scope,
+                              attachable=attachable, labels = labels,
+                              enable_ipv6 = ipv6)
+                if ipv6:
+                    # needs IP pools for both ipv6 and ipv4
+                    net6 = next_ipv6_subnet()
+                    iprange6 = f"{net6.network_address}/120"
+                    net4 = next_ipv4_subnet()
+                    iprange4 = f"{net4.network_address}/24"
+                    ipam_pool6 = docker.types.IPAMPool(subnet=str(net6), iprange=iprange6)
+                    ipam_pool4 = docker.types.IPAMPool(subnet=str(net4), iprange=iprange4)
+                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool4, ipam_pool6])
+                    params['ipam'] = ipam_config
+                obj = client.networks.create(**params)
         except docker.errors.APIError as e:
             if e.status_code != 409: # other error, just raise it
                 raise
@@ -296,6 +383,7 @@ class Network(object):
                   "Then, remove the network with `docker network rm {}`." \
                   .format(name)
             raise RuntimeError(msg)
+        time.sleep(5)
         return Network(obj)
 
     @classmethod
@@ -351,7 +439,9 @@ class Network(object):
         return self.obj.attrs["Labels"]
 
     def connect(self, container, *args, **kwargs):
-        return self.obj.connect(container, *args, **kwargs)
+        obj = self.obj.connect(container, *args, **kwargs)
+        time.sleep(1)
+        return obj
 
 def get_host_tz():
     # try TZ env first
@@ -577,6 +667,8 @@ class DockerCluster(LDMSDCluster):
                         ],
                         tmpfs = tmpfs,
                     )
+                #if not subnet:
+                #    cont_param["network"] = name
                 binds = host_binds.get(hostname)
                 if binds:
                     cont_param["ports"] = binds
@@ -585,21 +677,43 @@ class DockerCluster(LDMSDCluster):
         # memorize cont_build as a part of label
         dc = docker.from_env()
         lbl["cont_build"] = json.dumps(lbl_cont_build)
+        ipv6 = spec.get("ipv6", False) if spec else False
         net = Network.create(name = name, driver = "overlay",
                              attachable = True, scope = "swarm",
-                             labels = lbl, subnet = subnet)
+                             labels = lbl, subnet = subnet, ipv6 = ipv6)
         if subnet:
             ip_net = ip.ip_network(subnet)
             ip_itr = ip_net.hosts()
         # then, create the actual containers
+        first = True
         for cl, params in cont_build:
-            cont = cl.containers.create(**params)
-            if subnet:
-                ip_addr = next(ip_itr)
-                net.connect(cont, ipv4_address=str(ip_addr))
-            else:
-                net.connect(cont)
-            cont.start()
+            _retry = 3
+            while _retry:
+                cont = cl.containers.create(**params)
+                if subnet:
+                    ip_addr = next(ip_itr)
+                    net.connect(cont, ipv4_address=str(ip_addr))
+                else:
+                    net.connect(cont)
+                try:
+                    cont.start()
+                    break # succeeded, no more retry
+                except:
+                    _retry -= 1
+                    if not _retry:
+                        raise
+                    cont.remove() # failed :(  .. remove and retry
+                    time.sleep(1)
+            if first:
+                # must wait for the special swarm container to be up
+                _retry = 10
+                while _retry:
+                    time.sleep(1)
+                    net.obj.reload()
+                    if len(net.obj.attrs["Containers"]) > 1:
+                        break
+                    _retry -= 1
+            first = False
         cluster = DockerCluster(net.obj)
         cluster.update_etc_hosts(node_aliases = node_aliases)
         return cluster
@@ -749,10 +863,15 @@ class DockerCluster(LDMSDCluster):
         """Remove the cluster"""
         for cont in self.containers:
             try:
+                self.net.obj.disconnect(cont.obj)
+            except:
+                raise
+        self.net.remove()
+        for cont in self.containers:
+            try:
                 cont.remove(force = True)
             except:
-                pass
-        self.net.remove()
+                raise
 
     @property
     def labels(self):

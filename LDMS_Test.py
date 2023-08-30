@@ -1324,7 +1324,7 @@ class LDMSDContainer(ABC):
 
     @abstractmethod
     def get_interfaces(self):
-        """[ABSTRACT] Returns a list of (IF_NAME, IP_ADDR) tuples"""
+        """[ABSTRACT] Returns a list of (IF_NAME, IP_ADDR, IP6_ADDR) tuples"""
         raise NotImplementedError()
 
     @property
@@ -1334,6 +1334,15 @@ class LDMSDContainer(ABC):
     @abstractmethod
     def get_ip_addr(self):
         """[ABSTRACT] Returns a `str` of IP address"""
+        raise NotImplementedError()
+
+    @property
+    def ipv6_addr(self):
+        return self.get_ipv6_addr()
+
+    @abstractmethod
+    def get_ipv6_addr(self):
+        """[ABSTRACT] Returns a `str` of IPv6 address"""
         raise NotImplementedError()
 
     @cached_property
@@ -1791,6 +1800,7 @@ class LDMSDCluster(ABC):
                     },
                     ...
                 },
+                "ipv6": True|False, # True to enable IPv6
                 "cap_add": [ "DOCKER_CAPABILITIES", ... ],
                 "cap_drop": [ "DOCKER_CAPABILITIES", ... ],
                 "image": "DOCKER_IMAGE_NAME",
@@ -1986,15 +1996,14 @@ class LDMSDCluster(ABC):
         """[ABSTRACT] Yield the spec used to create the cluster"""
         raise NotImplementedError()
 
-    def build_etc_hosts(self, node_aliases = {}):
-        """Returns the generated `/etc/hosts` content"""
+    def build_etc_hosts_ipv4(self, node_aliases = {}):
+        """Returns the generated `/etc/hosts` content for IPv4"""
         if not node_aliases:
             node_aliases = self.node_aliases
         sio = StringIO()
         sio.write("127.0.0.1 localhost\n")
         for cont in self.containers:
             name = cont.hostname
-            ip_addr = cont.ip_addr
             sio.write("{0.ip_addr} {0.hostname}".format(cont))
             alist = node_aliases.get(name, [])
             if type(alist) == str:
@@ -2003,6 +2012,29 @@ class LDMSDCluster(ABC):
                 sio.write(" {}".format(a))
             sio.write("\n")
         return sio.getvalue()
+
+    def build_etc_hosts_ipv6(self, node_aliases = {}):
+        """Returns the generated `/etc/hosts` content for IPv6"""
+        if not node_aliases:
+            node_aliases = self.node_aliases
+        sio = StringIO()
+        sio.write("::1 localhost\n")
+        for cont in self.containers:
+            name = cont.hostname
+            sio.write(f"{cont.ipv6_addr} {cont.hostname}")
+            alist = node_aliases.get(name, [])
+            if type(alist) == str:
+                alist = [ alist ]
+            for a in alist:
+                sio.write(" {}".format(a))
+            sio.write("\n")
+        return sio.getvalue()
+
+    def build_etc_hosts(self, node_aliases = {}):
+        if self.spec.get("ipv6", None):
+            return self.build_etc_hosts_ipv6(node_aliases)
+        return self.build_etc_hosts_ipv4(node_aliases)
+
 
     def update_etc_hosts(self, node_aliases = {}):
         """Update entries in /etc/hosts"""
