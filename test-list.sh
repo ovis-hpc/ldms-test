@@ -47,6 +47,7 @@ CONT_TEST_LIST=(
 	updtr_prdcr_del_test
 	updtr_start_test
 	updtr_status_test
+	updtr_stop_test
 	ldmsd_flex_decomp_test
 	ldms_set_info_test
 	slurm_sampler2_test
