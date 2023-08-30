@@ -55,6 +55,7 @@ CONT_TEST_LIST=(
 	ldmsd_long_config_test
 	ldms_rail_test
 	ldms_stream_test
+	set_sec_mod_test
 )
 
 # List of direct (non-containerized, running on host) tests
