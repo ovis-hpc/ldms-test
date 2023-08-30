@@ -237,7 +237,7 @@ def sec_param_get(ldms_ls_obj, set_names):
 
     r = {}
     if set_names is None:
-        for k, o in ldms_ls_obj.items():
+        for s, o in ldms_ls_obj.items():
             r[s] = {'uid': o['uid'],
                     'gid': o['gid'],
                     'perm': perm_octal(o['perm'])}
@@ -433,21 +433,22 @@ test.assert_test(AGG_UPDATED_NO, result == exp, f"{result} == {exp}")
 # New Clients with wrong permission cannot access sets
 # Different UID, Same group
 result = sec_param_get(ldms_ls_naive(cont_smplr, port = LDMSD_PORT_NAIVE,
-                                     uid = "3333", gid = DEFAULT_GID))
+                                     uid = "3333", gid = DEFAULT_GID),
+                                     None)
 exp = {}
 exp.update(exp_new('set_1', uid = NEW_UID))
 exp.update(exp_new('set_2'))
 exp.update(exp_new('set_3', uid = "2222"))
 exp.update(exp_new('set_4'))
-exp.update(exp_new('set_5', gid = NEW_GID))
 exp.update(exp_new('set_6'))
-exp.update(exp_new('set_7', gid = "2222"))
 exp.update(exp_new('set_8'))
 exp.update(exp_new('set_10')) 
 test.assert_test(CLIENT_ACCESS_NO_1, result == exp, f"{result} == {exp}")
 
 # Different UID, Different group
 result = sec_param_get(ldms_ls_naive(cont_smplr, port = LDMSD_PORT_NAIVE,
-                                     uid = "3333", gid = "3333"))
+                                     uid = "3333", gid = "3333"), None)
 exp = {}
 test.assert_test(CLIENT_ACCESS_NO_2, result == exp, f"{result} == {exp}")
+
+log.info("--- done ---")
