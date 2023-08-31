@@ -46,6 +46,18 @@ for T in ${LIST[*]}; do
 	echo "----------------------------------------------"
 done
 
+for T in ${INSIDE_CONT_TEST_LIST[*]}; do
+	echo "======== ${T} ========"
+	CMD="./run_inside_cont_test.py --suite ${T} $@"
+	echo ${CMD}
+	${CMD}
+	RC=$?
+	RCS["$T"]=${RC}
+	echo "EXIT_CODE: ${RC}"
+	sleep 10 # allow some clean-up break between tests
+	echo "----------------------------------------------"
+done
+
 export RED='\033[01;31m'
 export GREEN='\033[01;32m'
 export RESET='\033[0m'

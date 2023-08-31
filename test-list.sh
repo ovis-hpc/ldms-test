@@ -50,13 +50,18 @@ CONT_TEST_LIST=(
 	ldmsd_flex_decomp_test
 	ldms_set_info_test
 	slurm_sampler2_test
-	run_inside_cont_test.py
 	libovis_log_test
 	ldmsd_long_config_test
 	ldms_rail_test
 	ldms_stream_test
 	set_sec_mod_test
 	dump_cfg_test
+)
+
+INSIDE_CONT_TEST_LIST=(
+	prdcr_config_cmd_test
+	strgp_config_cmd_test
+	plugin_config_cmd_test
 )
 
 # List of direct (non-containerized, running on host) tests
