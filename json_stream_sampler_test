@@ -1,0 +1,488 @@
+#!/usr/bin/env python3
+
+# Synopsis: Test the json_stream_sampler plugin
+
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import TADA
+import sys
+
+from distutils.spawn import find_executable
+
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test for the json_stream_sampler plugin"
+ap = argparse.ArgumentParser(description = DESC)
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### -------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+
+DATA_DIR = '/data'
+
+LDMS_PORT = 10001
+LDMS_XPRT = 'sock'
+SAMP_INTRVL = "1s"
+AUTH = "munge"
+
+DEFAULT_UID = DEFAULT_GID = 0
+DEFAULT_PERM = "0440"
+UID_1 = 2000
+USERNAME_1 = "foo"
+UID_2 = 2001
+USERNAME_2 = "bar"
+GID = 2000
+GRPNAME = "stream_group"
+PERM = "0400"
+
+NUM_NODE = 1
+
+# -------------------------------------------------------------------
+# Stream data
+VALID_DATA = { 'string'   : 'abc',
+               'integer'  : 123,
+               'float'    : 1.230000,
+               'bool_true': 'true',
+               'bool_false' : 'false',
+               'null'     : 'null',
+               'array_int' : [1, 2, 3],
+               'array_str' : ['a', 'fun', 'book'],
+               'array_dict'  : [ {'name': 'foo', 'type': 1},
+                                 {'name':'bar', 'type':2}
+                               ],
+               'dict'     : { 'name' : 'a',
+                              'last' : 'xyz',
+                              'id'   : 1,
+                              'float_array' : [3.140000, 1.414000, 1.732000],
+                              'str_array'   : ['This', 'is', 'a', 'book'],
+                              'dict' : { 'pi': 3.14,
+                                         'sqrt(2)' : 1.414,
+                                         'sqrt(3)' : 1.732
+                                       }
+                            },
+             }
+
+INVALID_DATA_COL = [
+    { 'array_array' : [ list(range(1, 4)), list(range(4, 7)), list(range(7, 10))],
+      'array_mix'   : [ 1, 'this', 'is' ]
+    }
+]
+
+INVAL_STREAM = {}
+INVAL_STREAM_PATH = {}
+INVAL_STREAM['no_schema'] = VALID_DATA # No schema attribute
+INVAL_STREAM_PATH['no_schema'] = f"{DATA_DIR}/inval_no_schema.json"
+INVAL_STREAM['not_dict'] = [VALID_DATA ] # Not a dictionary 
+INVAL_STREAM_PATH['not_dict'] = f"{DATA_DIR}/inval_not_dict.json"
+
+for i in range(0, len(INVALID_DATA_COL)):
+    for key in INVALID_DATA_COL[i].keys():
+        INVAL_STREAM[key] =  { 'schema' : f"inval_{i}" }
+        INVAL_STREAM[key].update(INVALID_DATA_COL[i])
+        INVAL_STREAM_PATH[key] = f"{DATA_DIR}/inval_{key}.json"
+
+# -------------------------------------------------------------------
+# Expected set metrics
+EXP_S_VALUE = VALID_DATA.copy()
+EXP_S_VALUE['array_dict_record'] = '__record_type__'
+EXP_S_VALUE['dict_record'] = '__record_type__'
+EXP_S_VALUE['dict'] = [VALID_DATA['dict']]
+tmp = { 'sqrt(2)' : f"{VALID_DATA['dict']['dict']['sqrt(2)']:.6f}",
+        'sqrt(3)' : f"{VALID_DATA['dict']['dict']['sqrt(3)']:.6f}",
+        'pi' : f"{VALID_DATA['dict']['dict']['pi']:.6f}"}
+EXP_S_VALUE['dict'][0]['dict'] = str(tmp)
+EXP_S_VALUE['dict'][0]['str_array'] = str(VALID_DATA['dict']['str_array'])
+
+EXP_S_VTYPE = {'string' : 'char[]',
+               'integer' : 's64',
+               'float'  : 'd64',
+               'bool_true' : 'char[]', # TODO: Update the plugin doc how it encodes JSON booleans.
+               'bool_false' : 'char[]',
+               'null'   : 'char[]',
+               'array_int' : 'list<>',
+               'array_str' : 'list<>',
+               'array_dict' : 'list<>',
+               'array_dict_record' : 'record_type',
+               'dict'       : 'record[]',
+               'dict_record' : 'record_type',
+               'S_uid'  : 's32',
+               'S_gid'  : 's32',
+               'S_perm' : 's32'
+              }
+
+# -------------------------------------------------------------------
+
+#### spec ####
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : f"{USER}'s json_stream_sampler_test cluster",
+    "type" : "NA",
+    "templates" : {
+        "node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged"
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base"
+                }
+            ]
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "auth" : [
+                {
+                    "name" : "munge",
+                    "plugin" : "munge"
+                }
+            ],
+            "listen" : [
+                {
+                    "xprt" : LDMS_XPRT,
+                    "port" : LDMS_PORT,
+                    "auth" : "munge"
+                },
+                {
+                    "xprt" : LDMS_XPRT,
+                    "port" : LDMS_PORT + 1
+                }
+            ],
+            "config" : [
+                "load name=json_stream_sampler"
+            ]
+        }
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"node-{i}",
+            "!extends" : "node",
+        } for i in range(1, NUM_NODE + 1)
+    ], # nodes
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image" : args.image,
+    "ovis_prefix" : PREFIX,
+    "mounts" : [
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+        f"{DB}:{DATA_DIR}:rw",
+    ] + args.mount +
+    ( [ f"{SRC}:{SRC}:ro" ] if SRC else [])
+}
+
+def send_request(cont, cmd, xprt = LDMS_XPRT, port = LDMS_PORT, 
+                 host = "localhost", auth = AUTH, auth_opt = []):
+    s = f"/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H {host}" \
+        f" -a {auth}"
+    for x in auth_opt:
+        s += f" -A {x}"
+
+    s += f" --cmd '{cmd}'"
+    errcode, out = cont.exec_run(s)
+    return errcode, out.strip()
+
+def stream_publish(cont, name, file, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost",
+                   auth = AUTH, type = "json", uid = None, gid = None, perm = None, user = None):
+    x = f'ldmsd_stream_publish -x {xprt} -p {port} -h {host} -a {auth} ' \
+        f'-t {type} -s {name} -f {file}'
+    if uid is not None:
+        x += f' -U {uid}'
+    if gid is not None:
+        x += f' -G {gid}'
+    if perm is not None:
+        x += f' -P {perm}'
+    rc, out = cont.exec_run(x, user = user)
+    if rc:
+        raise RuntimeError(f"ldmsd_stream_publish failed. Error {rc}. {out}")
+
+def ldms_ls(cont, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost", auth = AUTH,
+                  lookup = True, user = None):
+    x = f"/tada-src/python/ldms_ls.py -x {xprt} -p {port} -h {host} -a {auth}"
+    if lookup:
+        x += " -l"
+    rc, out = cont.exec_run(x, user = user)
+    if rc:
+        raise RuntimeError(f"ldms_ls failed. Error {rc}. {out}")
+    return json.loads(out)
+
+def config_err_msg():
+    return "Plugin 'json_stream_sampler' configuration error."
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "json_stream_sampler_test",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion("config_0.1", "Missing the producer attribute")
+test.add_assertion("config_0.2", "Missing the stream attribute")
+test.add_assertion("config_1.0", "Verify producer, stream, component_id, and heap_sz")
+test.add_assertion("config_1.1", "Verify the default set UID")
+test.add_assertion("config_1.2", "Verify the default set GID")
+test.add_assertion("config_1.3", "Verify the default set Perm")
+test.add_assertion("config_2.0", "Successfully configure the plugin with UID, GID, and perm")
+test.add_assertion("config_2.1", "Verify the specified set UID")
+test.add_assertion("config_2.2", "Verify the specified set GID")
+test.add_assertion("config_2.3", "Verify the specified set Perm")
+test.add_assertion("create_1", "Correctly create a set when subscribing to a single stream")
+test.add_assertion("create_2", "Subscribe to multiple streams")
+test.add_assertion("create_3", "Successfully create a set when $_max_len is given in the stream data")
+test.add_assertion("encode_1.1", "Correctly encode the metric values")
+test.add_assertion("encode_1.2", "Correctly encode the metric types")
+test.add_assertion("encode_2.1", "Correctly set the S_uid meta metric")
+test.add_assertion("encode_2.2", "Correctly set the S_gid meta metric")
+test.add_assertion("encode_2.3", "Correctly set the S_perm meta metric")
+test.add_assertion("encode_3", "Correctly encode the metric values with #_max_len specified")
+test.add_assertion("sec_1", "User who publishes the stream cannot see the sets if the set's UID/GID is different.")
+test.add_assertion("sec_2", "User can access the set if the UID/GID matches the set's credential.")
+test.add_assertion("sec_3", "Root can access the set regardless.")
+for key in INVAL_STREAM.keys():
+    test.add_assertion(f"invalid_{key}", f"Plugin properly handles invalid stream data, {key}.")
+
+### Start ###
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+
+nodes = dict()
+for i in range(1, NUM_NODE + 1):
+    nodes[i] = cluster.get_container(f"node-{i}")
+    nodes[i].exec_run(f"groupadd -g {GID} {GRPNAME}")
+    nodes[i].exec_run(f"useradd -s /bin/bash -g {GID} -u {UID_1} {USERNAME_1}")
+    nodes[i].exec_run(f"useradd -s /bin/bash -g {GID} -u {UID_2} {USERNAME_2}")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("-- Begin the test --")
+
+# ------------------------------------------------------------------------------
+# config_0.1
+cfg = f"config name=json_stream_sampler stream=my_data"
+errcode, out = send_request(nodes[1], cfg)
+test.assert_test("config_0.1", config_err_msg() == out, "Plugin reports an error.")
+
+# ------------------------------------------------------------------------------
+# config_0.2
+cfg = f"config name=json_stream_sampler producer=node-1"
+errcode, out = send_request(nodes[1], cfg)
+test.assert_test("config_0.2", config_err_msg() == out, "Plugin reports an error.")
+
+# ------------------------------------------------------------------------------
+# config_2
+STREAM_1 = "stream_1"
+STREAM_1_DATA = { 'schema' : STREAM_1 }
+STREAM_1_DATA.update(VALID_DATA)
+STREAM_1_DATA_PATH = f'{DATA_DIR}/{STREAM_1}.json'
+for i in range(1, NUM_NODE + 1):
+    nodes[i].write_file(STREAM_1_DATA_PATH, json.dumps(STREAM_1_DATA))
+
+SET_1_NAME = f"{STREAM_1}_set"
+cfg = f"config name=json_stream_sampler producer=node-1 instance={SET_1_NAME} " \
+      f"stream={STREAM_1} heap_sz=1MB"
+errcode, out = send_request(nodes[1], cfg)
+test.assert_test("config_1.0", errcode == 0, f"Successfully send the request: {cfg}")
+if errcode != 0:
+    # We cannot continue the test, so stop the script.
+    raise RuntimeError(out)
+stream_publish(nodes[1], name = f"{STREAM_1}", file = STREAM_1_DATA_PATH)
+sets = ldms_ls(nodes[1])
+cond = len(sets) == 1 and list(sets.keys())[0] == SET_1_NAME 
+test.assert_test("create_1", cond, f"Create a set")
+if cond is False:
+    # Stop the test
+    at_exit()
+S = sets[SET_1_NAME]
+
+cond = S['uid'] == DEFAULT_UID
+test.assert_test("config_1.1", cond, f"Set's UID({S['uid']}) is {DEFAULT_UID}.")
+
+cond = S['gid'] == DEFAULT_GID
+test.assert_test("config_1.2", cond, f"Set's GID({S['gid']}) is {DEFAULT_GID}.")
+
+cond = S['perm'] = DEFAULT_PERM
+test.assert_test("config_1.3", cond, f"Set's Perm({S['perm']}) is {DEFAULT_PERM}.")
+
+# ------------------------------------------------------------------------------
+# encode_1
+exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : "0440", 'schema' : STREAM_1 }
+exp_v.update(EXP_S_VALUE)
+set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
+S['data']['S_perm'] = set_S_perm
+cond = S['data'] == exp_v
+test.assert_test("encode_1.1", cond, f"Encode the metric values correctly")
+
+# ------------------------------------------------------------------------------
+# encode_2
+vtypes = dict()
+for k, v in S['meta'].items():
+    vtypes[k] = v['type']
+exp_vtypes = EXP_S_VTYPE
+exp_vtypes['schema'] = 'char[]'
+cond = vtypes == exp_vtypes
+test.assert_test("encode_1.2", cond, f"Encode the metric types correctly")
+
+# ------------------------------------------------------------------------------
+# config_3.*: credential and permission
+STREAM_2 = "stream_2"
+SET_2_NAME = f"{STREAM_2}_set"
+STREAM_2_UID = 0
+STREAM_2_GID = 0
+SET_2_UID = UID_1
+SET_2_GID = GID
+SET_2_PERM = "0400"
+STREAM_2_DATA = { 'schema' : STREAM_2 }
+STREAM_2_DATA.update(VALID_DATA)
+STREAM_2_DATA_PATH = f'{DATA_DIR}/{STREAM_2}.json'
+for i in range(1, NUM_NODE + 1):
+    nodes[i].write_file(STREAM_2_DATA_PATH, json.dumps(STREAM_2_DATA))
+
+cfg = f"config name=json_stream_sampler stream={STREAM_2} " \
+      f"producer=node-1 instance={SET_2_NAME} heap_sz=1MB " \
+      f"uid={SET_2_UID} gid={SET_2_GID} perm={SET_2_PERM}"
+errcode, out = send_request(nodes[1], cfg)
+test.assert_test("config_2.0", errcode == 0, f"Successfully subscribe to the second stream")
+if errcode != 0:
+    # We cannot continue the test, so exit the test script
+    at_exit()
+stream_publish(nodes[1], name= STREAM_2, file = STREAM_2_DATA_PATH, perm = PERM)
+sets = ldms_ls(nodes[1])
+cond = len(sets) == 2 and set(sets.keys()) == set([SET_1_NAME, SET_2_NAME])
+test.assert_test("create_2", cond, f"Create the set of the second stream")
+if cond is False:
+    # Stop the test
+    at_exit()
+S_2 = sets[SET_2_NAME]
+cond = S_2['uid'] == SET_2_UID
+test.assert_test("config_2.1", cond,
+                 f"Set's UID({S_2['uid']}) is {SET_2_UID}.")
+cond = S_2['gid'] == SET_2_GID
+test.assert_test("config_2.2", cond,
+                 f"Set's GID({S_2['gid']}) is {SET_2_GID}.")
+set_perm = f"{oct(S_2['perm'])}".replace("0o", "0")
+cond = set_perm == SET_2_PERM
+test.assert_test("config_2.3", cond,
+                 f"Set's Perm({set_perm}) is as expected({SET_2_PERM}).")
+
+cond = S_2['data']['S_uid'] == STREAM_2_UID
+test.assert_test("encode_2.1", cond, f"S_uid({S_2['data']['S_uid']}) is {STREAM_2_UID}.")
+
+cond = S_2['data']['S_gid'] == STREAM_2_GID
+test.assert_test("encode_2.2", cond, f"S_gid({S_2['data']['S_gid']}) is {STREAM_2_GID}.")
+
+set_S_perm = oct(S_2['data']['S_perm']).replace("0o", "0")
+cond = set_S_perm == PERM
+test.assert_test("encode_2.3", cond, f"S_perm({set_S_perm}) is {PERM}.")
+# ------------------------------------------------------------------------------
+# security
+sets = ldms_ls(nodes[1], user = USERNAME_1) # ldms_ls as a user
+cond = len(sets) == 1 and list(sets.keys())[0] == SET_2_NAME
+test.assert_test("sec_1", cond, f"{USERNAME_1} can sees the stream set.")
+
+sets = ldms_ls(nodes[1], user = USERNAME_2)
+cond = len(sets) == 0
+test.assert_test("sec_2", cond, f"{USERNAME_2} can not see any sets.")
+
+sets = ldms_ls(nodes[1])
+cond = len(sets) == 2 and set(sets.keys()) == set([SET_1_NAME, SET_2_NAME])
+test.assert_test("sec_3", cond, f"Root can see all sets.")
+
+# ------------------------------------------------------------------------------
+# Invalid stream data
+for key in INVAL_STREAM.keys():
+    for i in range(1, NUM_NODE + 1):
+        nodes[i].write_file(INVAL_STREAM_PATH[key], json.dumps(INVAL_STREAM[key]))
+
+    cfg = f"config name=json_stream_sampler producer=node-1 stream=invalid_{key} instance=inval_{key}"
+    errcode, out = send_request(nodes[1], cfg)
+    if errcode != 0:
+        raise RuntimeError(f"Failed to send '{cfg}'. Error {errcode}: {out}")
+    stream_publish(nodes[1], name = f"invalid_{key}", file = INVAL_STREAM_PATH[key])
+
+lines = nodes[1].read_file(nodes[1].ldmsd_spec['log_file'])
+
+for key in INVAL_STREAM.keys():
+    if key in [ 'no_schema', 'not_dict' ]:
+        cond = f"invalid_{key}: Ignoring message" in lines
+    else:
+        cond = f"invalid_{key}: Error 22 creating an LDMS schema" in lines
+    test.assert_test(f"invalid_{key}", cond, f"Plugin properly reported an error message.")
+
+STREAM_3 = "stream_3"
+STREAM_3_DATA = { 'schema' : STREAM_3 }
+STREAM_3_DATA.update(VALID_DATA)
+STREAM_3_DATA['array_int_max_len'] = 5
+STREAM_3_DATA_PATH = f'{DATA_DIR}/{STREAM_3}.json'
+for i in range(1, NUM_NODE + 1):
+    nodes[i].write_file(STREAM_3_DATA_PATH, json.dumps(STREAM_3_DATA))
+
+SET_3_NAME = f"{STREAM_3}_set"
+cfg = f"config name=json_stream_sampler producer=node-1 instance={SET_3_NAME} " \
+      f"stream={STREAM_3} heap_sz=1MB"
+errcode, out = send_request(nodes[1], cfg)
+stream_publish(nodes[1], name = f"{STREAM_3}", file = STREAM_3_DATA_PATH)
+sets = ldms_ls(nodes[1])
+cond = len(sets) == 3 and SET_3_NAME in set(sets.keys()) 
+test.assert_test("create_3", cond, f"Create a set with specified #_max_len")
+if cond is False:
+    # Stop the test
+    at_exit()
+S = sets[SET_3_NAME]
+
+set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
+S['data']['S_perm'] = set_S_perm
+exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_PERM, 'schema' : STREAM_3 }
+exp_v.update(EXP_S_VALUE)
+exp_v['array_int_max_len'] = 5
+cond = S['data'] == exp_v
+test.assert_test("encode_3", cond, f"Encode the metric values correctly")
