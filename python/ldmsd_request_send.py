@@ -61,7 +61,7 @@ def reqNew(cmd):
 
         if len(attr_s) > 0:
             attr_str = " ".join(attr_s)
-            attr = ReqAttr(value = attr_str, attr_id = LDMSD_Req_Attr.STRING)
+            attr = ReqAttr(value = attr_str, attr_id = ReqAttr.STRING)
             attr_list.append(attr)
     return Req(command = verb, attrs = attr_list)
 
