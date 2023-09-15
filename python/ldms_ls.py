@@ -129,7 +129,7 @@ x.connect(host = args.host, port = args.port)
 sets = x.dir()
 sets = { s.name: dir2dict(s) for s in sets }
 
-if args.lookup:
+if len(sets) > 0 and args.lookup:
     ref_count = RefCount()
     ref_count.get()
     x.lookup(".*", flags = ldms.LOOKUP_RE, cb = lookup_cb)
