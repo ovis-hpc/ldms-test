@@ -1,0 +1,327 @@
+#!/usr/bin/env python3
+
+#
+# samp (vmstat, meminfo) -> agg1 (2 store_sos, different root paths)
+#  |
+#  '----------------------> agg2 (classic store_sos load)
+#
+# samp2 (double load meminfo as m0 and m1, expecting a failure)
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test multiple store_sos instances" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "meminfo",
+                            "!extends" : "sampler_plugin",
+                        },
+                        {
+                            "plugin" : "vmstat",
+                            "!extends" : "sampler_plugin",
+                        },
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "node-2",
+            "component_id" : 2,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        f"load name=m0 plugin=meminfo",
+                        f"load name=m1 plugin=meminfo",
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=ss0 plugin=store_sos",
+                        f"config name=ss0 path=/store0",
+                        f"load name=ss1 plugin=store_sos",
+                        f"config name=ss1 path=/store1",
+                        f"strgp_add name=p0 plugin=ss0 container=cont0" \
+                                 f" regex=.* decomposition=/etc/decomp.json",
+                        f"strgp_start name=p0",
+                        f"strgp_add name=p1 plugin=ss1 container=cont1" \
+                                 f" regex=meminfo decomposition=/etc/decomp.json",
+                        f"strgp_start name=p1",
+
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=store_sos",
+                        f"config name=store_sos path=/store",
+                        f"strgp_add name=p0 plugin=store_sos container=cont" \
+                                 f" schema=meminfo",
+                        f"strgp_start name=p0",
+                        f"strgp_add name=p1 plugin=store_sos container=cont" \
+                                 f" schema=vmstat",
+                        f"strgp_start name=p1",
+
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        }
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "agg_test",
+                 test_desc = "Minimal LDMSD 2-level aggregation test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "Check containers (multi-instance plugin)")
+test.add_assertion(2, "Check containers (old style plugin)")
+test.add_assertion(3, "Check multiple load of old-style plugin")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg1 = cluster.get_container("agg-1")
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+
+txt = """\
+{
+  "type": "as_is",
+  "indices": [
+	  { "name":"time_comp", "cols":["timestamp", "component_id"] }
+  ]
+}
+"""
+agg1.write_file("/etc/decomp.json", txt)
+agg1.exec_run("mkdir -p /store0 /store1")
+
+agg2.exec_run("mkdir -p /store")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up and data are flowing in")
+time.sleep(10)
+
+rc0, out0 = agg1.exec_run("/tada-src/python/sos_dump.py /store0/cont0")
+rc1, out1 = agg1.exec_run("/tada-src/python/sos_dump.py /store1/cont1")
+rc2, out2 = agg2.exec_run("/tada-src/python/sos_dump.py /store/cont")
+
+data0 = json.loads(out0)
+data1 = json.loads(out1)
+data2 = json.loads(out2)
+
+keys0 = [ k.split('_')[0] for k in data0.keys() ] # get rid of the hash
+keys1 = [ k.split('_')[0] for k in data1.keys() ] # get rid of the hash
+
+data_len0 = [ len(recs) for recs in data0.values() ]
+data_len1 = [ len(recs) for recs in data1.values() ]
+data_len2 = [ len(recs) for recs in data1.values() ]
+
+while True: # will break
+    cmp = set(['meminfo', 'vmstat'])
+    if cmp != set(keys0):
+        test.assert_test(1, False, f"Expecting {cmp} but got {set(keys0)}")
+        break
+    cmp = set(['meminfo'])
+    if cmp != set(keys1):
+        test.assert_test(1, False, f"Expecting {cmp} but got {set(keys1)}")
+        break
+    N = sum( [ n > 0 for n in data_len0 ] )
+    if N != 2:
+        test.assert_test(1, False, f"Missing data from /store0/cont0")
+        break;
+    N = sum( [ n > 0 for n in data_len1 ] )
+    if N != 1:
+        test.assert_test(1, False, f"Missing data from /store1/cont1")
+        break;
+    test.assert_test(1, True, f"verified")
+    break
+
+while True: # will break
+    cmp = set(['meminfo', 'vmstat'])
+    if cmp != set(data2.keys()):
+        test.assert_test(2, False, f"Expecting {cmp} but got {set(data2.keys())}")
+        break
+    N = sum( [ n > 0 for n in data_len0 ] )
+    if N != 2:
+        test.assert_test(2, False, f"Missing data from /store/cont")
+        break;
+    test.assert_test(2, True, f"verified")
+    break
+
+rc, out = node2.exec_run('grep "does not support multiple instances" /var/log/ldmsd.log')
+if rc == 0:
+    test.assert_test(3, True, "an error is properly reported")
+else:
+    test.assert_test(3, False, "NO error is reported")
+
+# see `at_exit()` function
