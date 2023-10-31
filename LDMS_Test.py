@@ -2613,7 +2613,7 @@ class LDMSDProc(Proc):
 
     def receive_response(self, recv_len = None):
         # to make it work with LDMSD_Request
-        return self._conn.recv()
+        return self._conn.recv(timeout = 40)
 
     def req(self, cmd_line):
         """Form LDMSD_Request according to `cmd_line` and send.
