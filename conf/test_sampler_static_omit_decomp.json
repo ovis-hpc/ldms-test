@@ -1,0 +1,20 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "filter",
+      "cols": [
+        { "src":"timestamp" },
+        { "src":"producer" },
+        { "src":"instance" },
+        { "src":"count" },
+        { "src":"component_id" },
+        { "src":"u16" }
+      ],
+      "indices": [
+        { "name": "timestamp", "cols": [ "timestamp" ] },
+        { "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+      ]
+    }
+  ]
+}
