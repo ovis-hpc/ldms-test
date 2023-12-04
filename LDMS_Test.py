@@ -13,6 +13,8 @@ import signal
 import subprocess as sp
 import logging
 
+from types       import MethodType
+
 import fcntl
 from array import array
 import struct
@@ -884,6 +886,7 @@ def py_pty(node, script_path, user = None):
     time.sleep(2)
     _out = _pty.read()
     EXPECT(_out, ">>> ")
+    _pty.pycmd = MethodType(pycmd, _pty)
     return _pty
 
 class PyPty(object):
