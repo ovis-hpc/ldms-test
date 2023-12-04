@@ -1,0 +1,341 @@
+#!/usr/bin/env python3
+
+#
+# samp1 - multi-instance json_stream_sampler
+# samp2 - traditional json_stream_sampler single load + config
+#
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, py_pty
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test multiple json_stream_sampler instances" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        f"load name=j0 plugin=json_stream_sampler",
+                        f"config name=j0 stream=s0 producer=%hostname%"
+                        f" instance=%hostname%/s0 component_id=%component_id%",
+                        f"start name=j0 interval=1s offset=0",
+                        f"load name=j1 plugin=json_stream_sampler",
+                        f"config name=j1 stream=s1 producer=%hostname%"
+                        f" instance=%hostname%/s1 component_id=%component_id%",
+                        f"start name=j1 interval=1s offset=0",
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "node-2",
+            "component_id" : 2,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "config" : [
+                        f"load name=json_stream_sampler",
+                        f"config name=json_stream_sampler stream=s0"
+                        f" producer=%hostname%"
+                        f" instance=%hostname%/s0 component_id=%component_id%",
+                        f"start name=json_stream_sampler interval=1s offset=0",
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        },
+                        {
+                            "name" : "node-2",
+                            "!extends" : "prdcr",
+                        },
+                    ],
+                    "config" : [
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=200000",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all",
+                    ],
+                },
+            ]
+        }
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "multi_json_stream_sampler_test",
+                 test_desc = "Test multi-instance json_stream_sampler",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "Load multiple json_stream_samplers.")
+test.add_assertion(2, "Load json_stream_sampler (old style).")
+test.add_assertion(3, "Sets being created accordingly.")
+test.add_assertion(4, "Sets being updated accordingly.")
+test.add_assertion(5, "The set is removed from node-1 when json_stream_sampler terminated.")
+test.add_assertion(6, "The set is removed from agg-1 when json_stream_sampler terminated.")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+agg1 = cluster.get_container("agg-1")
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up and data are flowing in")
+time.sleep(10)
+
+p1 = py_pty(node1, "/tada-src/python/json_stream_publish.py")
+p2 = py_pty(node2, "/tada-src/python/json_stream_publish.py")
+
+s00 = p1.pycmd("s00")
+s01 = p1.pycmd("s01")
+s10 = p1.pycmd("s10")
+s11 = p1.pycmd("s11")
+
+s00 = eval(s00)
+s01 = eval(s01)
+s10 = eval(s10)
+s11 = eval(s11)
+
+def verify_data(test_id, data, cmp):
+    # This verifies that `data` contains `cmp`
+    # cmp['setname']['data'] is a dict of metrics
+    # data['setname']['data'] is a dict of metrics
+    if data.keys() != cmp.keys():
+        test.assert_test(test_id, False, f"Expecting '{cmp.keys()}', but got '{data.keys()}'")
+        return False
+    for k in cmp:
+        d = data[k]['data']
+        c = cmp[k]['data']
+        for u in c:
+            vd = d[u]
+            vc = c[u]
+            if vd != vc:
+                test.assert_test(test_id, False, f"Expecting '{vc}', but got '{vd}'")
+                return False
+    test.assert_test(test_id, True, f"data verified")
+    return True
+
+
+cond1 = False
+while True: # will break
+    rc1, out1 = agg1.exec_run("ldmsd_controller -x sock -p 411 -h node-1 <<<plugn_status")
+
+    if rc1 != 0:
+        test.assert_test(1, False, f"plugn_status error, rc: {rc1}, out: {out1}")
+        break
+    l11, l12 = out1.splitlines()[2:]
+    if not l11.startswith('j0 ') or not l12.startswith('j1 '):
+        test.assert_test(1, False, f"Bad output: {out1}")
+        break
+    test.assert_test(1, True, "verified")
+    cond1 = True
+    break
+
+cond2 = False
+while True: # will break
+    rc2, out2 = agg1.exec_run("ldmsd_controller -x sock -p 411 -h node-2 <<<plugn_status")
+
+    if rc2 != 0:
+        test.assert_test(2, False, f"plugn_status error, rc: {rc2}, out: {out2}")
+        break
+    l21,     = out2.splitlines()[2:]
+    if not l21.startswith('json_stream_sampler '):
+        test.assert_test(2, False, f"Bad output: {out2}")
+        break
+    test.assert_test(2, True, "verified")
+    cond2 = True
+    break
+
+cond = cond1 and cond2
+
+while cond: # will break
+    cond = False
+
+    out10 = p1.pycmd("x.stream_publish('s0', s00)")
+    out11 = p1.pycmd("x.stream_publish('s1', s10)")
+    out20 = p2.pycmd("x.stream_publish('s0', s00)")
+    time.sleep(4)
+
+    rc1, out1 = agg1.exec_run(f"/tada-src/python/ldms_ls.py -h agg-1 -l")
+
+    data = json.loads(out1)
+    cmp = { 'node-1/s0': {'data': s00},
+            'node-1/s1': {'data': s10},
+            'node-2/s0': {'data': s00} }
+
+    cond = verify_data(3, data, cmp)
+    break
+
+while cond: # will break
+    cond = False
+
+    out10 = p1.pycmd("x.stream_publish('s0', s01)")
+    out11 = p1.pycmd("x.stream_publish('s1', s11)")
+    out20 = p2.pycmd("x.stream_publish('s0', s01)")
+    time.sleep(4)
+
+    rc1, out1 = agg1.exec_run(f"/tada-src/python/ldms_ls.py -h agg-1 -l")
+
+    data = json.loads(out1)
+    cmp = { 'node-1/s0': {'data': s01},
+            'node-1/s1': {'data': s11},
+            'node-2/s0': {'data': s01} }
+
+    cond = verify_data(4, data, cmp)
+    break
+
+while cond:
+    rc, out = node1.config_ldmsd("stop name=j0")
+    if rc:
+        test.assert_test(5, False, f"ldmsd `stop` error, rc: {rc}, out: {out}")
+        break
+    time.sleep(3)
+    rc, out = node1.config_ldmsd("term name=j0")
+    if rc:
+        test.assert_test(5, False, f"ldmsd `term` error, rc: {rc}, out: {out}")
+        break
+    time.sleep(3)
+    rc, out = agg1.exec_run(f"/tada-src/python/ldms_ls.py -h agg-1 -l")
+    if rc:
+        test.assert_test(5, False, f"ldms_ls.py error, rc: {rc}, out: {out}")
+        break
+    agg1_data = json.loads(out)
+    rc, out = agg1.exec_run(f"/tada-src/python/ldms_ls.py -h node-1 -l")
+    if rc:
+        test.assert_test(5, False, f"ldms_ls.py error, rc: {rc}, out: {out}")
+        break
+    node1_data = json.loads(out)
+
+    cmp = { 'node-1/s1': {'data': s11} }
+    cond = verify_data(5, node1_data, cmp)
+
+    cmp = { 'node-1/s1': {'data': s11},
+            'node-2/s0': {'data': s01} }
+    cond = verify_data(6, agg1_data, cmp)
+    break
+
+# see `at_exit()` function
