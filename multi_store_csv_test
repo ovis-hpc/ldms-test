@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+
+#
+# samp (vmstat, meminfo) -> agg1 (2 store_csv, different root paths)
+#  |
+#  '----------------------> agg2 (classic store_csv load)
+#
+# samp2 (double load meminfo as m0 and m1, expecting a failure)
+
+import os
+import re
+import csv
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test multiple store_csv instances" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "meminfo",
+                            "!extends" : "sampler_plugin",
+                        },
+                        {
+                            "plugin" : "vmstat",
+                            "!extends" : "sampler_plugin",
+                        },
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=ss0 plugin=store_csv",
+                        f"config name=ss0 path=/store0",
+                        f"load name=ss1 plugin=store_csv",
+                        f"config name=ss1 path=/store1",
+                        f"strgp_add name=p0 plugin=ss0 container=cont0" \
+                                 f" regex=.* decomposition=/etc/decomp.json",
+                        f"strgp_start name=p0",
+                        f"strgp_add name=p1 plugin=ss1 container=cont1" \
+                                 f" regex=meminfo decomposition=/etc/decomp.json",
+                        f"strgp_start name=p1",
+
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=store_csv",
+                        f"config name=store_csv path=/store",
+                        f"strgp_add name=p0 plugin=store_csv container=cont" \
+                                 f" schema=meminfo",
+                        f"strgp_start name=p0",
+                        f"strgp_add name=p1 plugin=store_csv container=cont" \
+                                 f" schema=vmstat",
+                        f"strgp_start name=p1",
+
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        }
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "agg_test",
+                 test_desc = "Minimal LDMSD 2-level aggregation test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "Check containers (multi-instance plugin)")
+test.add_assertion(2, "Check containers (old style plugin)")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg1 = cluster.get_container("agg-1")
+node1 = cluster.get_container("node-1")
+
+txt = """\
+{
+  "type": "as_is",
+  "indices": [
+	  { "name":"time_comp", "cols":["timestamp", "component_id"] }
+  ]
+}
+"""
+agg1.write_file("/etc/decomp.json", txt)
+agg1.exec_run("mkdir -p /store0 /store1")
+
+agg2.exec_run("mkdir -p /store")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up and data are flowing in")
+time.sleep(10)
+
+agg1.kill_ldmsd()
+agg2.kill_ldmsd()
+
+class CsvData(object):
+    def __init__(self, path, data):
+        self.path   = path
+        self.cont   = os.path.dirname(path)
+        self.name   = os.path.basename(path)
+        self.schema = self.name.rsplit('_')[0]
+        self.data   = data
+
+def csv_data(cont, path):
+    out = cont.read_file(path)
+    lines = out.splitlines()
+    return [ d for d in csv.reader(lines) ]
+
+def get_data(cont):
+    rc, out = cont.exec_run('ls /store*/*/*')
+    ret = list()
+    paths = out.splitlines()
+    for path in paths:
+        data = csv_data(cont, path)
+        ret.append(CsvData(path, data))
+    return ret
+
+data1 = get_data(agg1)
+data2 = get_data(agg2)
+
+
+while True: # will break
+    cmp = set([('/store0/cont0', 'meminfo'), ('/store0/cont0', 'vmstat'),
+               ('/store1/cont1', 'meminfo')])
+    cont_schema = set([ (d.cont, d.schema) for d in data1 ])
+    if cmp != set(cont_schema):
+        test.assert_test(1, False, f"Expecting {cmp} but got {cont_schema}")
+        break
+    for d in data1:
+        if len(d.data) == 0:
+            test.assert_test(1, False, f"No data in {d.path}")
+            break
+    else:
+        test.assert_test(1, True, f"verified")
+    break
+
+while True: # will break
+    cmp = set([('/store/cont', 'meminfo'), ('/store/cont', 'vmstat')])
+    cont_schema = set([ (d.cont, d.schema) for d in data2 ])
+    if cmp != set(cont_schema):
+        test.assert_test(2, False, f"Expecting {cmp} but got {cont_schema}")
+        break
+    for d in data1:
+        if len(d.data) == 0:
+            test.assert_test(2, False, f"No data in {d.path}")
+            break
+    else:
+        test.assert_test(2, True, f"verified")
+    break
+
+# see `at_exit()` function
