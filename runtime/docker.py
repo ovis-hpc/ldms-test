@@ -633,6 +633,7 @@ class DockerCluster(LDMSDCluster):
                 hostname = node
                 cont_image = image
                 cont_volumes = volumes
+                cont_env = dict(env) # shallow copy env
                 cont_name = "{}-{}".format(name, node)
                 tmpfs = None
                 try:
@@ -642,6 +643,8 @@ class DockerCluster(LDMSDCluster):
                             tmpfs = _n.get("tmpfs")
                             cont_image = _n.get("image", image)
                             cont_volumes = _n.get("mounts", volumes)
+                            _cont_env = _n.get("env", env)
+                            cont_env.update(_cont_env)
                             break
                 except:
                     pass
@@ -652,7 +655,7 @@ class DockerCluster(LDMSDCluster):
                         entrypoint = [ "/bin/bash" ],
                         tty = True,
                         detach = True,
-                        environment = env,
+                        environment = cont_env,
                         volumes = cont_volumes,
                         cap_add = cap_add,
                         cap_drop = cap_drop,
