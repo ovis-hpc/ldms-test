@@ -1,0 +1,448 @@
+#!/usr/bin/env python3
+
+#
+# samp (vmstat, meminfo) -> agg1 (2 store_avro_kafka, different root paths)
+#  |
+#  '----------------------> agg2 (classic store_avro_kafka load)
+#
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+import datetime
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test multiple store_avro_kafka instances" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "meminfo",
+                            "!extends" : "sampler_plugin",
+                        },
+                        {
+                            "plugin" : "vmstat",
+                            "!extends" : "sampler_plugin",
+                        },
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-1",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=ss0 plugin=store_avro_kafka",
+                        f"config name=ss0 serdes_conf=/etc/serdes-1.conf",
+                        f"load name=ss1 plugin=store_avro_kafka",
+                        f"config name=ss1 encoding=json",
+                        f"strgp_add name=p0 plugin=ss0 container=kafka-1" \
+                                 f" regex=.* decomposition=/etc/decomp.json",
+                        f"strgp_start name=p0",
+                        f"strgp_add name=p1 plugin=ss1 container=kafka-2" \
+                                 f" regex=meminfo decomposition=/etc/decomp.json",
+                        f"strgp_start name=p1",
+
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "node-1",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                    "config" : [
+                        f"load name=store_avro_kafka",
+                        f"config name=store_avro_kafka serdes_conf=/etc/serdes-3.conf",
+                        f"strgp_add name=p0 plugin=store_avro_kafka container=kafka-3" \
+                                 f" regex=.* decomposition=/etc/decomp.json",
+                        f"strgp_start name=p0",
+                        f"prdcr_start_regex regex=.*",
+                        f"updtr_add name=all interval=1000000 offset=%offset%",
+                        f"updtr_prdcr_add name=all regex=.*",
+                        f"updtr_start name=all"
+                    ],
+                },
+            ]
+        },
+        {
+            "hostname" : "kafka-1",
+            "daemons" : [ { "name" : "sshd", "type" : "sshd", } ],
+        },
+        {
+            "hostname" : "kafka-2",
+            "daemons" : [ { "name" : "sshd", "type" : "sshd", } ],
+        },
+        {
+            "hostname" : "kafka-3",
+            "daemons" : [ { "name" : "sshd", "type" : "sshd", } ],
+        },
+    ] + [
+        {
+            "hostname" : f"schema-registry-{i}",
+            "image" : "confluentinc/cp-schema-registry",
+            "env" : {
+                'SCHEMA_REGISTRY_HOST_NAME':'%hostname',
+                'SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL':f'kafka-{i}:2181',
+                'SCHEMA_REGISTRY_LISTENERS':'http://0.0.0.0:8081',
+                'SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS':f'PLAINTEXT://kafka-{i}:9092',
+            },
+        } for i in range(1, 4)
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR" ,
+        "KAFKA_OPTS": "-Djava.net.preferIPv4Stack=True",
+    },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "agg_test",
+                 test_desc = "Minimal LDMSD 2-level aggregation test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "Check kafka-1 data (1st instance w/avro encoding from agg-1)")
+test.add_assertion(2, "Check kafka-2 data (2nd instance w/JSON encoding from agg-1)")
+test.add_assertion(3, "Check kafka-3 data (old style plugin config from agg-2)")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg1 = cluster.get_container("agg-1")
+node1 = cluster.get_container("node-1")
+kafka1 = cluster.get_container("kafka-1")
+kafka2 = cluster.get_container("kafka-2")
+kafka3 = cluster.get_container("kafka-3")
+
+reg1 = cluster.get_container("schema-registry-1")
+reg2 = cluster.get_container("schema-registry-2")
+reg3 = cluster.get_container("schema-registry-3")
+
+txt = """\
+{
+  "type": "as_is",
+  "indices": [
+	  { "name":"time_comp", "cols":["timestamp", "component_id"] }
+  ]
+}
+"""
+agg1.write_file("/etc/decomp.json", txt)
+agg2.write_file("/etc/decomp.json", txt)
+
+agg1.write_file("/etc/serdes-1.conf", """\
+schema.registry.url = http://schema-registry-1:8081
+""")
+agg2.write_file("/etc/serdes-3.conf", """\
+schema.registry.url = http://schema-registry-3:8081
+""")
+
+# Start kafka first
+
+def start_kafka(cont):
+    rc, out = cont.exec_run("ls -d /opt/kafka*/")
+    assert(rc == 0)
+    out = out.splitlines()
+    assert(len(out) == 1)
+    KFK_DIR = out[0]
+    KFK_LOG_DIR = "/db/kafka_logs"
+    rc, out = cont.exec_run(f"mkdir {KFK_LOG_DIR}")
+
+    # start zookeeper
+    ZOO_BIN = f"{KFK_DIR}/bin/zookeeper-server-start.sh"
+    ZOO_CONF = f"{KFK_DIR}/config/zookeeper.properties"
+    zoo_cmd = f"LOG_DIR={KFK_LOG_DIR} {ZOO_BIN} -daemon {ZOO_CONF}"
+    rc, out = cont.exec_run(zoo_cmd)
+    assert(rc == 0)
+
+    rc, out = cont.exec_run("/tada-src/python/zoo_check.py >/db/zoo_check.log 2>&1")
+    assert(rc == 0)
+
+    # start kafka
+    KFK_BIN = f"{KFK_DIR}/bin/kafka-server-start.sh"
+    KFK_CONF = f"{KFK_DIR}/config/server.properties"
+    kfk_cmd = f"LOG_DIR={KFK_LOG_DIR} {KFK_BIN} -daemon {KFK_CONF}"
+    rc, out = cont.exec_run(kfk_cmd)
+    assert(rc == 0)
+
+def start_schema_registry(cont):
+    rc, out = cont.exec_run(
+                "/etc/confluent/docker/run" \
+                " >/var/log/schema_registry.log 2>&1 &", user="root")
+
+def check_schema_registry(cont, retry = None):
+    while retry is None or retry > 0:
+        time.sleep(1)
+        rc, out = cont.exec_run("grep 'Server started' /var/log/schema_registry.log",
+                                user="root")
+        if rc == 0:
+            return
+    raise RuntimeError("Server not started")
+
+start_kafka(kafka1)
+start_kafka(kafka2)
+start_kafka(kafka3)
+time.sleep(5)
+
+start_schema_registry(reg1)
+start_schema_registry(reg2)
+start_schema_registry(reg3)
+
+check_schema_registry(reg1, retry=30)
+check_schema_registry(reg2, retry=30)
+check_schema_registry(reg3, retry=30)
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+# /opt/kafka_*/bin/kafka-topics.sh --zookeeper kafka-1 --list
+# /opt/kafka_*/bin/kafka-console-consumer.sh --bootstrap-server kafka-3:9092 --topic meminfo_39e8567
+
+log.info("... wait a bit to make sure ldmsd's are up and data are flowing in")
+time.sleep(20)
+
+def get_kafka_topics(cont, zookeeper):
+    rc, out = cont.exec_run(f"/opt/kafka_*/bin/kafka-topics.sh"\
+                            f" --zookeeper {zookeeper} --list")
+    assert(rc == 0)
+    lines = out.splitlines()
+    return [ l for l in lines if not l.startswith('_') ]
+
+def get_avro_kafka_data(cont, zookeeper, registry_url, topic, count):
+    rc, out = cont.exec_run(f"/tada-src/python/avro_kafka_consumer.py"\
+                            f" -b {zookeeper}" \
+                            f" -s {registry_url}" \
+                            f" -t {topic}" \
+                            f" -c {count}")
+    assert(rc == 0)
+    lines = out.splitlines()
+    return [ eval(l) for l in lines ]
+
+def get_json_kafka_data(cont, zookeeper, topic, count):
+    rc, out = cont.exec_run(f"/opt/kafka_*/bin/kafka-console-consumer.sh" \
+                    f" --max-messages {count}" \
+                    f" --bootstrap-server {zookeeper}:9092" \
+                    f" --timeout-ms 1000" \
+                    f" --topic {topic} 2>/dev/null" \
+            )
+    assert(rc == 0)
+    lines = out.splitlines()
+    return [ eval(l) for l in lines ]
+
+log.info("Getting data ...")
+k1_topics = get_kafka_topics(agg1, "kafka-1")
+k2_topics = get_kafka_topics(agg1, "kafka-2")
+k3_topics = get_kafka_topics(agg1, "kafka-3")
+
+COUNT = 3
+
+k1_data = { k: get_avro_kafka_data(agg1, "kafka-1",
+                                    "http://schema-registry-1:8081", k, COUNT)
+                for k in k1_topics }
+k2_data = { k: get_json_kafka_data(agg1, "kafka-2", k, COUNT)
+                for k in k2_topics }
+k3_data = { k: get_avro_kafka_data(agg1, "kafka-3",
+                                    "http://schema-registry-3:8081", k, COUNT)
+                for k in k3_topics }
+
+# test.add_assertion(1, "Check kafka-1 data (1st instance w/avro encoding from agg-1)")
+while True: # will break
+    got = [ t.rsplit('_', 1)[0] for t in k1_topics ]
+    got.sort()
+    cmp = [ "meminfo", "vmstat" ]
+    cmp.sort()
+    if got != cmp:
+        test.assert_test(1, False, f"Expecting topics {cmp}, but got {got}")
+        break
+    for k, v in k1_data.items():
+        if len(v) != COUNT:
+            test.assert_test(1, False, f"Expecting {COUNT} records, but got"\
+                                       f" {len(v)} records: {v}")
+            break
+    else:
+        test.assert_test(1, True, "verified")
+        break
+    break
+
+# test.add_assertion(2, "Check kafka-2 data (2nd instance w/JSON encoding from agg-1)")
+while True: # will break
+    got = [ t.rsplit('_', 1)[0] for t in k2_topics ]
+    got.sort()
+    cmp = [ "meminfo" ]
+    cmp.sort()
+    if got != cmp:
+        test.assert_test(2, False, f"Expecting topics {cmp}, but got {got}")
+        break
+    for k, v in k2_data.items():
+        if len(v) != COUNT:
+            test.assert_test(2, False, f"Expecting {COUNT} records, but got"\
+                                       f" {len(v)} records: {v}")
+            break
+    else:
+        test.assert_test(2, True, "verified")
+        break
+    break
+
+# test.add_assertion(3, "Check kafka-3 data (old style plugin config from agg-2)")
+while True: # will break
+    got = [ t.rsplit('_', 1)[0] for t in k3_topics ]
+    got.sort()
+    cmp = [ "meminfo", "vmstat" ]
+    cmp.sort()
+    if got != cmp:
+        test.assert_test(3, False, f"Expecting topics {cmp}, but got {got}")
+        break
+    for k, v in k3_data.items():
+        if len(v) != COUNT:
+            test.assert_test(3, False, f"Expecting {COUNT} records, but got"\
+                                       f" {len(v)} records: {v}")
+            break
+    else:
+        test.assert_test(3, True, "verified")
+        break
+    break
+
+# see `at_exit()` function
