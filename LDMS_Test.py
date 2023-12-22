@@ -2043,7 +2043,7 @@ class LDMSDCluster(ABC):
         etc_hosts = self.build_etc_hosts(node_aliases = node_aliases)
         conts = self.get_containers()
         for cont in conts:
-            cont.write_file("/etc/hosts", etc_hosts)
+            cont.write_file("/etc/hosts", etc_hosts, user = "root")
 
     @cached_property
     def node_aliases(self):
@@ -2170,24 +2170,24 @@ class LDMSDCluster(ABC):
         """Make `/root/.ssh/known_hosts` in all nodes"""
         ks = self.ssh_keyscan()
         for cont in self.containers:
-            cont.exec_run("mkdir -m 0700 -p /root/.ssh")
-            cont.write_file("/root/.ssh/known_hosts", ks)
+            cont.exec_run("mkdir -m 0700 -p /root/.ssh", user="root")
+            cont.write_file("/root/.ssh/known_hosts", ks, user="root")
 
     def make_ssh_id(self):
         """Make `/root/.ssh/id_rsa` and authorized_keys"""
         cont = self.containers[-1]
-        cont.exec_run("mkdir -m 0700 -p /root/.ssh/")
-        cont.exec_run("rm -f /root/.ssh/id_rsa id_rsa.pub")
-        cont.exec_run("ssh-keygen -q -N '' -f /root/.ssh/id_rsa")
-        D.id_rsa = id_rsa = cont.read_file("/root/.ssh/id_rsa")
-        D.id_rsa_pub = id_rsa_pub = cont.read_file("/root/.ssh/id_rsa.pub")
+        cont.exec_run("mkdir -m 0700 -p /root/.ssh/", user="root")
+        cont.exec_run("rm -f /root/.ssh/id_rsa id_rsa.pub", user="root")
+        cont.exec_run("ssh-keygen -q -N '' -f /root/.ssh/id_rsa", user="root")
+        D.id_rsa = id_rsa = cont.read_file("/root/.ssh/id_rsa", user="root")
+        D.id_rsa_pub = id_rsa_pub = cont.read_file("/root/.ssh/id_rsa.pub", user="root")
         for cont in self.containers:
-            cont.exec_run("mkdir -m 0700 -p /root/.ssh/")
-            cont.write_file("/root/.ssh/id_rsa", id_rsa)
-            cont.exec_run("chmod 600 /root/.ssh/id_rsa")
-            cont.write_file("/root/.ssh/id_rsa.pub", id_rsa_pub)
-            cont.write_file("/root/.ssh/authorized_keys", id_rsa_pub)
-            cont.exec_run("chmod 600 /root/.ssh/authorized_keys")
+            cont.exec_run("mkdir -m 0700 -p /root/.ssh/", user="root")
+            cont.write_file("/root/.ssh/id_rsa", id_rsa, user="root")
+            cont.exec_run("chmod 600 /root/.ssh/id_rsa", user="root")
+            cont.write_file("/root/.ssh/id_rsa.pub", id_rsa_pub, user="root")
+            cont.write_file("/root/.ssh/authorized_keys", id_rsa_pub, user="root")
+            cont.exec_run("chmod 600 /root/.ssh/authorized_keys", user="root")
 
     def exec_run(self, cmd, env=None):
         """A pass-through to last_cont.exec_run()
@@ -2283,9 +2283,10 @@ class LDMSDCluster(ABC):
                             "/opt/ovis/lib\n"
                             "/opt/ovis/lib64\n"
                             "/opt/ovis/lib/ovis-ldms\n"
-                            "/opt/ovis/lib64/ovis-ldms\n"
+                            "/opt/ovis/lib64/ovis-ldms\n",
+                            user = "root"
                             )
-            cont.exec_run("ldconfig")
+            cont.exec_run("ldconfig", user="root")
             profile = """
                 function _add() {
                     # adding VALUE into variable NAME
@@ -2315,7 +2316,7 @@ class LDMSDCluster(ABC):
                 _add LDMSD_PLUGIN_LIBPATH $PREFIX/lib64/ovis-ldms
                 export LDMSD_PLUGIN_LIBPATH
             """
-            cont.write_file("/etc/profile.d/ovis.sh", profile)
+            cont.write_file("/etc/profile.d/ovis.sh", profile, user="root")
             otherhosts = allhosts - set([cont.hostname])
             otherhosts_txt = ' '.join(otherhosts)
             pssh_profile = """
@@ -2327,7 +2328,7 @@ class LDMSDCluster(ABC):
                     allhosts_txt = allhosts_txt,
                     otherhosts_txt = otherhosts_txt,
                 )
-            cont.write_file("/etc/profile.d/pssh.sh", pssh_profile)
+            cont.write_file("/etc/profile.d/pssh.sh", pssh_profile, user="root")
 
     def all_pgrepc(self, prog):
         """Perform `cont.pgrepc(prog)` for each cont in self.containers"""
