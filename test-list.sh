@@ -60,6 +60,13 @@ CONT_TEST_LIST=(
 	ldmsd_stream_rate_test
 	ldms_rate_test
 	ldms_ipv6_test
+
+	multi_json_stream_sampler_test
+	multi_procnetdev2_test
+	multi_store_avro_kafka_test
+	multi_store_csv_test
+	multi_store_sos_test
+	multi_test_sampler_test
 )
 
 INSIDE_CONT_TEST_LIST=(
