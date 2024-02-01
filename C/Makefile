@@ -11,13 +11,13 @@ TARGETS = $(BUILDDIR)/libutil.so \
 	  $(BUILDDIR)/libtest_store.so
 
 LDMSD_VERSION = $(shell /usr/bin/strings ${OVIS_PREFIX}/sbin/ldmsd | \
-	      grep -E 'OVIS_LDMS_VERSION|LDMSD_VERSION' | \
-	      sed 's/.*"\(.*\)"/\1/' )
+	      grep -E 'OVIS_LDMS_VERSION\>|LDMSD_VERSION\>' | \
+	      sed 's/"//g' | cut -f 2 -d ' ' | uniq )
 LDMSD_MAJOR_VERSION = $(shell echo ${LDMSD_VERSION} | cut -d . -f 1)
 LDMSD_MINOR_VERSION = $(shell echo ${LDMSD_VERSION} | cut -d . -f 2)
 $(info LDMSD_VERSRION ${LDMSD_VERSION})
 
-ifeq ($(LDMSD_MINOR_VERSION), 3)
+ifeq ($(LDMSD_MAJOR_VERSION), 4)
 TEST_STREAM_SAMPLER_SRC = test_stream_sampler.c
 else
 TEST_STREAM_SAMPLER_SRC = test_stream_sampler5.c
@@ -37,7 +37,7 @@ $(BUILDDIR)/libtada.so: tada.c tada.h
 	gcc -o $@ -fPIC -shared $^ -ldl -pthread -lcrypto ${GCC_COMMON_FLAGS}
 
 $(BUILDDIR)/libtest_stream_sampler.so: $(TEST_STREAM_SAMPLER_SRC)
-ifeq ($(LDMSD_MINOR_VERSION), 3)
+ifeq ($(LDMSD_MAJOR_VERSION), 4)
 	mkdir -p $(BUILDDIR)
 	gcc -I $(OVIS_PREFIX)/include -o $@ -fPIC -shared \
 	    $^ -L$(OVIS_PREFIX)/lib -L$(BUILDDIR) -L$(OVIS_PREFIX)/lib64 \

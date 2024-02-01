@@ -67,7 +67,7 @@ OVIS_BUILD_OPTS=(
 	# kafka
 	--with-kafka
 
-	CFLAGS="-Wall -Werror -O0 -ggdb3"
+	CFLAGS="-O0 -ggdb3"
 )
 
 pushd ${WORK_DIR}
