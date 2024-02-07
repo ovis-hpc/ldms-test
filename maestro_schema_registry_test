@@ -1,0 +1,459 @@
+#!/usr/bin/env python3
+
+# SYNOPSIS
+# --------
+# Test maestro on RAFT with schema-registry capability: 3 etcds, and 3 maestros.
+#
+# TEST SCENARIOS
+# --------------
+#  - start etcds
+#  - start maestros
+#  - verify
+
+import os
+import re
+import sys
+import time
+import json
+import yaml
+import TADA
+import atexit
+import logging
+import argparse
+import tempfile
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args
+
+
+if __name__ != "__main__":
+    raise ImportError("This is not a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+DESC = "Test maestros on RAFT with Schema-Registry"
+ap = argparse.ArgumentParser(description = DESC)
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### -------------------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+NUM_COMPUTE = 8
+STORE_ROOT = "/store" # path inside container (aggs)
+CFG_PREFIX = "headnode"
+LDMS_PORT = 411
+STORE_PATH = "/db/containers"
+LDMS_CFG_FILE = "/db/ldms.yaml"
+ETCD_FILE = "/db/etcd.yaml"
+
+
+# Edit etcd to run
+ETCD_YAML = f"""\
+cluster: {CFG_PREFIX}
+members:
+  - host: cfg1
+    port: 2379
+  - host: cfg2
+    port: 2379
+  - host: cfg3
+    port: 2379
+maestro_members:
+  - host: cfg1
+    port: 4411
+  - host: cfg2
+    port: 4411
+  - host: cfg3
+    port: 4411
+schema_registry:
+  etcd_prefix: "/headnode/schema-registry"
+  listen: "*:8080"
+  keyfile: "/db/key.pem"
+  certfile: "/db/cert.pem"
+  auth:
+    type: simple
+    users:
+     - username: someone
+       password: something
+     - username: anotherone
+       password: anotherthing
+"""
+
+# Minimal ldms.yaml to allow maestro to run
+LDMS_YAML = f"""\
+daemons:
+  - names : &sampler-daemons "localhost"
+    hosts : &sampler-hosts "localhost"
+    endpoints :
+      - names : &sampler-endpoints "localhost-ep"
+        ports : "[{LDMS_PORT}]"
+        xprt : sock
+        maestro_comm : True
+        auth :
+          name : none
+          plugin : none
+"""
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldms-daemon" : {
+            "name" : "ldmsd",
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMS_PORT, "xprt" : "sock" }
+            ],
+            "config" : [
+                "env COMPID=%component_id%",
+            ],
+        },
+        "ldms-node" : { # generic ldms node
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "ldmsd",
+                    "type" : "ldmsd",
+                    "!extends" : "ldms-daemon",
+                }
+            ]
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"cfg{i}",
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "etcd", "type" : "etcd" },
+            ],
+        } for i in [1, 2, 3]
+    ] + [
+        {
+            "hostname" : "headnode",
+            "component_id" : 0,
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+            ],
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR",
+         },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "maestro_schema_registry_test",
+                 test_desc = DESC,
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion(1, "Statuses of maestros, 1 leader + 2 followers")
+test.add_assertion(2, "Add using Python")
+test.add_assertion(3, "Add using C")
+test.add_assertion(4, "List by names using Python")
+test.add_assertion(5, "List by names using C")
+test.add_assertion(6, "List by digests using Python")
+test.add_assertion(7, "List by digests using C")
+test.add_assertion(8, "Get schema and create set using Python")
+test.add_assertion(9, "Get schema and create set using C")
+test.add_assertion(10, "Check set schemas against schema registry")
+test.add_assertion(11, "Delete usgin Python")
+test.add_assertion(12, "Delete usgin Python")
+
+
+#### Helper Functions ####
+
+def get_maestro_state(cont):
+    rc, out = cont.exec_run(f"/bin/bash -c 'pgrep -af \"python3.*maestro\"'")
+    if rc:
+        return "NOT_RUNNING"
+    out = cont.read_file("/var/log/maestro.log")
+    state = "FOLLOWER"
+    reg = re.compile(r".* state changed .* => (\w+)")
+    for l in out.splitlines():
+        m = reg.match(l)
+        if m:
+            state = m.group(1)
+    return state
+
+def get_maestro_state_tbl():
+    """Returns { "STATE": [ CONTAINERS ] }"""
+    global maestro_containers
+    tbl = dict()
+    for cont in maestro_containers:
+        st = get_maestro_state(cont)
+        ent = tbl.setdefault(st, list())
+        ent.append(cont)
+    return tbl
+
+def start_maestro(cont):
+    """Start a maestro daemon on the container `cont`"""
+    maestro_cmd = f"bash -c 'maestro --cluster {ETCD_FILE} --prefix {CFG_PREFIX} " \
+                  f" >/var/log/maestro.log 2>&1 &'"
+    rc, out = cont.exec_run(maestro_cmd)
+    assert(rc == 0)
+
+#### start ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    def rm_f(path):
+        try:
+            os.remove(path)
+        except:
+            pass
+    rm_f(DB+"/etcd.yaml")
+    rm_f(DB+"/ldms.yaml")
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+# Check maestro + maestro_ctrl
+_m = [ args.prefix+"/bin/maestro", args.prefix+"/sbin/maestro" ]
+_m_ctrl = [ args.prefix+"/bin/maestro_ctrl", args.prefix+"/sbin/maestro_ctrl" ]
+
+_m_exists = (os.path.exists(_m[0]) or os.path.exists(_m[1])) and \
+            (os.path.exists(_m_ctrl[0]) or os.path.exists(_m_ctrl[1]))
+if not _m_exists:
+    log.info("maestro and/or maestro_ctrl not found, skipping tests")
+    sys.exit()
+
+if not os.path.isdir(DB+"/containers"):
+    os.mkdir(DB+"/containers")
+
+### Write test config files ###
+etcd_cfg = open(DB+"/etcd.yaml", "w")
+etcd_cfg.write(ETCD_YAML)
+ldms_yaml = open(DB+"/ldms.yaml", "w")
+ldms_yaml.write(LDMS_YAML)
+print("---Wait for config to write to file---")
+time.sleep(10)
+etcd_cfg.close()
+ldms_yaml.close()
+
+log.info("-- Get or create cluster --")
+cluster = LDMSDCluster.get(spec['name'], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+cfg1 = cluster.get_container("cfg1")
+cfg2 = cluster.get_container("cfg2")
+cfg3 = cluster.get_container("cfg3")
+maestro_containers = [ cfg1, cfg2, cfg3 ]
+
+headnode.exec_run("mkdir -p {}".format(STORE_PATH))
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+log.info("-- making known hosts (ssh) --")
+cluster.make_known_hosts()
+
+# generate key and cert
+cmd = "openssl req -new -x509 -days 365 -noenc -out /db/cert.pem" \
+	  " -keyout /db/key.pem" \
+	  " -subj '/CN=localhost' " \
+	  " -addext 'subjectAltName = DNS:localhost,DNS:cfg1,DNS:cfg2,DNS:cfg3'"
+rc, out = headnode.exec_run(cmd)
+assert(rc == 0)
+
+# maestro_ctrl to allow maestro to run
+cmd = f"maestro_ctrl --prefix headnode --ldms_config {LDMS_CFG_FILE} --cluster {ETCD_FILE}"
+rc, out = headnode.exec_run(cmd)
+assert(rc == 0)
+
+time.sleep(5)
+
+# start 3 maestros
+start_maestro(cfg1)
+start_maestro(cfg2)
+start_maestro(cfg3)
+time.sleep(2)
+
+# test.add_assertion(1, "Statuses of maestros, 1 leader + 2 followers")
+maestro_tbl = get_maestro_state_tbl()
+maestro_stat = [ (k, len(v)) for k, v in maestro_tbl.items() ]
+maestro_stat.sort()
+expected_maestro_stat = [ ("FOLLOWER", 2), ("LEADER", 1) ]
+test.assert_test(1, maestro_stat == expected_maestro_stat, f"{maestro_stat}")
+
+def py_msr_cli(cont, *args):
+    _args = " ".join(args)
+    cmd = f"/tada-src/python/schema_registry_client.py {_args}"
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"rc: {rc}, cmd: {cmd}")
+    if out:
+        return json.loads(out)
+    return out
+
+def c_msr_cli(cont, *args):
+    _args = " ".join(args)
+    cmd = f"msr_test {_args}"
+    rc, out = cont.exec_run(cmd)
+    if rc:
+        raise RuntimeError(f"rc: {rc}, cmd: {cmd}")
+    if out:
+        return yaml.safe_load(out)
+    if out == '':
+        return {}
+    return out
+
+names_cmp   = dict()
+digests_cmp = dict()
+
+# test.add_assertion(2, "Add using Python")
+py_add_ret = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                  "-C /db/cert.pem",
+                                  "-a /tada-src/conf/schema1.json")
+test.assert_test(2, "id" in py_add_ret, py_add_ret)
+_id = py_add_ret["id"]
+name1, digest1 = _id.split("-", 1)
+names_cmp[name1] = [ _id ]
+digests_cmp[digest1] = [ _id ]
+_id1 = _id
+
+# test.add_assertion(3, "Add using C")
+c_add_ret = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                "-C /db/cert.pem",
+                                "-a") # msr_test has a pre-defined LDMS schema
+test.assert_test(3, "id" in c_add_ret, c_add_ret)
+_id = c_add_ret["id"]
+name2, digest2 = _id.split("-", 1)
+names_cmp[name2] = [ _id ]
+digests_cmp[digest2] = [ _id ]
+_id2 = _id
+
+# test.add_assertion(4, "List by names using Python")
+py_names = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                "-C /db/cert.pem",
+                                "-N")
+test.assert_test(4, names_cmp == py_names, "")
+
+# test.add_assertion(5, "List by names using C")
+c_names = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                              "-C /db/cert.pem",
+                              "-N")
+test.assert_test(5, names_cmp == c_names, "")
+
+# test.add_assertion(6, "List by digests using Python")
+py_digests = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                  "-C /db/cert.pem",
+                                  "-D")
+test.assert_test(6, digests_cmp == py_digests, "")
+
+# test.add_assertion(7, "List by digests using C")
+c_digests = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                 "-C /db/cert.pem",
+                                 "-D")
+c_digests = { k.lower(): v for k, v in c_digests.items() }
+test.assert_test(7, digests_cmp == c_digests, "")
+
+# test.add_assertion(8, "Get schema and create set using Python")
+py_ret = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                              "-C /db/cert.pem",
+                              "-x sock:411",
+                              f"-s {_id2}",
+                              "&")
+time.sleep(2)
+rc, out = headnode.exec_run("/tada-src/python/ldms_ls.py -p 411 -l")
+py_data0 = json.loads(out)
+time.sleep(2)
+rc, out = headnode.exec_run("/tada-src/python/ldms_ls.py -p 411 -l")
+py_data1 = json.loads(out)
+ts0 = py_data0['headnode/test']['timestamp']
+ts0 = ts0['sec'] + ts0['usec'] * 1e-6
+ts1 = py_data1['headnode/test']['timestamp']
+ts1 = ts1['sec'] + ts1['usec'] * 1e-6
+test.assert_test(8, ts1 > ts0, "")
+
+# test.add_assertion(9, "Get schema and create set using C")
+c_ret = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                            "-C /db/cert.pem",
+                            "-x sock:412",
+                            f"-s {_id1}",
+                            "&")
+time.sleep(2)
+rc, out = headnode.exec_run("/tada-src/python/ldms_ls.py -p 412 -l")
+c_data0 = json.loads(out)
+time.sleep(2)
+rc, out = headnode.exec_run("/tada-src/python/ldms_ls.py -p 412 -l")
+c_data1 = json.loads(out)
+ts0 = c_data0['headnode/meminfo']['timestamp']
+ts0 = ts0['sec'] + ts0['usec'] * 1e-6
+ts1 = c_data1['headnode/meminfo']['timestamp']
+ts1 = ts1['sec'] + ts1['usec'] * 1e-6
+test.assert_test(9, ts1 > ts0, "")
+
+test.add_assertion(10, "Check set schemas against schema registry")
+rc, out = headnode.exec_run("/tada-src/python/schema_check.py")
+test.assert_test(10, rc == 0, out.strip())
+
+# test.add_assertion(11, "Delete usgin Python")
+py_ret = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                              "-C /db/cert.pem",
+                              f"-d {_id2}")
+names_cmp.pop(name2)
+digests_cmp.pop(digest2)
+py_names = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                "-C /db/cert.pem", "-N")
+py_digests = py_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                  "-C /db/cert.pem", "-D")
+test.assert_test(11, names_cmp == py_names and digests_cmp == py_digests, "")
+
+# test.add_assertion(12, "Delete usgin Python")
+c_ret = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                            "-C /db/cert.pem",
+                            f"-d {_id1}")
+names_cmp.pop(name1)
+digests_cmp.pop(digest1)
+c_names = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                              "-C /db/cert.pem", "-N")
+c_digests = c_msr_cli(headnode, "-U https://someone:something@cfg1:8080",
+                                "-C /db/cert.pem", "-D")
+test.assert_test(12, names_cmp == c_names and digests_cmp == c_digests, "")
+
+# EOF ; see at_exit()

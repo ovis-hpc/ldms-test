@@ -1,0 +1,171 @@
+{
+  "schema": {
+    "digest_str": "39E8567D4EB7DA70FEC57FE8964B2CCA044546CA04C6C2F58C596860FEDAE8AF",
+    "name": "meminfo",
+    "type": "record",
+    "fields": [
+      { "name": "component_id",
+        "type": "u64"
+      },
+      { "name": "job_id",
+        "type": "u64"
+      },
+      { "name": "app_id",
+        "type": "u64"
+      },
+      { "name": "MemTotal",
+        "type": "u64"
+      },
+      { "name": "MemFree",
+        "type": "u64"
+      },
+      { "name": "MemAvailable",
+        "type": "u64"
+      },
+      { "name": "Buffers",
+        "type": "u64"
+      },
+      { "name": "Cached",
+        "type": "u64"
+      },
+      { "name": "SwapCached",
+        "type": "u64"
+      },
+      { "name": "Active",
+        "type": "u64"
+      },
+      { "name": "Inactive",
+        "type": "u64"
+      },
+      { "name": "Active(anon)",
+        "type": "u64"
+      },
+      { "name": "Inactive(anon)",
+        "type": "u64"
+      },
+      { "name": "Active(file)",
+        "type": "u64"
+      },
+      { "name": "Inactive(file)",
+        "type": "u64"
+      },
+      { "name": "Unevictable",
+        "type": "u64"
+      },
+      { "name": "Mlocked",
+        "type": "u64"
+      },
+      { "name": "SwapTotal",
+        "type": "u64"
+      },
+      { "name": "SwapFree",
+        "type": "u64"
+      },
+      { "name": "Dirty",
+        "type": "u64"
+      },
+      { "name": "Writeback",
+        "type": "u64"
+      },
+      { "name": "AnonPages",
+        "type": "u64"
+      },
+      { "name": "Mapped",
+        "type": "u64"
+      },
+      { "name": "Shmem",
+        "type": "u64"
+      },
+      { "name": "KReclaimable",
+        "type": "u64"
+      },
+      { "name": "Slab",
+        "type": "u64"
+      },
+      { "name": "SReclaimable",
+        "type": "u64"
+      },
+      { "name": "SUnreclaim",
+        "type": "u64"
+      },
+      { "name": "KernelStack",
+        "type": "u64"
+      },
+      { "name": "PageTables",
+        "type": "u64"
+      },
+      { "name": "NFS_Unstable",
+        "type": "u64"
+      },
+      { "name": "Bounce",
+        "type": "u64"
+      },
+      { "name": "WritebackTmp",
+        "type": "u64"
+      },
+      { "name": "CommitLimit",
+        "type": "u64"
+      },
+      { "name": "Committed_AS",
+        "type": "u64"
+      },
+      { "name": "VmallocTotal",
+        "type": "u64"
+      },
+      { "name": "VmallocUsed",
+        "type": "u64"
+      },
+      { "name": "VmallocChunk",
+        "type": "u64"
+      },
+      { "name": "Percpu",
+        "type": "u64"
+      },
+      { "name": "HardwareCorrupted",
+        "type": "u64"
+      },
+      { "name": "AnonHugePages",
+        "type": "u64"
+      },
+      { "name": "ShmemHugePages",
+        "type": "u64"
+      },
+      { "name": "ShmemPmdMapped",
+        "type": "u64"
+      },
+      { "name": "FileHugePages",
+        "type": "u64"
+      },
+      { "name": "FilePmdMapped",
+        "type": "u64"
+      },
+      { "name": "HugePages_Total",
+        "type": "u64"
+      },
+      { "name": "HugePages_Free",
+        "type": "u64"
+      },
+      { "name": "HugePages_Rsvd",
+        "type": "u64"
+      },
+      { "name": "HugePages_Surp",
+        "type": "u64"
+      },
+      { "name": "Hugepagesize",
+        "type": "u64"
+      },
+      { "name": "Hugetlb",
+        "type": "u64"
+      },
+      { "name": "DirectMap4k",
+        "type": "u64"
+      },
+      { "name": "DirectMap2M",
+        "type": "u64"
+      },
+      { "name": "DirectMap1G",
+        "type": "u64"
+      }
+    ]
+  }
+}
