@@ -1444,7 +1444,7 @@ class LDMSDContainer(ABC):
         VARS.update(spec)
         cmd = "ldmsd {XPRT_OPT} {AUTH_OPT}" \
               " -c {config_file} -l {log_file} -v {log_level}" \
-              " {CREDIT_OPT}".format(**VARS)
+              " {CREDIT_OPT} &".format(**VARS)
         return cmd
 
     def ldms_ls(self, *args):
