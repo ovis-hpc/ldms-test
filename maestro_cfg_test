@@ -133,7 +133,7 @@ samplers:
         interval    : "1s" # Used when starting the sampler plugin
         offset      : "0s"
         config : &simple_samp_config
-            component_id : "${{COMPID}}"
+          - component_id : "${{COMPID}}"
             perm : "0777"
 
 stores:
@@ -145,7 +145,7 @@ stores:
     plugin :
       name   : store_sos
       config :
-        path : {STORE_PATH}
+        - path : {STORE_PATH}
 """
 
 #### spec #### -------------------------------------------------------
