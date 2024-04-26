@@ -1037,6 +1037,8 @@ class XCmp(object):
                 return True
             if v0 < v1:
                 return True
+            if v0 > v1:
+                return False
         return False
 
 ADDR_PORT = re.compile(
