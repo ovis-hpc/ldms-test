@@ -139,22 +139,22 @@ test.add_assertion(18, "Passive-side term: client5 clean up")
 
 test.add_assertion(19, "server -> client overspending send")
 test.add_assertion(20, "client -> server overspending send")
-test.add_assertion(21, "verify send credits on the server")
-test.add_assertion(22, "verify send credits on the client")
+test.add_assertion(21, "verify send quota on the server")
+test.add_assertion(22, "verify send quota on the client")
 test.add_assertion(23, "server unblock, verify recv data")
 test.add_assertion(24, "client unblock, verify recv data")
-test.add_assertion(25, "verify send credits on the server")
-test.add_assertion(26, "verify send credits on the client")
-test.add_assertion(27, "server -> client send after credited back")
-test.add_assertion(28, "client -> server send after credited back")
-test.add_assertion(29, "verify send credits on the server")
-test.add_assertion(30, "verify send credits on the client")
+test.add_assertion(25, "verify send quota on the server")
+test.add_assertion(26, "verify send quota on the client")
+test.add_assertion(27, "server -> client send after get quota back")
+test.add_assertion(28, "client -> server send after get quota back")
+test.add_assertion(29, "verify send quota on the server")
+test.add_assertion(30, "verify send quota on the client")
 test.add_assertion(31, "server unblock, verify recv data")
 test.add_assertion(32, "client unblock, verify recv data")
-test.add_assertion(33, "verify send credits on the server")
-test.add_assertion(34, "verify send credits on the client")
-test.add_assertion(35, "verify send-credit deposits on the server")
-test.add_assertion(36, "verify send-credit deposits on the client")
+test.add_assertion(33, "verify send quota on the server")
+test.add_assertion(34, "verify send quota on the client")
+test.add_assertion(35, "verify send-quota deposits on the server")
+test.add_assertion(36, "verify send-quota deposits on the client")
 
 cluster = None
 test.start()
@@ -410,16 +410,16 @@ cli3.term()
 cli5.term()
 # srv already terminated
 
-def verify_send_credits(test_id, tty, expected):
-    v = pycmd(tty, "r.send_credits").strip()
+def verify_send_quota(test_id, tty, expected):
+    v = pycmd(tty, "r.send_quota").strip()
     if v != str(expected):
-        test.assert_test(test_id, False, f"Expecing {expected} send credits, "
+        test.assert_test(test_id, False, f"Expecing {expected} send quota, "
                                          f"but got {v}")
         return False
     test.assert_test(test_id, True, "OK")
     return True
 
-# === For send recv w/ credit test === #
+# === For send recv w/ quota test === #
 while True: # will break
     srv = node1.exec_interact("/bin/bash -c 'ZAP_POOLS=8 /usr/bin/python3 -i " \
                           "/tada-src/python/ldms_rail_send_recv_server.py'")
@@ -459,12 +459,12 @@ while True: # will break
     else:
         test.assert_test(20, True, "error message verified")
 
-    # test.add_assertion(21, "verify send credits on the server")
-    if not verify_send_credits(21, srv, [2]+[32]*7):
+    # test.add_assertion(21, "verify send quota on the server")
+    if not verify_send_quota(21, srv, [2]+[32]*7):
         break
 
-    # test.add_assertion(22, "verify send credits on the client")
-    if not verify_send_credits(22, cli, [2]+[32]*7):
+    # test.add_assertion(22, "verify send quota on the client")
+    if not verify_send_quota(22, cli, [2]+[32]*7):
         break
 
     # test.add_assertion(23, "server unblock, verify recv data")
@@ -491,34 +491,34 @@ while True: # will break
     else:
         test.assert_test(24, True, f"recv data verified")
 
-    # test.add_assertion(25, "verify send credits on the server")
-    if not verify_send_credits(25, srv, [32]*8):
+    # test.add_assertion(25, "verify send quota on the server")
+    if not verify_send_quota(25, srv, [32]*8):
         break
 
-    # test.add_assertion(26, "verify send credits on the client")
-    if not verify_send_credits(26, cli, [32]*8):
+    # test.add_assertion(26, "verify send quota on the client")
+    if not verify_send_quota(26, cli, [32]*8):
         break
 
-    # test.add_assertion(27, "server -> client send after credited back")
+    # test.add_assertion(27, "server -> client send after get quota back")
     srv_out = pycmd(srv, "r.send(b'b'*15)").strip()
     if srv_out != "":
         test.assert_test(27, False, f"Unexpected output: {srv_out}")
         break
     test.assert_test(27, True, f"OK")
 
-    # test.add_assertion(28, "client -> server send after credited back")
+    # test.add_assertion(28, "client -> server send after get quota back")
     cli_out = pycmd(cli, "r.send(b'b'*15)").strip()
     if cli_out != "":
         test.assert_test(28, False, f"Unexpected output: {cli_out}")
         break
     test.assert_test(28, True, f"OK")
 
-    # test.add_assertion(29, "verify send credits on the server")
-    if not verify_send_credits(29, srv, [17]+[32]*7):
+    # test.add_assertion(29, "verify send quota on the server")
+    if not verify_send_quota(29, srv, [17]+[32]*7):
         break
 
-    # test.add_assertion(30, "verify send credits on the client")
-    if not verify_send_credits(30, cli, [17]+[32]*7):
+    # test.add_assertion(30, "verify send quota on the client")
+    if not verify_send_quota(30, cli, [17]+[32]*7):
         break
 
     # test.add_assertion(31, "server unblock, verify recv data")
@@ -539,25 +539,25 @@ while True: # will break
     else:
         test.assert_test(32, True, "OK")
 
-    # test.add_assertion(33, "verify send credits on the server")
-    if not verify_send_credits(33, srv, [32]*8):
+    # test.add_assertion(33, "verify send quota on the server")
+    if not verify_send_quota(33, srv, [32]*8):
         break
 
-    # test.add_assertion(34, "verify send credits on the client")
-    if not verify_send_credits(34, cli, [32]*8):
+    # test.add_assertion(34, "verify send quota on the client")
+    if not verify_send_quota(34, cli, [32]*8):
         break
 
-    # test.add_assertion(35, "verify send-credit deposits on the server")
-    expected_credit_list = '[(17, 0), (32, 0), (32, 0)]'
-    srv_credit_list = pycmd(srv, "credit_list").strip()
-    test.assert_test(35, expected_credit_list == srv_credit_list,
-                    f"expected {expected_credit_list}, got {srv_credit_list}")
+    # test.add_assertion(35, "verify send-quota deposits on the server")
+    expected_quota_list = '[(17, 0), (32, 0), (32, 0)]'
+    srv_quota_list = pycmd(srv, "quota_list").strip()
+    test.assert_test(35, expected_quota_list == srv_quota_list,
+                    f"expected {expected_quota_list}, got {srv_quota_list}")
 
-    # test.add_assertion(36, "verify send-credit deposits on the client")
-    expected_credit_list = '[(17, 0), (32, 0), (32, 0)]'
-    cli_credit_list = pycmd(cli, "credit_list").strip()
-    test.assert_test(36, expected_credit_list == cli_credit_list,
-                    f"expected {expected_credit_list}, got {cli_credit_list}")
+    # test.add_assertion(36, "verify send-quota deposits on the client")
+    expected_quota_list = '[(17, 0), (32, 0), (32, 0)]'
+    cli_quota_list = pycmd(cli, "quota_list").strip()
+    test.assert_test(36, expected_quota_list == cli_quota_list,
+                    f"expected {expected_quota_list}, got {cli_quota_list}")
 
     break
 

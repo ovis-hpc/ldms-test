@@ -48,15 +48,15 @@ def xprt_free_cb(x):
     xprt_free_list.append(str(x))
 
 recv_data = list()
-credit_list = []
+quota_list = []
 
 def xprt_cb(x, ev, arg):
     global blocker, recv_data
     if ev.type == ldms.LDMS_XPRT_EVENT_RECV:
         recv_data.append(ev.data)
         blocker.block()
-    elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_CREDIT_DEPOSITED:
-        credit_list.append(ev.credit)
+    elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_QUOTA_DEPOSITED:
+        quota_list.append(ev.quota)
 
 PRDCR = "node-1"
 # Create a transport

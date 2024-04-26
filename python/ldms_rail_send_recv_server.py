@@ -65,7 +65,7 @@ def process_recv(x, ev, arg):
     recv_data.append(ev.data)
     blocker.block()
 
-credit_list = []
+quota_list = []
 
 def listen_cb(x, ev, arg):
     global xset
@@ -85,8 +85,8 @@ def listen_cb(x, ev, arg):
         assert(0 == "Unexpected event!")
     elif ev.type == ldms.EVENT_RECV:
         process_recv(x, ev, arg)
-    elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_CREDIT_DEPOSITED:
-        credit_list.append(ev.credit)
+    elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_QUOTA_DEPOSITED:
+        quota_list.append(ev.quota)
 
 # Listen with callback
 lx.listen(host="0.0.0.0", port=10000, cb=listen_cb, cb_arg=None)

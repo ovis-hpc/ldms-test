@@ -2969,12 +2969,11 @@ def cond_timedwait(cond, timeout=10, interval=0.1):
 def get_ldmsd_config(spec, ver=None):
     """Generate ldmsd config `str` from given spec"""
     sio = StringIO()
-	# process `default_credits`
-    c = spec.get("credits", None)
-    if c:
-        cfgcmd = f"default_credits credits={c}\n"
+    # process `default_quota`
+    q = spec.get("quota", None)
+    if q:
+        cfgcmd = f"default_quota quota={q}\n"
         sio.write(cfgcmd)
-
     # process `auth`
     for auth in spec.get("auth", []):
         _a = auth.copy() # shallow copy

@@ -208,8 +208,8 @@ test.add_assertion( 1, "Publishing oversize data results in an error")
 test.add_assertion( 2, "JSON support (l3-stream)")
 
 test.add_assertion( 3, "l3-stream delivery")
-test.add_assertion( 301, "send-credit taken")
-test.add_assertion( 302, "send-credit returned")
+test.add_assertion( 301, "send-quota taken")
+test.add_assertion( 302, "send-quota returned")
 test.add_assertion( 303, "stream delivery spread among rails")
 
 test.add_assertion( 4, "l2-stream delivery")
@@ -352,7 +352,7 @@ def py_pty_stream_publish(tty, name, stream_data, stream_type=None, perm=None, u
     if gid is not None:
         cmd += f', gid={repr(gid)}'
         kwargs['gid'] = gid
-    cmd += '); r.send_credits'
+    cmd += '); r.send_quota'
     out = tty.pycmd(cmd)
     if out.find('Traceback') == -1:
         if uid is None:
@@ -861,8 +861,8 @@ while test2: # will break
     break
 
 # test.add_assertion( 3, "l3-stream delivery")
-# test.add_assertion( 301, "send-credit taken")
-# test.add_assertion( 302, "send-credit returned")
+# test.add_assertion( 301, "send-quota taken")
+# test.add_assertion( 302, "send-quota returned")
 # test.add_assertion( 303, "stream delivery spread among rails")
 while test3: # will break
     log.info("publishing 'four' on l3-stream by pub4")
@@ -874,10 +874,10 @@ while test3: # will break
     log.info("publishing 'seven' on l3-stream by pub7")
     out7 = pub7.stream_publish('l3-stream', 'seven')
 
-    full_credit = [128]
+    full_quota = [128]
 
     cr4a = eval(out4.strip())
-    test.assert_test(301, cr4a < full_credit, f"credits: {cr4a}")
+    test.assert_test(301, cr4a < full_quota, f"quota: {cr4a}")
 
     log.info('obtaining all client data (0)')
     all_cdata0 = get_all_cdata()
@@ -888,10 +888,10 @@ while test3: # will break
     log.info('obtaining all client data (3)')
     all_cdata3 = get_all_cdata()
 
-    out4 = pub4.pycmd("r.send_credits")
+    out4 = pub4.pycmd("r.send_quota")
     cr4b = eval(out4.strip())
 
-    test.assert_test(302, cr4b == full_credit, f"credits: {cr4b}")
+    test.assert_test(302, cr4b == full_quota, f"quota: {cr4b}")
 
     e4 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='four')
     e5 = SData(name = 'l3-stream', uid=0, gid=0, is_json=0, data='five')
