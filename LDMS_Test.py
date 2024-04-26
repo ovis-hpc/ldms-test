@@ -1079,6 +1079,23 @@ class LdmsAddr(XCmp):
             return socket.inet_ntop(self.family, self.addr)
         return self.addr
 
+    def as_ipv6(self):
+        if self.family == 10:
+            return self
+        a6 = (b'\x00'*10) + (b'\xff'*2) + self.addr
+        return LdmsAddr(10, self.port, a6)
+
+    def xeq(self, other):
+        s = self.as_ipv6()
+        o = other.as_ipv6()
+        return super(s.__class__, s).xeq(o)
+
+    def __lt__(self, other):
+        s = self.as_ipv6()
+        o = other.as_ipv6()
+        return super(s.__class__, s).__lt__(o)
+
+
 @dataclass()
 class TimeSpec(XCmp):
     tv_sec:  int = None
