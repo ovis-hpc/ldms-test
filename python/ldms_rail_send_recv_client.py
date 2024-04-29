@@ -50,6 +50,13 @@ def xprt_free_cb(x):
 recv_data = list()
 quota_list = []
 
+def stream_cb(sc, sdata, arg):
+    global blocker, recv_data
+    recv_data.append(sdata.raw_data)
+    blocker.block()
+
+sc = ldms.StreamClient('.*', True, stream_cb, None)
+
 def xprt_cb(x, ev, arg):
     global blocker, recv_data
     if ev.type == ldms.LDMS_XPRT_EVENT_RECV:

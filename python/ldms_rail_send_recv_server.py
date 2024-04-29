@@ -88,6 +88,13 @@ def listen_cb(x, ev, arg):
     elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_QUOTA_DEPOSITED:
         quota_list.append(ev.quota)
 
+def stream_cb(sc, sdata, arg):
+    global blocker, recv_data
+    recv_data.append(sdata.raw_data)
+    blocker.block()
+
+sc = ldms.StreamClient('.*', True, stream_cb, None)
+
 # Listen with callback
 lx.listen(host="0.0.0.0", port=10000, cb=listen_cb, cb_arg=None)
 

@@ -434,10 +434,10 @@ while True: # will break
     pycmd(srv, "r = xset[0]")
 
     # test.add_assertion(19, "server -> client overspending send")
-    srv_out1 = pycmd(srv, "r.send(b'a'*15)").strip()
-    srv_out2 = pycmd(srv, "r.send(b'a'*15)").strip()
-    srv_out3 = pycmd(srv, "r.send(b'a'*15)").strip()
-    if srv_out1 != "" or srv_out2 != "" or srv_out3.find("ENOBUFS") == -1:
+    srv_out1 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
+    srv_out2 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
+    srv_out3 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
+    if srv_out1 != "" or srv_out2 != "" or srv_out3.find("rc: 105") == -1:
         test.assert_test(19, False, f"Unexpected output:\n"
                                     f"srv_out1: {srv_out1}\n"
                                     f"srv_out2: {srv_out2}\n"
@@ -447,10 +447,10 @@ while True: # will break
         test.assert_test(19, True, "error message verified")
 
     # test.add_assertion(20, "client -> server overspending send")
-    cli_out1 = pycmd(cli, "r.send(b'a'*15)").strip()
-    cli_out2 = pycmd(cli, "r.send(b'a'*15)").strip()
-    cli_out3 = pycmd(cli, "r.send(b'a'*15)").strip()
-    if cli_out1 != "" or cli_out2 != "" or cli_out3.find("ENOBUFS") == -1:
+    cli_out1 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
+    cli_out2 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
+    cli_out3 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
+    if cli_out1 != "" or cli_out2 != "" or cli_out3.find("rc: 105") == -1:
         test.assert_test(20, False, f"Unexpected output:\n"
                                     f"cli_out1: {cli_out1}\n"
                                     f"cli_out2: {cli_out2}\n"
@@ -460,11 +460,11 @@ while True: # will break
         test.assert_test(20, True, "error message verified")
 
     # test.add_assertion(21, "verify send quota on the server")
-    if not verify_send_quota(21, srv, [2]+[32]*7):
+    if not verify_send_quota(21, srv, [0]+[32]*7):
         break
 
     # test.add_assertion(22, "verify send quota on the client")
-    if not verify_send_quota(22, cli, [2]+[32]*7):
+    if not verify_send_quota(22, cli, [0]+[32]*7):
         break
 
     # test.add_assertion(23, "server unblock, verify recv data")
@@ -500,25 +500,25 @@ while True: # will break
         break
 
     # test.add_assertion(27, "server -> client send after get quota back")
-    srv_out = pycmd(srv, "r.send(b'b'*15)").strip()
+    srv_out = pycmd(srv, "r.stream_publish('', b'b'*15)").strip()
     if srv_out != "":
         test.assert_test(27, False, f"Unexpected output: {srv_out}")
         break
     test.assert_test(27, True, f"OK")
 
     # test.add_assertion(28, "client -> server send after get quota back")
-    cli_out = pycmd(cli, "r.send(b'b'*15)").strip()
+    cli_out = pycmd(cli, "r.stream_publish('', b'b'*15)").strip()
     if cli_out != "":
         test.assert_test(28, False, f"Unexpected output: {cli_out}")
         break
     test.assert_test(28, True, f"OK")
 
     # test.add_assertion(29, "verify send quota on the server")
-    if not verify_send_quota(29, srv, [17]+[32]*7):
+    if not verify_send_quota(29, srv, [16]+[32]*7):
         break
 
     # test.add_assertion(30, "verify send quota on the client")
-    if not verify_send_quota(30, cli, [17]+[32]*7):
+    if not verify_send_quota(30, cli, [16]+[32]*7):
         break
 
     # test.add_assertion(31, "server unblock, verify recv data")
@@ -548,13 +548,13 @@ while True: # will break
         break
 
     # test.add_assertion(35, "verify send-quota deposits on the server")
-    expected_quota_list = '[(17, 0), (32, 0), (32, 0)]'
+    expected_quota_list = '[(16, 0), (32, 0), (32, 0)]'
     srv_quota_list = pycmd(srv, "quota_list").strip()
     test.assert_test(35, expected_quota_list == srv_quota_list,
                     f"expected {expected_quota_list}, got {srv_quota_list}")
 
     # test.add_assertion(36, "verify send-quota deposits on the client")
-    expected_quota_list = '[(17, 0), (32, 0), (32, 0)]'
+    expected_quota_list = '[(16, 0), (32, 0), (32, 0)]'
     cli_quota_list = pycmd(cli, "quota_list").strip()
     test.assert_test(36, expected_quota_list == cli_quota_list,
                     f"expected {expected_quota_list}, got {cli_quota_list}")
