@@ -889,8 +889,8 @@ def py_pty(node, script_path, user = None):
         shell = f"/bin/bash"
     cmd = f"{shell} -c '{_cmd}'"
     _pty = node.exec_interact(cmd)
-    time.sleep(2)
-    _out = _pty.read()
+    # time.sleep(2)
+    _out = _pty.read(idle_timeout = 0.2)
     EXPECT(_out, ">>> ")
     _pty.pycmd = MethodType(pycmd, _pty)
     return _pty
