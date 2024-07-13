@@ -874,7 +874,7 @@ while test3: # will break
     log.info("publishing 'seven' on l3-stream by pub7")
     out7 = pub7.stream_publish('l3-stream', 'seven')
 
-    full_credit = 4*[128]
+    full_credit = [128]
 
     cr4a = eval(out4.strip())
     test.assert_test(301, cr4a < full_credit, f"credits: {cr4a}")

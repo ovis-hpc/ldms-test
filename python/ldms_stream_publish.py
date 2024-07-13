@@ -10,4 +10,4 @@ import sys
 from ovis_ldms import ldms
 from ldms_stream_common import *
 
-r = stream_connect(HOSTNAME)
+r = stream_connect(HOSTNAME, rail_eps = 1)
