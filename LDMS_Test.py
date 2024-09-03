@@ -821,8 +821,11 @@ def EXPECT(val, expected):
     if val != expected:
         raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
 
-def pycmd(tty, cmd, retry = 3):
-    """cmd must be single command w/o new line"""
+def pycmd(tty, cmd, retry=3):
+    return icmd(tty, cmd, prompt=">>> ", retry=retry)
+
+def icmd(tty, cmd, prompt, retry = 3, idle_timeout = 0.1):
+    """interactive command"""
     global loggger
     log = logger
     _begin = time.time()
@@ -830,7 +833,7 @@ def pycmd(tty, cmd, retry = 3):
     tty.write(cmd)
     _mark0 = time.time()
     # flush the echo
-    while tty.read(idle_timeout = 0.1) != '':
+    while tty.read(idle_timeout = idle_timeout) != '':
         continue
     _mark1 = time.time()
     # ENTER to execute
@@ -843,33 +846,33 @@ def pycmd(tty, cmd, retry = 3):
     _count = 0 # for debugging
     while count < retry and not end:
         _count += 1
-        o = tty.read(idle_timeout=0.1)
+        o = tty.read(idle_timeout=idle_timeout)
         if len(o):
             count = 0 # reset
         else:
             count += 1
         sio.write(o)
-        if sio.getvalue().endswith(">>> "):
+        if sio.getvalue().endswith(prompt):
             t1 = time.time()
             # print(f"HERE; count: {count}; _count: {_count}; dt: {t1 - t0}")
             end = True
             break
     _mark4 = time.time()
     if not end:
-        raise RuntimeError("Python '{cmd}` not responding".format(**vars()))
+        raise RuntimeError("Command '{cmd}` not responding".format(**vars()))
     o = sio.getvalue()
     D.pyout = o
     _end = time.time()
     if False:
-        log.info(f"[pycmd] t1-t0: {t1-t0} secs")
-        log.info(f"[pycmd] begin-to-end: {_end - _begin} secs")
-        log.info(f"[pycmd] _mark0: {_mark0 - _begin:.3f} secs")
-        log.info(f"[pycmd] _mark1: {_mark1 - _begin:.3f} secs")
-        log.info(f"[pycmd] _mark2: {_mark2 - _begin:.3f} secs")
-        log.info(f"[pycmd] _mark3: {_mark3 - _begin:.3f} secs")
-        log.info(f"[pycmd] _mark4: {_mark4 - _begin:.3f} secs")
+        log.info(f"[icmd] t1-t0: {t1-t0} secs")
+        log.info(f"[icmd] begin-to-end: {_end - _begin} secs")
+        log.info(f"[icmd] _mark0: {_mark0 - _begin:.3f} secs")
+        log.info(f"[icmd] _mark1: {_mark1 - _begin:.3f} secs")
+        log.info(f"[icmd] _mark2: {_mark2 - _begin:.3f} secs")
+        log.info(f"[icmd] _mark3: {_mark3 - _begin:.3f} secs")
+        log.info(f"[icmd] _mark4: {_mark4 - _begin:.3f} secs")
     # remove the echoed cmd and the prompt
-    return o[ 2 : -4 ]
+    return o[ 2 : -len(prompt) ]
 
 def py_pty(node, script_path, user = None):
     global loggger
@@ -900,6 +903,23 @@ class PyPty(object):
         """Issue a `cmd` to the Python PTY and returns the output"""
         return pycmd(self.pty, cmd, retry)
 
+class ControllerPty(object):
+    """ControllerPty(node, host="localhost", port=411)
+
+    PTY for `ldmsd_controller`
+    """
+    def __init__(self, node, host="localhost", port=411,
+                       auth="none", auth_opts=dict()):
+        self.node = node
+        self.pty_cmd = f"ldmsd_controller -h {host} -p {port} -a {auth}"
+        self.pty = node.exec_interact(self.pty_cmd)
+        # get the prompt
+        self._pre_prompt = self.pty.read()
+        self.prompt = self._pre_prompt.removeprefix( \
+                                'Welcome to the LDMSD control processor\r\n')
+
+    def cmd(self, cmd, retry = 3):
+        return icmd(self.pty, cmd, self.prompt, retry=retry, idle_timeout=0.3)
 
 class StreamData(object):
     """StreamData representation"""
