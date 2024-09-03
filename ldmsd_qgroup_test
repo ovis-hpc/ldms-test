@@ -1,0 +1,485 @@
+#!/usr/bin/python3
+#
+# Test LDMS quota group (qgroup) feature with `ldmsd`
+
+import os
+import io
+import re
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from python.ldms_qgroup_common import QGROUP, parse_log
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, PyPty, ControllerPty
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test ldms_qgroup feature with ldmsd")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+QUOTA_SAMP = 32 # default recv quota at samp
+QUOTA_AGG1 = 32 # default recv quota at agg1
+
+# the listen object for ldmsd cfg
+LISTEN = { "port" : LDMSD_PORT, "xprt" : "sock", "auth" : "munge" }
+
+#### spec #### -------------------------------------------------------
+
+NODES = [ f"samp{i}" for i in range(1, 7) ] + \
+        [ f"agg1{i}" for i in range(1, 4) ] + \
+        [ "agg2" ]
+
+def munge_key(node):
+    return '0'*1024
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_rail test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "ldmsd" : {
+            "type" : "ldmsd",
+            "auth" : [
+                { "name" : "munge" },
+            ],
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock", "auth" : "munge" },
+            ],
+        },
+    }, # templates
+    # TODO complete the nodes
+    "nodes" : [
+        # sampler nodes
+        {
+            "hostname" : f"samp{i}",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "key"  : munge_key(f"samp{i}"),
+                },
+                {
+                    "name" : "samp",
+                    "!extends" : "ldmsd",
+                    "quota" :  str(QUOTA_SAMP),
+                    # no sampler, only serve stream from app data
+                },
+            ],
+        } for i in range(1, 7)
+    ] + [
+        # agg L1
+        {
+            "hostname" : f"agg1{i}",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "key"  : munge_key(f"agg1{i}"),
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd",
+                    "quota" :  str(QUOTA_AGG1),
+                    "offset" : 0,
+                    "prdcrs" : [
+                        {
+                            "name" : f"samp{2*(i-1)+j}",
+                            "host" : f"samp{2*(i-1)+j}",
+                            "xprt" : "sock",
+                            "port" : LDMSD_PORT,
+                            "type" : "active",
+                            "auth" : "munge",
+                            "interval" : "1000000",
+                        } for j in [1, 2]
+                    ],
+                    "config" : [
+                        "prdcr_subscribe regex=.* stream=.*",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
+            ],
+        } for i in [1, 2, 3]
+    ] + [
+        # agg L2
+        {
+            "hostname" : "agg2",
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "munged",
+                    "type" : "munged",
+                    "key"  : munge_key(f"agg2"),
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd",
+                    "offset" : 400000,
+                    "prdcrs" : [
+                        {
+                            "name" : f"agg1{i}",
+                            "host" : f"agg1{i}",
+                            "xprt" : "sock",
+                            "port" : LDMSD_PORT,
+                            "type" : "active",
+                            "auth" : "munge",
+                            "interval" : "1000000",
+                        } for i in [1, 2, 3]
+                    ],
+                    "samplers": [
+                        {
+                            "plugin" : "stream_dump",
+                            "interval" : 1000000,
+                            "offset" : 0,
+                            "config" : [
+                                "op=subscribe",
+                                "stream=.*",
+                                "path=/var/log/stream.dump",
+                            ],
+                            "start" : False,
+                        }
+                    ],
+                    "config" : [
+                        "prdcr_subscribe regex=.* stream=.*",
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=1000000 offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all"
+                    ],
+                },
+            ],
+        }
+    ],
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_qgroup_test",
+                 test_desc = "Test quota group feature",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+test.add_assertion( 1, "Throughput without limit")
+test.add_assertion( 2, "Data received after quota")
+test.add_assertion( 3, "Throughput with limit")
+test.add_assertion( 4, "Check data loss")
+test.add_assertion( 5, "Check starvation")
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+# nodes
+
+samp1 = cluster.get_container("samp1")
+samp2 = cluster.get_container("samp2")
+samp3 = cluster.get_container("samp3")
+samp4 = cluster.get_container("samp4")
+samp5 = cluster.get_container("samp5")
+samp6 = cluster.get_container("samp6")
+
+agg11 = cluster.get_container("agg11")
+agg12 = cluster.get_container("agg12")
+agg13 = cluster.get_container("agg13")
+
+agg2  = cluster.get_container("agg2")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure daemons are up")
+time.sleep(2)
+
+def qgroup_start(pty:ControllerPty):
+    pty.cmd(f"qgroup_start")
+
+def qgroup_config(pty:ControllerPty):
+    pty.cmd(f"qgroup_config quota={QGROUP.CFG_QUOTA}" \
+            f" reset_interval={QGROUP.CFG_RESET_USEC/1e6}s" \
+            f" ask_interval={QGROUP.CFG_ASK_USEC/1e6}s" \
+            f" ask_amount={QGROUP.CFG_ASK_AMOUNT}" \
+            f" ask_mark={QGROUP.CFG_ASK_MARK}" )
+
+def qgroup_member_add(pty:ControllerPty, member_hosts:list):
+    for h in member_hosts:
+        pty.cmd(f"qgroup_member_add host={h} port=411 xprt=sock auth=munge")
+
+# ldmsd_controller to agg L1
+ctrl_agg11 = ControllerPty(agg11, auth="munge")
+ctrl_agg12 = ControllerPty(agg12, auth="munge")
+ctrl_agg13 = ControllerPty(agg13, auth="munge")
+
+# start app's
+PY_APP_CMD  = "/tada-src/python/ldms_qgroup_app.py"
+py_app1 = PyPty(samp1, PY_APP_CMD)
+py_app2 = PyPty(samp2, PY_APP_CMD)
+py_app3 = PyPty(samp3, PY_APP_CMD)
+py_app4 = PyPty(samp4, PY_APP_CMD)
+py_app5 = PyPty(samp5, PY_APP_CMD)
+py_app6 = PyPty(samp6, PY_APP_CMD)
+
+py_apps = [ py_app1, py_app2, py_app3, py_app4, py_app5, py_app6 ]
+
+time.sleep(1)
+
+log.info("-- starting app publisher --")
+for p in py_apps:
+    p.cmd('p.start()')
+
+log.info("-- Wait a minute to get data flow (without limit) --")
+time.sleep(60)
+
+# Config & start qgroup
+qgroup_config(ctrl_agg11)
+qgroup_config(ctrl_agg12)
+qgroup_config(ctrl_agg13)
+qgroup_member_add(ctrl_agg11, [ "agg12", "agg13" ])
+qgroup_member_add(ctrl_agg12, [ "agg11", "agg13" ])
+qgroup_member_add(ctrl_agg13, [ "agg11", "agg12" ])
+qgroup_start(ctrl_agg11)
+qgroup_start(ctrl_agg12)
+qgroup_start(ctrl_agg13)
+for p in py_apps:
+    p.cmd('slog.info("== qgroup begin ==")')
+
+log.info("-- Wait a minute to get data flow (with limit) --")
+time.sleep(60)
+
+log.info("-- stopping app publisher --")
+for p in py_apps:
+    p.cmd('p.stop()')
+
+log.info("-- wait a bit to make sure the published data is flushed --")
+time.sleep(5)
+
+cfg_bps = 3 * QGROUP.CFG_QUOTA / (QGROUP.CFG_RESET_USEC * 1e-6)
+
+
+SDUMP_RE = re.compile(r"""
+        \x01 # record prefix
+        (?P<msg_len>\d+): # the msg length
+        \ (?P<recv_data>.*)
+        """, re.X)
+
+def parse_stream_dump(l):
+    m = SDUMP_RE.match(l)
+    return m.groupdict()
+
+
+log.info("-- collecting logs --")
+
+# collect messages from app and agg2
+app_data = list()
+rcv_data = list()
+before_msgs = list()
+after_msgs = list()
+after_count = list()
+
+samp_msgs = list()
+for samp in [ samp1, samp2, samp3, samp4, samp5, samp6 ]:
+    out = samp.read_file('/var/log/app.log')
+    msgs = [ parse_log(l) for l in out.splitlines() ]
+    samp_msgs.append(msgs)
+
+agg2_out = agg2.read_file('/var/log/stream.dump')
+agg2_msgs = [ parse_stream_dump(l) for l in agg2_out.splitlines() ]
+
+idx = 0
+for msgs in samp_msgs:
+    lst = before_msgs # messages before qgroup
+    do_count = False
+    count = 0
+    for m in msgs:
+        o = m.get('other')
+        if o and 'qgroup begin' in o:
+            # switch to 'after_msgs' after 'qgroup begin'
+            lst = after_msgs
+            do_count = True
+        if m.get('pub_name') == 'app':
+            app_data.append(m.get('pub_data'))
+            lst.append(m)
+            count += do_count
+    after_count.append(count)
+
+for m in agg2_msgs:
+    rcv_data.append(m.get('recv_data'))
+
+app_data.sort()
+rcv_data.sort()
+before_msgs.sort(key = lambda x: x['ts'])
+after_msgs.sort(key = lambda x: x['ts'])
+
+def parse_time(s):
+    s = s.split('.') + ['000']
+    s0, s1 = s[:2]
+    t0 = time.strptime(s0, "%Y-%m-%d %H:%M:%S")
+    t1 = int(s1) / 1e3
+    return time.mktime(t0) + t1
+
+def msgs_bytes(msgs):
+    return sum(map(lambda x: len(x['pub_name']) + len(x['pub_data']) + 2, msgs))
+
+bt0 = parse_time(before_msgs[0]['ts'])
+bt1 = parse_time(before_msgs[-1]['ts'])
+bbt = msgs_bytes(before_msgs)
+bbps = bbt / (bt1 - bt0)
+at0 = parse_time(after_msgs[0]['ts'])
+at1 = parse_time(after_msgs[-1]['ts'])
+abt = msgs_bytes(after_msgs)
+abps = abt / (at1 - at0)
+
+
+#test.add_assertion( 1, "Throughput without limit")
+while True: # will break
+    if bbps < cfg_bps:
+        test.assert_test(1, False,
+                f"Throughput too low: bps({bbps:.2f}) < cfg_bps({cfg_bps:.2f})")
+        break
+    counts = { f"samp{i+1}": 0 for i in range(0, 6) }
+    for m in before_msgs:
+        data = m['pub_data']
+        node = data.split(' - ')[0]
+        counts[node] += 1
+    for k, v in counts.items():
+        if not v:
+            test.assert_test(1, False, f"Missing data from {k}")
+            break
+    else:
+        test.assert_test(1, True, f"bps: {bbps:.2f}, OK")
+    break
+
+#test.add_assertion( 2, "Data received after quota")
+while True:
+    for c in after_count:
+        if not c:
+            test.assert_test(2, False,
+                f"message not delivered after quota, count by source: {after_count}")
+            break
+    else:
+        test.assert_test(2, True, "OK")
+    break
+
+#test.add_assertion( 3, "Throughput with limit")
+while True: # will break
+    if abps > cfg_bps:
+        test.assert_test(3, False, f"bps({abps:.2f}) exceeds cfg_bps({cfg_bps:.2f})")
+        break
+    counts = { f"samp{i+1}": 0 for i in range(0, 6) }
+    for m in after_msgs:
+        data = m['pub_data']
+        node = data.split(' - ')[0]
+        counts[node] += 1
+    for k, v in counts.items():
+        if not v:
+            test.assert_test(3, False, f"Missing data from {k}")
+            break
+    else:
+        test.assert_test(3, True, f"bps: {abps:.2f}, OK")
+    break
+
+#test.add_assertion( 4, "Check data loss")
+while True: # will break
+    if app_data != rcv_data:
+        test.assert_test( 4, False, "data missing")
+    test.assert_test( 4, True, "No data missing")
+    break
+
+#test.add_assertion( 5, "Check starvation")
+while True:
+    mx = max(after_count)
+    thr = mx * 0.1
+    df = [ mx - v for v in after_count ]
+    for d in df:
+        if d > thr:
+            test.assert_test( 5, False,
+                f"starvation detected, message count by src: {after_count}")
+            break
+    else:
+        test.assert_test( 5, True, "OK")
+    break
