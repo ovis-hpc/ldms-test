@@ -18,7 +18,7 @@ from io import StringIO, BytesIO
 from distutils.version import LooseVersion
 
 from LDMS_Test import cached_property, LDMSDContainerTTY, LDMSDContainer, \
-                      LDMSDCluster, Spec, env_dict, cs_rm
+                      LDMSDCluster, Spec, env_dict, cs_rm, G
 
 # `D` Debug object to store values for debugging
 class Debug(object): pass
@@ -636,6 +636,7 @@ class DockerCluster(LDMSDCluster):
                 cont_env = dict(env) # shallow copy env
                 cont_name = "{}-{}".format(name, node)
                 tmpfs = None
+                atstart = G.conf["ldms-test"]["atstart"]
                 try:
                     spec_nodes = spec["nodes"]
                     for _n in spec_nodes:
@@ -645,6 +646,7 @@ class DockerCluster(LDMSDCluster):
                             cont_volumes = _n.get("mounts", volumes)
                             _cont_env = _n.get("env", env)
                             cont_env.update(_cont_env)
+                            atstart = _n.get("atstart", atstart)
                             break
                 except:
                     pass
@@ -669,6 +671,7 @@ class DockerCluster(LDMSDCluster):
                             )
                         ],
                         tmpfs = tmpfs,
+                        atstart = atstart,
                     )
                 #if not subnet:
                 #    cont_param["network"] = name
@@ -690,6 +693,7 @@ class DockerCluster(LDMSDCluster):
         # then, create the actual containers
         first = True
         for cl, params in cont_build:
+            atstart = params.pop('atstart')
             _retry = 3
             while _retry:
                 cont = cl.containers.create(**params)
@@ -698,10 +702,27 @@ class DockerCluster(LDMSDCluster):
                     net.connect(cont, ipv4_address=str(ip_addr))
                 else:
                     net.connect(cont)
+                if atstart:
+                    import tarfile
+                    from io import BytesIO
+                    b = BytesIO()
+                    t = tarfile.open(mode="w", fileobj=b)
+                    def tfltr(ti: tarfile.TarInfo):
+                        ti.uid = 0
+                        ti.gid = 0
+                        ti.uname = "root"
+                        ti.gname = "root"
+                        return ti
+                    t.add(atstart, "atstart.sh",filter=tfltr)
+                    t.close()
+                    cont.put_archive("/", b.getvalue())
                 try:
                     cont.start()
+                    if atstart:
+                        cont.exec_run("/bin/bash /atstart.sh")
                     break # succeeded, no more retry
                 except:
+                    raise
                     _retry -= 1
                     if not _retry:
                         raise
