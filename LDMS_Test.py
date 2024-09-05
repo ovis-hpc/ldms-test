@@ -399,6 +399,7 @@ def process_config_file(path = None):
                 "debug": 0,
                 "mount": "",
                 "image": "ovis-centos-build",
+                "atstart": None,
                 },
             "docker": {
                 },
