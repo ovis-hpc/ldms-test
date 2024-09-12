@@ -91,11 +91,6 @@ static const char *usage(struct ldmsd_plugin *self)
 		"     output    The path to a file to dump stream output to.\n";
 }
 
-static ldms_set_t get_set(struct ldmsd_sampler *self)
-{
-	return NULL;
-}
-
 static int sample(struct ldmsd_sampler *self)
 {
 	return 0;
@@ -175,7 +170,6 @@ static struct ldmsd_sampler test_stream_sampler = {
 		.config = config,
 		.usage = usage,
 	},
-	.get_set = get_set,
 	.sample = sample
 };
 
