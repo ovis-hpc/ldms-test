@@ -156,6 +156,8 @@ test.add_assertion(34, "verify send quota on the client")
 test.add_assertion(35, "verify send-quota deposits on the server")
 test.add_assertion(36, "verify send-quota deposits on the client")
 
+test.add_assertion(37, "Passive endpoint recv_quota override")
+
 cluster = None
 test.start()
 
@@ -432,6 +434,29 @@ while True: # will break
     EXPECT(srv_out, ">>> ")
     EXPECT(cli_out, ">>> ")
     pycmd(srv, "r = xset[0]")
+
+    # test.add_assertion(37, "Passive endpoint recv_quota override")
+    srv_out = pycmd(srv, "r.recv_quota").strip()
+    srv_exp = "32"
+    if srv_out != srv_exp:
+        test.assert_test(37, False, f"expecting srv r.recv_quota to be"
+                                    f" {srv_exp}, but got {srv_out}")
+        break
+
+    srv_out = pycmd(srv, "lx.recv_quota").strip()
+    srv_exp = "128"
+    if srv_out != srv_exp:
+        test.assert_test(37, False, f"expecting srv lx.recv_quota to be"
+                                    f" {srv_exp}, but got {srv_out}")
+        break
+
+    cli_out = pycmd(cli, "r.send_quota").strip()
+    cli_exp =  str([32]*8)
+    if srv_out != srv_exp:
+        test.assert_test(37, False, f"expecting cli r.send_quota to be"
+                                    f" {cli_exp}, but got {cli_out}")
+        break
+    test.assert_test(37, True, "verified on both cli and srv")
 
     # test.add_assertion(19, "server -> client overspending send")
     srv_out1 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
