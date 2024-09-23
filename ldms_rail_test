@@ -411,7 +411,7 @@ cli5.term()
 # srv already terminated
 
 def verify_send_quota(test_id, tty, expected):
-    v = pycmd(tty, "r.send_quota").strip()
+    v = pycmd(tty, "q = list(r.send_quota) ; q.sort(); q").strip()
     if v != str(expected):
         test.assert_test(test_id, False, f"Expecing {expected} send quota, "
                                          f"but got {v}")
@@ -548,16 +548,16 @@ while True: # will break
         break
 
     # test.add_assertion(35, "verify send-quota deposits on the server")
-    expected_quota_list = '[(16, 0), (32, 0), (32, 0)]'
-    srv_quota_list = pycmd(srv, "quota_list").strip()
-    test.assert_test(35, expected_quota_list == srv_quota_list,
-                    f"expected {expected_quota_list}, got {srv_quota_list}")
+    expected_quota_amount_list = '[16, 32, 32]'
+    srv_quota_amount_list = pycmd(srv, "quota_amount_list").strip()
+    test.assert_test(35, expected_quota_amount_list == srv_quota_amount_list,
+        f"expected {expected_quota_amount_list}, got {srv_quota_amount_list}")
 
     # test.add_assertion(36, "verify send-quota deposits on the client")
-    expected_quota_list = '[(16, 0), (32, 0), (32, 0)]'
-    cli_quota_list = pycmd(cli, "quota_list").strip()
-    test.assert_test(36, expected_quota_list == cli_quota_list,
-                    f"expected {expected_quota_list}, got {cli_quota_list}")
+    expected_quota_amount_list = '[16, 32, 32]'
+    cli_quota_amount_list = pycmd(cli, "quota_amount_list").strip()
+    test.assert_test(36, expected_quota_amount_list == cli_quota_amount_list,
+        f"expected {expected_quota_amount_list}, got {cli_quota_amount_list}")
 
     break
 

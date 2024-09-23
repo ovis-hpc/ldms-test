@@ -49,6 +49,7 @@ def xprt_free_cb(x):
 
 recv_data = list()
 quota_list = []
+quota_amount_list = []
 
 def stream_cb(sc, sdata, arg):
     global blocker, recv_data
@@ -64,6 +65,7 @@ def xprt_cb(x, ev, arg):
         blocker.block()
     elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_QUOTA_DEPOSITED:
         quota_list.append(ev.quota)
+        quota_amount_list.append(ev.quota.quota)
 
 PRDCR = "node-1"
 # Create a transport

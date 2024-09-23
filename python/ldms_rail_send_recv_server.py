@@ -66,6 +66,7 @@ def process_recv(x, ev, arg):
     blocker.block()
 
 quota_list = []
+quota_amount_list = []
 
 def listen_cb(x, ev, arg):
     global xset
@@ -87,6 +88,7 @@ def listen_cb(x, ev, arg):
         process_recv(x, ev, arg)
     elif ev.type == ldms.LDMS_XPRT_EVENT_SEND_QUOTA_DEPOSITED:
         quota_list.append(ev.quota)
+        quota_amount_list.append(ev.quota.quota)
 
 def stream_cb(sc, sdata, arg):
     global blocker, recv_data
