@@ -18,6 +18,7 @@ libc = ctypes.CDLL(None)
 libc.prctl(1, 1)
 
 SET_RECV_QUOTA = 32
+SET_RECV_RATE_LIMIT = 1000000
 
 # Create a transport
 lx = ldms.Xprt(auth="munge", rail_eps=8, rail_recv_limit = 128)
@@ -80,6 +81,7 @@ def listen_cb(x, ev, arg):
         xset.append(x)
         x.set_xprt_free_cb(xprt_free_cb)
         x.recv_quota = SET_RECV_QUOTA
+        x.recv_rate_limit = SET_RECV_RATE_LIMIT
     elif ev.type == ldms.EVENT_DISCONNECTED:
         # also asserting that this is the transport from the earlier CONNECTED
         # event.
