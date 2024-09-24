@@ -49,9 +49,8 @@ x.connect("localhost", 411, cb=cbfn, cb_arg=x)
 
 
 class Publisher(object):
-    def __init__(self, x:ldms.Xprt, name, n, interval):
+    def __init__(self, x:ldms.Xprt, name, interval):
         self.x = x
-        self.n = n
         self.name = name
         self.interval = interval
         self.thr = None
@@ -107,4 +106,4 @@ class Publisher(object):
         self.lock.release()
         self.thr.join()
 
-p = Publisher(x, name='app', n=2, interval=0.25)
+p = Publisher(x, name='app', interval=0.1)

@@ -124,6 +124,7 @@ test.add_assertion( 2, "Data received after quota")
 test.add_assertion( 3, "Throughput with limit")
 test.add_assertion( 4, "Check data loss")
 test.add_assertion( 5, "Check starvation")
+test.add_assertion( 6, "Single publisher saturation test")
 
 cluster = None
 test.start()
@@ -343,4 +344,30 @@ while True:
             break
     else:
         test.assert_test( 5, True, "OK")
+    break
+
+#test.add_assertion( 6, "Single publisher saturation test")
+while True:
+    p = py_app1
+    log.info("-- ramp up app1 for saturation test --")
+    p.cmd('p.interval = 0.025')
+    log.info("-- starting app1 publisher again (for saturation test) --")
+    p.cmd('p.start()')
+    log.info("-- Wait a minute to get data flow (with limit) --")
+    time.sleep(60)
+    out2 = py_agg2.cmd('st.details()')
+    log.info("-- stopping app1 publisher --")
+    p.cmd('p.stop()')
+    sat_bps = cfg_bps - 2*QGROUP.CFG_ASK_MARK
+    sat_bps_80 = 0.8 * sat_bps
+    o2 = eval(out2)
+    bps30 = o2[30][0] / 30
+    if bps30 < sat_bps_80 or sat_bps < bps30:
+        test.assert_test( 6, False, f"bad saturation bps: {bps30} fall out of"
+                                    f" expected range [{sat_bps_80}, {sat_bps}]"
+                                    f" (cfg_bps: {cfg_bps})")
+        break
+    test.assert_test( 6, True, f"good saturation bps: {bps30} in"
+                               f" expected range [{sat_bps_80}, {sat_bps}]"
+                               f" (cfg_bps: {cfg_bps})")
     break

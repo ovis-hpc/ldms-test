@@ -10,10 +10,10 @@ mlog = logging.getLogger()
 
 class QGROUP(object): # a place to statically hold config params
     CFG_QUOTA = 256
-    CFG_ASK_MARK = 192
+    CFG_ASK_MARK = 128
     CFG_ASK_AMOUNT = 64
-    CFG_ASK_USEC = 500000 # 0.5 SEC
-    CFG_RESET_USEC = 2000000 # 2 SEC
+    CFG_ASK_USEC = 100000 # 0.1 SEC
+    CFG_RESET_USEC = 1000000 # 1 SEC
 
 class PrdcrState(object):
     DISCONNECTED = 0
