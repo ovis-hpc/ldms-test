@@ -455,11 +455,16 @@ log.info("Waiting ... for all LDMSDs to start")
 cluster.start_daemons()
 cluster.make_known_hosts()
 
-while True:
+smplr_check_retry = 5
+while smplr_check_retry:
+    sleep(1)
     if smplr.check_ldmsd() is False:
-        sleep(1)
+        smplr_check_retry -= 1
     else:
         break
+else:
+    log.error("sampler is not running")
+    raise RuntimeError("sampler is not running")
 log.info("All sampler daemons are up.")
 
 # Check whether the aggregators are running or not
