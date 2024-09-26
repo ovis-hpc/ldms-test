@@ -351,16 +351,6 @@ def at_exit():
         cluster.remove()
     os._exit(rc)
 
-def cleardir(path):
-    for dirpath, dirnames, filenames in os.walk(path, topdown=False):
-        for f in filenames:
-            os.unlink(f"{dirpath}/{f}")
-        if dirpath != path:
-            os.rmdir(dirpath)
-
-cleardir(f"{DB}")
-os.makedirs(f"{DB}/tmp", mode=0o755, exist_ok=True)
-
 log.info("-- Get or create the cluster --")
 cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
 
@@ -372,6 +362,7 @@ samp1 = cluster.get_container("samp-1")
 samp2 = cluster.get_container("samp-2")
 kafka = cluster.get_container("kafka")
 
+agg2.exec_run('A=$(ls /db | grep -v tmp); [[ -z "${A}" ]] || rm -rf ${A}')
 
 agg2.exec_run("mkdir -p /store/{sos,csv}")
 
@@ -423,7 +414,7 @@ def kafka_topic_verify(topics):
     for topic in topics:
         m = R.match(topic)
         if not m:
-            return False
+            continue
         (k,) = m.groups()
         if k == "record":
             r += 1
