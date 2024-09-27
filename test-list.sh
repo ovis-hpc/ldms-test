@@ -61,6 +61,8 @@ CONT_TEST_LIST=(
 	ldms_rate_test
 	ldms_ipv6_test
 
+	ldmsd_decomp_static_omit_test
+
 	# tests related to multi-instance plugins
 	#   hidden for now, until the multi-instance
 	#   feature is merged into OVIS-4
