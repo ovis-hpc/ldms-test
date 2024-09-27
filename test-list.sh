@@ -61,12 +61,16 @@ CONT_TEST_LIST=(
 	ldms_rate_test
 	ldms_ipv6_test
 
-	multi_json_stream_sampler_test
-	multi_procnetdev2_test
-	multi_store_avro_kafka_test
-	multi_store_csv_test
-	multi_store_sos_test
-	multi_test_sampler_test
+	# tests related to multi-instance plugins
+	#   hidden for now, until the multi-instance
+	#   feature is merged into OVIS-4
+	#
+	#multi_json_stream_sampler_test
+	#multi_procnetdev2_test
+	#multi_store_avro_kafka_test
+	#multi_store_csv_test
+	#multi_store_sos_test
+	#multi_test_sampler_test
 )
 
 INSIDE_CONT_TEST_LIST=(
