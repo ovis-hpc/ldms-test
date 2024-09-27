@@ -3049,8 +3049,7 @@ def create_updtr_status(name, interval, offset, state, prdcrs,
              'auto' : "true" if auto else "false",
              'state' : state,
              'producers' : prdcrs,
-             'outstanding count' : outstanding,
-             'oversampled count' : oversampled}
+             }
 
 def create_updtr_prdcr_status(name, host, port, xprt, state):
     return {'name' : name,
