@@ -703,8 +703,10 @@ if __name__ == "__main__":
         if _match != "test_stream":
             test.assert_test(19, False, f"Unexpected 'match': {_match}")
             break
-        expected_addr = agg1.get_ip_addr()
-        if not target.startswith(expected_addr):
+        host, port = target.rsplit(':', 1)
+        e4_addr = agg1.get_ip_addr()
+        e6_addr = f'[::ffff:{e4_addr}]'
+        if host not in [ e4_addr, e6_addr ]:
             test.assert_test(19, False, f"Unexpected target: {target}")
             break
         test.assert_test(19, True, "verified")
