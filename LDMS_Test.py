@@ -1458,12 +1458,11 @@ class LDMSDContainer(ABC):
             AUTH_OPT = "-a {listen_auth}".format(**spec)
         else:
             AUTH_OPT = ""
-        CREDIT_OPT = f"-C {spec['credits']}" if "credits" in spec else ""
         VARS = dict(locals())
         VARS.update(spec)
         cmd = "ldmsd {XPRT_OPT} {AUTH_OPT}" \
               " -c {config_file} -l {log_file} -v {log_level}" \
-              " {CREDIT_OPT} &".format(**VARS)
+              " &".format(**VARS)
         return cmd
 
     def ldms_ls(self, *args):
@@ -2970,6 +2969,12 @@ def cond_timedwait(cond, timeout=10, interval=0.1):
 def get_ldmsd_config(spec, ver=None):
     """Generate ldmsd config `str` from given spec"""
     sio = StringIO()
+	# process `default_credits`
+    c = spec.get("credits", None)
+    if c:
+        cfgcmd = f"default_credits credits={c}\n"
+        sio.write(cfgcmd)
+
     # process `auth`
     for auth in spec.get("auth", []):
         _a = auth.copy() # shallow copy
