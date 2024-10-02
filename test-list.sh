@@ -64,6 +64,12 @@ CONT_TEST_LIST=(
 	ldms_ipv6_test
 
 	ldmsd_decomp_static_omit_test
+	json_stream_sampler_test
+
+	# old test, shall be removed when we move to 4.5 keep here for a
+	#   refernece for now
+	#
+	#ldmsd_stream_test
 
 	# tests related to multi-instance plugins
 	#   hidden for now, until the multi-instance
@@ -75,6 +81,10 @@ CONT_TEST_LIST=(
 	#multi_store_csv_test
 	#multi_store_sos_test
 	#multi_test_sampler_test
+	#cfgobj_ref_test
+
+	# wait for schema registry feature to merge into maestro
+	#maestro_schema_registry_test
 )
 
 INSIDE_CONT_TEST_LIST=(
