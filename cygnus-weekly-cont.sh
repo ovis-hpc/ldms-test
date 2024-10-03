@@ -259,7 +259,7 @@ pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
 TEST_OPTS=(
 	--prefix ${PREFIX}
-	--src ${WORK_DIR_POOL}
+	--src ${WORK_DIR}
 )
 
 [[ -z "${FAIL_FAST}" ]] || set -e
@@ -309,7 +309,7 @@ TEST_OPTS=(
 	--prefix ${CONT_OVIS}
 	--runtime docker
 	--image ovishpc/ldms-dev
-	--src ${WORK_DIR_POOL}
+	--src ${WORK_DIR}
 )
 for T in ${LIST[*]}; do
 	INFO "======== ${T} ========"
