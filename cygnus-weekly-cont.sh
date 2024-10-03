@@ -308,7 +308,7 @@ done 2>&1
 TEST_OPTS=(
 	--prefix ${CONT_OVIS}
 	--runtime docker
-	--image ovishpc/ldms-dev
+	--image ${TEST_IMAGE:-ovishpc/ldms-dev}
 	--src ${WORK_DIR}
 )
 for T in ${LIST[*]}; do
