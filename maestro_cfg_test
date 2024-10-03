@@ -336,6 +336,7 @@ cmd = "bash -c '{}'".format(cmd)
 maestro = headnode.exec_interact(cmd)
 out = maestro.read(idle_timeout=20)
 expected_out = """\
+New group detected - Rebalance\r
 Rebalance cluster...\r
 Adding sampler plugins to sampler samp-1\r
 Adding sampler plugins to sampler samp-2\r
@@ -353,6 +354,7 @@ Starting.. meminfo on samp-5\r
 Starting.. meminfo on samp-6\r
 Starting.. meminfo on samp-7\r
 Starting.. meminfo on samp-8\r
+Balancing producers...\r
 Adding 8 producers to agg agg-1\r
 Adding 8 producers to agg agg-2\r
 Adding 8 producers to agg agg-3\r
