@@ -298,12 +298,29 @@ for T in ${DIRECT_TEST_LIST[@]}; do
 	append_summary $T $RC
 	INFO "----------------------------------------------"
 done 2>&1
+LIST=( ${CONT_TEST_LIST[*]} )
 
-[[ -z "${SKIP_PAPI}" ]] && {
-	LIST=( ${PAPI_CONT_TEST_LIST[*]} ${CONT_TEST_LIST[*]} )
-} || {
-	LIST=( ${CONT_TEST_LIST[*]} )
-}
+PAPI_AVAIL_OUT=$(
+{
+cat <<EOF
+papi_avail -a | grep 'available events'
+EOF
+} | docker run -i --rm ovishpc/ldms-dev
+)
+
+PAPI_AVAIL=${PAPI_AVAIL_OUT% available*}
+PAPI_AVAIL=${PAPI_AVAIL#Of }
+INFO "PAPI: ${PAPI_AVAIL_OUT}"
+INFO "PAPI_AVAIL: ${PAPI_AVAIL}"
+
+if [[ -n "$SKIP_PAPI" ]] && [[ "${SKIP_PAPI}0" -ne 0 ]]; then
+	INFO "SKIP_PAPI=${SKIP_PAPI}, skip PAPI-related test"
+elif [[ "${PAPI_AVAIL}0" -eq 0 ]] ; then
+	INFO "No PAPI presets availalbe, skip PAPI-related test"
+else
+	INFO "Add PAPI-related tests into the test list"
+	LIST=( "${LIST[@]}" "${PAPI_CONT_TEST_LIST[@]}" )
+fi
 
 TEST_OPTS=(
 	--prefix ${CONT_OVIS}
