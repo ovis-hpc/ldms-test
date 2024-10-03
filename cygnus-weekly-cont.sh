@@ -91,6 +91,14 @@ else
 fi
 
 SCRIPT_DIR=$(realpath $(dirname $0))
+
+CFG=${SCRIPT_DIR}/cygnus-weekly-cont-config.sh
+if [[ -e ${CFG} ]]; then
+	source ${CFG}
+else
+	INFO "Using default parameters, config file does not exists: ${CFG}"
+fi
+
 LDMS_CONTAINERS_DIR=${LDMS_CONTAINERS_DIR:-${SCRIPT_DIR}/ldms-containers}
 
 [[ -f "${LDMS_CONTAINERS_DIR}/config.sh" ]] || {
@@ -129,13 +137,6 @@ assert mkdir -p $D
 
 # PREFIX for host
 PREFIX=/opt/ovis
-
-CFG=${SCRIPT_DIR}/cygnus-weekly-cont-config.sh
-if [[ -e ${CFG} ]]; then
-	source ${CFG}
-else
-	INFO "Using default parameters, config file does not exists: ${CFG}"
-fi
 
 export OVIS_REPO=${OVIS_REPO:-https://github.com/ovis-hpc/ovis}
 export OVIS_BRANCH=${OVIS_BRANCH:-OVIS-4}
