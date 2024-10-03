@@ -101,7 +101,7 @@ fi
 
 LDMS_CONTAINERS_DIR=${LDMS_CONTAINERS_DIR:-${SCRIPT_DIR}/ldms-containers}
 
-[[ -f "${LDMS_CONTAINERS_DIR}/config.sh" ]] || {
+[[ "${SKIP_BUILD}0" -gt 0 ]] || [[ -f "${LDMS_CONTAINERS_DIR}/config.sh" ]] || {
 	ERROR "${LDMS_CONTAINERS_DIR}/config.sh not found. " \
 		"cygnus-weekly-cont.sh needs " \
 		"the ldms-containers repository to build containers. " \
