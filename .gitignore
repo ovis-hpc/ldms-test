@@ -3,3 +3,4 @@
 *.sqlite
 db/
 *.log
+cygnus-weekly-cont-config.sh
