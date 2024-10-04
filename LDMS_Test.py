@@ -2727,7 +2727,7 @@ class LDMSDProc(Proc):
             cat >{conf_file} <<EOF\n{ldmsd_config}\nEOF
             {env_cmd}
             ldmsd -c {conf_file} -r {pid_file} -l {log_file} \
-                    -v {log_level} {mem_opt} >/dev/null 2>&1
+                    -v {log_level} {mem_opt} >/dev/null 2>&1 &
         """.format(**vars(self)))
         if rc == errno.EALREADY:
             logger.info(out)
