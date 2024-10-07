@@ -227,6 +227,8 @@ elif [[ ! -f ${CONT_OVIS}/sbin/ldmsd ]] ||
 	sed -i "s|^\\s*SOS_BRANCH=.*|SOS_BRANCH=${SOS_BRANCH}|" config.sh
 	sed -i "s|^\\s*MAESTRO_REPO=.*|MAESTRO_REPO=${MAESTRO_REPO}|" config.sh
 	sed -i "s|^\\s*MAESTRO_BRANCH=.*|MAESTRO_BRANCH=${MAESTRO_BRANCH}|" config.sh
+	[[ -z "${CONT_BUILD_TAG}" ]] ||
+		sed -E -i "s|^\\s*(export )?BUILD_TAG=.*|\1BUILD_TAG=${CONT_BUILD_TAG}|" config.sh
 	${LDMS_CONTAINERS_DIR}/scripts/build-all.sh
 	popd # ${LDMS_CONTAINERS_DIR}
 else
