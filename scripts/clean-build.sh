@@ -99,6 +99,10 @@ INFO "== Checking out OVIS =="
 	git fetch github --tags
 	git fetch github ${OVIS_BRANCH}
 	git checkout FETCH_HEAD
+
+	# retag v4.5.0 as annotated tag
+	git tag -f -a -m 'v4.5.0' v4.5.0 v4.5.0
+
 	popd
 }
 INFO "== Checkout maestro =="
