@@ -341,7 +341,10 @@ for T in ${LIST[*]}; do
 	sleep 10 # allow some clean-up break between tests
 	INFO "----------------------------------------------"
 	./remove_cluster --all
-	sudo rm -rf ${DATA_ROOT}/${T} || true
+	docker run --rm -it --name cleanup-${T} \
+		-v ${DATA_ROOT}/${T}:/data \
+		ovishpc/ldms-dev /bin/bash -c 'rm -rf /data/*'
+	rm -rf ${DATA_ROOT}/${T} || true
 done 2>&1
 
 # Container tests
