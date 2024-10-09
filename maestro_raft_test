@@ -397,7 +397,8 @@ if rc:
 start_maestro(cfg1)
 start_maestro(cfg2)
 start_maestro(cfg3)
-time.sleep(2)
+log.info("Wait a bit for all maestro daemons to sync...")
+time.sleep(10)
 
 #test.add_assertion(1, "Statuses of maestros, 1 leader + 2 followers")
 maestro_tbl = get_maestro_state_tbl()
@@ -508,7 +509,8 @@ while True: # will break
 #test.add_assertion(5, "Restarted ldmsd is configured")
 agg4.start_ldmsd()
 t1 = time.time()
-time.sleep(25) # allow some time for reconfiguration by maestro
+log.info("Wait a bit for agg4 reconfiguration ...")
+time.sleep(60) # allow some time for reconfiguration by maestro
 verify_ldmsds(5)
 
 #test.add_assertion(6, "New data are presented in the store")
