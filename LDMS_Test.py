@@ -918,8 +918,14 @@ class ControllerPty(object):
         self.pty = node.exec_interact(self.pty_cmd)
         # get the prompt
         self._pre_prompt = self.pty.read()
-        self.prompt = self._pre_prompt.removeprefix( \
-                                'Welcome to the LDMSD control processor\r\n')
+        welcome = 'Welcome to the LDMSD control processor\r\n'
+        # behave like str.removeprefix() we need to do this b/c
+        #   str.removeprefix() is relatively new and may not be available
+        #   in older OS.
+        if self._pre_prompt.startswith(welcome):
+            self.prompt = self._pre_prompt.replace(welcome, '', 1)
+        else:
+            self.prompt = self._pre_prompt
 
     def cmd(self, cmd, retry = 3):
         return icmd(self.pty, cmd, self.prompt, retry=retry, idle_timeout=0.3)
