@@ -8,10 +8,10 @@
 #       pysub@agg-1
 #            ^
 #            |
-#       ldmsd@agg-1 ## limit rx rate here
+#       ldmsd@agg-1 ## limit stream rx rate here
 #            ^
 #            |
-#       ldmsd@samp
+#       ldmsd@samp ## limit recv rx rate here
 #            ^
 #            |
 #       pypub@samp
@@ -96,7 +96,7 @@ spec = {
             "name" : "ldmsd",
             "type" : "ldmsd",
             "listen" : [
-                { "port" : LDMSD_PORT, "xprt" : "sock" },
+                { "port" : LDMSD_PORT, "xprt" : "sock", "rx_rate": 64 },
             ],
         },
         "samp_daemon" : {
@@ -132,7 +132,6 @@ spec = {
                             "xprt" : "sock",
                             "type" : "active",
                             "interval" : 1000000,
-                            "rx_rate" : 64, # 64 bytes / sec
                         } for h in [ "samp" ]
                     ],
                     "config" : [ # additional config applied after prdcrs
