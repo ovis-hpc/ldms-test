@@ -116,13 +116,13 @@ def gen_data(_round):
             # of (record_entry_type, record_entry_value).
             (
                 ldms.V_RECORD_INST,
-                [ (_t, VAL[_t](_round + r)) for _s, _t, _c, _mta in REC_DEF ]
+                [ (d.type, VAL[d.type](_round + r)) for d in REC_DEF ]
             ) for r in range(ITEM_COUNT)
         ]),
         (ldms.V_RECORD_ARRAY, [
             (
                 ldms.V_RECORD_INST,
-                [ (_t, VAL[_t](_round + r + ITEM_COUNT)) for _s, _t, _c, _mta in REC_DEF ]
+                [ (d.type, VAL[d.type](_round + r + ITEM_COUNT)) for d in REC_DEF ]
             ) for r in range(ITEM_COUNT)
         ]),
     ]
