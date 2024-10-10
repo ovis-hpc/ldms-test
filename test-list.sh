@@ -66,6 +66,9 @@ CONT_TEST_LIST=(
 	ldmsd_decomp_static_omit_test
 	json_stream_sampler_test
 
+	ldms_qgroup_test
+	ldmsd_qgroup_test
+
 	# old test, shall be removed when we move to 4.5 keep here for a
 	#   refernece for now
 	#
