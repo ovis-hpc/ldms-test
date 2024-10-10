@@ -15,7 +15,7 @@ import TADA
 import logging
 
 from distutils.spawn import find_executable
-from python.ldms_qgroup_common import QGROUP, parse_log
+from python.ldms_qgroup_util import QGROUP, parse_log
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, PyPty, ControllerPty
 
