@@ -76,6 +76,9 @@ class PrdcrConfigCMDTest(ContainerTest):
                                 "interval" : 1000000,
                                 "start" : True
                             }
+                        ],
+                        "config" : [
+                            f"bridge_add name=agg-start host=agg-start port={LDMSD_PORT} xprt={LDMSD_XPRT} reconnect=1s",
                         ]
                     }
                 ]
@@ -337,6 +340,8 @@ class PrdcrConfigCMDTest(ContainerTest):
         ("start-3.2", "prdcr_start a running producer -- checking the status"),
         ("start-4.1", "prdcr_start a passive producer -- checking the errcode"),
         ("start-4.2", "prdcr_start a passive producer -- checking the status"),
+        ("bridge_start-1.1", "bridge_start a bridge connection -- checking the errcode"),
+        ("bridge_start-1.2", "bridge_start a bridge connection -- checking the status"),
         # prdcr_start_regex
         ("start_regex-1", "prdcr_start_regex using an invalid regex"),
         ("start_regex-2.1", "prdcr_start_regex matching no producers -- checking the errcode"),
@@ -442,7 +447,7 @@ def prdcr_status_test(suite, comms):
     # Result of a passive producer
     resp, status = prdcr_status(agg_comm, name = "prdcr-passive")
     exp = [suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo",
-                            state = "STOPPED", type = "passive")]
+                            state = "STOPPED", type = "passive", port = 65535)]
     suite.save_assertion("status-5", **prdcr_status_cond(status, exp))
 
     # Result of two producers
@@ -450,7 +455,7 @@ def prdcr_status_test(suite, comms):
     exp = []
     exp.append(suite.exp_result(name = "prdcr-active", host = "samplerd-meminfo"))
     exp.append(suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo",
-                                type = "passive"))
+                                state = "STOPPED", type = "passive", port = 65535))
     exp.append(suite.exp_result(name = "prdcr-started", host = "samplerd-meminfo",
                                 state = "CONNECTED",
                                 sets = [suite.exp_set(state = "START")]))
@@ -537,25 +542,33 @@ def prdcr_start_test(suite, comms):
                             )]
     suite.save_assertion("start-3.2", **prdcr_status_cond(status, exp))
 
+    # Start a bridge connection
+    suite.log("bridge_start_test -- bridge_start-1.1")
+    comm_samplerd = comms["samplerd-meminfo"]
+    resp = prdcr_start(comm_samplerd, name = "agg-start")
+    suite.save_assertion("bridge_start-1.1", **errcode_cond(resp, 0))
+    sleep(1)
+    suite.log("bridge_start_test -- bridge_start-1.2")
+    resp, status = prdcr_status(comm_samplerd, name = "agg-start")
+    exp = [suite.exp_result(name = "agg-start", host = "agg-start",
+                            state = "CONNECTED", type = "bridge")]
+    suite.save_assertion("bridge_start-1.2", **prdcr_status_cond(status, exp))
+
     # Start a passive producer
 
-    # Skip the passive cases because there is a deadlock inside ldmsd
-    # For passive producers,
-    # prdcr_connect() takes the prdcr's lock and then calls prdcr_connect_cb(),
-    # which takes the lock, so it is a deadlock.
-
-    # suite.log("prdcr_start_test -- start-4.1")
-    # resp = prdcr_start(comm, name = "prdcr-passive")
-    # suite.save_assertion("start-4.1", **errcode_cond(resp, 0))
-    # sleep(1)
-    # suite.log("prdcr_start_test -- start-4.2")
-    # resp, status = prdcr_status(comm, name = "prdcr-passive")
-    # exp = [suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo",
-    #                         state = "CONNECTED", type = "passive",
-    #                         sets = [suite.exp_set(state = "START")]
-    #                         )]
-    # suite.save_assertion("start-4.2", **prdcr_status_cond(status,exp))
-    # suite.log("prdcr_start_test -- end")
+    suite.log("prdcr_start_test -- start-4.1")
+    resp = prdcr_start(comm, name = "prdcr-passive")
+    suite.save_assertion("start-4.1", **errcode_cond(resp, 0))
+    sleep(1)
+    suite.log("prdcr_start_test -- start-4.2")
+    resp, status = prdcr_status(comm, name = "prdcr-passive")
+    exp = [suite.exp_result(name = "prdcr-passive", host = "samplerd-meminfo",
+                            state = "CONNECTED", type = "passive", port = 65535,
+                            sets = [suite.exp_set(state = "START")])]
+                            # sets = [suite.exp_set(state = "START")]
+                            # )]
+    suite.save_assertion("start-4.2", **prdcr_status_cond(status,exp))
+    suite.log("prdcr_start_test -- end")
 
 def prdcr_start_regex_test(suite, comms):
     comm = comms["agg-start-regex"]
