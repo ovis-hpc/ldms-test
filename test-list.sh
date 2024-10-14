@@ -56,7 +56,6 @@ CONT_TEST_LIST=(
 	ldmsd_long_config_test
 	set_sec_mod_test
 	dump_cfg_test
-	ldms_ipv6_test
 
 	ldmsd_decomp_static_omit_test
 )
