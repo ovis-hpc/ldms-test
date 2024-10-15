@@ -9,7 +9,7 @@
 # - Start an LDMSD using the generated config file from A. The daemon is called A1.
 # - Send dump_cfg to both S1 and A1
 # - Compare the generated config files between S and S1. The test fails if they are not the same.
-# - Compare the generated config files between A and A1. The test fails if they are not the same. 
+# - Compare the generated config files between A and A1. The test fails if they are not the same.
 
 # - command-line options
 # - stream subscribe on sampler daemons by prdcr_subscribe on aggregator
@@ -294,9 +294,8 @@ cmd_line_opt = f"-l /var/log/{case_name}.log -v INFO -n {case_name} " \
 start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT} -a munge {cmd_line_opt}"
 __start_ldmsd(headnode, cmd_line_opt = start_opt)
 ldmsd_pid = __get_pid(headnode, LDMS_PORT)
-cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL")
 exp = f"""\
-option {cmd_line_opt} -B 1 -C -1
+option {cmd_line_opt} -B 1
 auth_add name=DEFAULT plugin=munge
 listen xprt={LDMS_XPRT} port={LDMS_PORT} auth=DEFAULT
 """
@@ -311,9 +310,8 @@ cmd_line_opt = f"-l /var/log/{case_name}.log -v INFO -r /var/log/{case_name}.pid
 start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT}:headnode"
 __start_ldmsd(headnode, cmd_line_opt = f"{start_opt} {cmd_line_opt}")
 ldmsd_pid = __get_pid(headnode, LDMS_PORT)
-cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL")
 exp = f"""\
-option {cmd_line_opt} -m 512kB -B 1 -P 1 -C -1
+option {cmd_line_opt} -m 512kB -B 1 -P 1
 auth_add name=DEFAULT plugin=none
 listen xprt={LDMS_XPRT} port={LDMS_PORT} host=headnode auth=DEFAULT
 """
@@ -327,9 +325,8 @@ case_name = "ldmsd-1.3"
 start_opt = f"-x {LDMS_XPRT}:{LDMS_PORT} -a munge -A socket={munge_sock()}"
 __start_ldmsd(headnode, cmd_line_opt = start_opt)
 ldmsd_pid = __get_pid(headnode, LDMS_PORT)
-cmd_line_opt = cmd_line_opt.replace("-v INFO", "-v INFO,WARNING,ERROR,CRITICAL") 
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+option -v ERROR -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1
 auth_add name=DEFAULT plugin=munge socket={munge_sock()}
 listen xprt={LDMS_XPRT} port={LDMS_PORT} auth=DEFAULT
 """
@@ -349,7 +346,7 @@ __start_ldmsd(headnode, cfg = cfg_name)
 ldmsd_pid = __get_pid(headnode, cfg_name)
 gen_cfg = dump_cfg(headnode, case_name, auth = "munge", auth_opt = [f"socket={munge_sock()}"])
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -B 1 -P 1 -C -1 -r /var/run/ldmsd.pid
+option -v ERROR -m 512kB -B 1 -P 1 -r /var/run/ldmsd.pid
 auth_add name=DEFAULT plugin=none
 {conf}
 """
@@ -374,7 +371,7 @@ ldmsd_pid = __get_pid(headnode, cfg_name)
 gen_cfg = dump_cfg(headnode, case_name)
 
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+option -v ERROR -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1
 auth_add name=DEFAULT plugin=none
 {listen_conf} auth=DEFAULT
 load name=meminfo
@@ -401,7 +398,7 @@ __start_ldmsd(headnode, cfg = cfg_name)
 ldmsd_pid = __get_pid(headnode, cfg_name)
 gen_cfg = dump_cfg(headnode, case_name)
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+option -v ERROR -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1
 auth_add name=DEFAULT plugin=none
 {listen_conf} auth=DEFAULT
 {conf}
@@ -442,7 +439,7 @@ __start_ldmsd(headnode, cfg = cfg_name)
 ldmsd_pid = __get_pid(headnode, cfg_name)
 gen_cfg = dump_cfg(headnode, case_name)
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+option -v ERROR -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1
 auth_add name=DEFAULT plugin=none
 {listen_conf} auth=DEFAULT
 """
@@ -479,7 +476,7 @@ __start_ldmsd(headnode, cfg = cfg_name)
 ldmsd_pid = __get_pid(headnode, cfg_name)
 gen_cfg = dump_cfg(headnode, case_name)
 exp = f"""\
-option -v ERROR,CRITICAL -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1 -C -1
+option -v ERROR -m 512kB -r /var/run/ldmsd.pid -B 1 -P 1
 auth_add name=DEFAULT plugin=none
 {listen_conf} auth=DEFAULT
 """
