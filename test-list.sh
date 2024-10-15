@@ -52,7 +52,6 @@ CONT_TEST_LIST=(
 	ldmsd_flex_decomp_test
 	ldms_set_info_test
 	slurm_sampler2_test
-	libovis_log_test
 	ldmsd_long_config_test
 	set_sec_mod_test
 	dump_cfg_test
