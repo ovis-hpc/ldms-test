@@ -1,11 +1,20 @@
 #!/bin/bash
 
 
-#FORCE_TEST=1
+#FORCE_BUILD=0
+#SKIP_BUILD=0
+#FORCE_TEST=0
+#GITHUB_REPORT=1
+#DOCKER_PUSH=0
 
 OVIS_REPO=https://github.com/ovis-hpc/ovis
 OVIS_BRANCH=OVIS-4
 SOS_REPO=https://github.com/ovis-hpc/sos
-SOS_BRANCH=78a37ec25665e1948161a0e6c1188fde2b275ee2
+SOS_BRANCH=SOS-6
 MAESTRO_REPO=https://github.com/ovis-hpc/maestro
 MAESTRO_BRANCH=master
+
+#TEST_IMAGE=ovishpc/ldms-dev
+
+#CONT_BUILD_TAG='OVIS-4-${ARCH}'
+#REPORT_BRANCH=master
