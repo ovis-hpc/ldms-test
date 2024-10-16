@@ -164,10 +164,10 @@ export OVIS_GIT_SHA=${OVIS_NEW_GIT_SHA}
 
 # Get the ldms-test repo's old and new git sha
 LDMS_TEST_REPO=${LDMS_TEST_REPO:-https://github.com/ovis-hpc/ldms-test}
-LDMS_TEST_BRANCH=${LDMS_TEST_BRANCH:-master}
+LDMS_TEST_BRANCH=${LDMS_TEST_BRANCH:-b4.4}
 LDMS_TEST_NEW_GIT_SHA=( $( git ls-remote ${LDMS_TEST_REPO} ${LDMS_TEST_BRANCH} ) )
 LDMS_TEST_OLD_GIT_SHA=$( git rev-parse ${LDMS_TEST_BRANCH} )
-LDMS_TEST_GIT_SHA=${LDMS_TEST_NEW_GIT_SHA}
+LDMS_TEST_GIT_SHA=$(git rev-parse HEAD)
 
 export LDMS_TEST_NEW_GIT_SHA
 export LDMS_TEST_OLD_GIT_SHA
@@ -192,6 +192,7 @@ INFO "LDMS_TEST_REPO: ${LDMS_TEST_REPO}"
 INFO "LDMS_TEST_BRANCH: ${LDMS_TEST_BRANCH}"
 INFO "LDMS_TEST_NEW_GIT_SHA: ${LDMS_TEST_NEW_GIT_SHA}"
 INFO "LDMS_TEST_OLD_GIT_SHA: ${LDMS_TEST_OLD_GIT_SHA}"
+INFO "LDMS_TEST_GIT_SHA: ${LDMS_TEST_GIT_SHA}"
 
 pushd ${SCRIPT_DIR} # it is easier to call scripts from the script dir
 
@@ -385,6 +386,8 @@ echo "------------------------------------------"
 echo -e "Total tests passed: ${PASSED}/${N}"
 echo "------------------------------------------"
 } |& tee ${LOG}
+
+export REPORT_BRANCH=${REPORT_BRANCH:-master}
 
 [[ "${GITHUB_REPORT}0" -eq 0 ]] || ${SCRIPT_DIR}/github-report.sh # make a test end report
 
