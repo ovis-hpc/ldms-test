@@ -214,7 +214,7 @@ if [[ "$SKIP_BUILD" -ne 0 ]]; then
 	INFO "Force-skip building on host (SKIP_BUILD: ${SKIP_BUILD})"
 elif [[ -z "$HAVE_RDMA" ]]; then
 	INFO "Does not have RDMA, skip building on host"
-elif [[ "$OVIS_NEW_GIT_SHA" != "$OVIS_OLD_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
+elif [[ "$OVIS_NEW_GIT_SHA" != "$CONT_GIT_SHA" ]] || [[ "${FORCE_BUILD}0" -gt 0 ]]; then
 	INFO "==== start building on host ===="
 	${SCRIPT_DIR}/scripts/clean-build.sh
 else
