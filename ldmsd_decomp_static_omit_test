@@ -466,7 +466,7 @@ expected_schemas = {
     },
     "record": {
         "cols": ["timestamp", "component_id", "round",
-                 "device_list->LDMS_V_U64", "device_list->LDMS_V_U64_ARRAY"],
+                 "device_list[LDMS_V_U64]", "device_list[LDMS_V_U64_ARRAY]"],
         "indices": [
             {"name": "timestamp", "cols": ["timestamp"]},
             {"name": "time_comp", "cols": ["timestamp", "component_id"]}
@@ -474,17 +474,19 @@ expected_schemas = {
     }
 }
 
+VA_RE = re.compile('([^[]+)\[(.*)\]')
+
 def row_to_obj(cols, row):
     # convert a row into dict object
     obj = dict()
     for c, v in zip(cols, row):
-        ab = c.split('->') + [ None ]
-        a, b = ab[:2]
-        if b is not None:
+        m = VA_RE.fullmatch(c)
+        if m is not None:
+            a, b = m.groups()
             o = obj.setdefault(a, dict())
             o[b] = v
         else:
-            obj[a] = v
+            obj[c] = v
     # put record into a list
     ret = { k: [v] if type(v) is dict else v for k,v in obj.items() }
     return ret
