@@ -7,8 +7,8 @@
         { "src":"timestamp" },
         { "src":"component_id" },
         { "src":"round" },
-        { "src":"device_list->LDMS_V_U64" },
-        { "src":"device_list->LDMS_V_U64_ARRAY" }
+        { "src":"device_list[LDMS_V_U64]" },
+        { "src":"device_list[LDMS_V_U64_ARRAY]" }
       ],
       "indices": [
         { "name": "timestamp", "cols": [ "timestamp" ] },
