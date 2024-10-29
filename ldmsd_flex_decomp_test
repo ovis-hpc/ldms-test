@@ -366,14 +366,6 @@ def at_exit():
         cluster.remove()
     os._exit(rc)
 
-def cleardir(path):
-    for dirpath, dirnames, filenames in os.walk(path, topdown=False):
-        for f in filenames:
-            os.unlink(f"{dirpath}/{f}")
-        if dirpath != path:
-            os.rmdir(dirpath)
-
-cleardir(f"{DB}")
 os.makedirs(f"{DB}/tmp", mode=0o755, exist_ok=True)
 
 log.info("-- Get or create the cluster --")
@@ -386,6 +378,11 @@ agg12 = cluster.get_container("agg-12")
 samp1 = cluster.get_container("samp-1")
 samp2 = cluster.get_container("samp-2")
 kafka = cluster.get_container("kafka")
+
+headnode.exec_run("rm -rf /db/tmp/* ; "
+                  "for X in /db/* ; do "
+                  "  [[ ${X} == /db/tmp ]] || rm -rf ${X} ; "
+                  "done")
 
 
 agg2.exec_run("mkdir -p /store/{sos,csv}")
