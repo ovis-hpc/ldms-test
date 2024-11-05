@@ -8,10 +8,7 @@
         { "src":"producer", "dst":"prdcr","type":"char_array", "array_len":64 },
         { "src":"instance", "dst":"inst","type":"char_array", "array_len":64 },
         { "src":"count", "dst":"count","type":"u64" },
-        { "src":"component_id", "dst":"comp_id","type":"u64" },
-        { "src":"u16", "dst":"ushort","type":"u16" },
-        { "src":"u32_array", "dst":"uint_array","type":"u32_array",
-          "array_len":8 }
+        { "src":"component_id", "dst":"comp_id","type":"u64" }
       ],
       "indices": [
         { "name": "time", "cols": [ "ts" ] },
@@ -21,14 +18,50 @@
     {
       "schema": "fill",
       "cols": [
-        { "src":"timestamp", "dst":"ts","type":"ts" },
-        { "src":"component_id", "dst":"comp_id","type":"u64" },
-        { "src":"u16", "dst":"ushort","type":"u16", "fill":16 },
-        { "src":"u32", "dst":"uint","type":"u32", "fill":32 },
-        { "src":"u16_array", "dst":"ushort_array","type":"u16_array",
-          "array_len":8, "fill":[16,16,16,16,16,16,16,16] },
-        { "src":"u32_array", "dst":"uint_array","type":"u32_array",
-          "array_len":8, "fill":[32,32,32,32,32,32,32,32] }
+        { "src": "timestamp",    "dst": "ts",      "type": "ts"  },
+        { "src": "component_id", "dst": "comp_id", "type": "u64" },
+
+        { "src": "char", "dst": "char",   "type": "char", "fill": "F"   },
+        { "src": "u8",   "dst": "uchar",  "type": "u8",   "fill": 8     },
+        { "src": "s8",   "dst": "schar",  "type": "s8",   "fill": -8    },
+        { "src": "u16",  "dst": "ushort", "type": "u16",  "fill": 16    },
+        { "src": "s16",  "dst": "sshort", "type": "s16",  "fill": -16   },
+        { "src": "u32",  "dst": "uint",   "type": "u32",  "fill": 32    },
+        { "src": "s32",  "dst": "sint",   "type": "s32",  "fill": -32   },
+        { "src": "u64",  "dst": "ulong",  "type": "u64",  "fill": 64    },
+        { "src": "s64",  "dst": "slong",  "type": "s64",  "fill": -64   },
+        { "src": "f32",  "dst": "float",  "type": "f32",  "fill": 32.50 },
+        { "src": "d64",  "dst": "double", "type": "d64",  "fill": 64.50 },
+
+        { "src": "char_array", "dst": "str","type": "char_array",
+          "fill": "filler", "array_len": 8 },
+
+        { "src": "u8_array", "dst": "uchar_array", "type": "u8_array",
+          "fill": [8,8,8,8,8,8,8,8] },
+        { "src": "s8_array", "dst": "schar_array", "type": "s8_array",
+          "fill": [-8,-8,-8,-8,-8,-8,-8,-8] },
+
+        { "src": "u16_array", "dst": "ushort_array","type": "u16_array",
+          "fill": [16,16,16,16,16,16,16,16] },
+        { "src": "s16_array", "dst": "sshort_array","type": "s16_array",
+          "fill": [-16,-16,-16,-16,-16,-16,-16,-16] },
+
+        { "src": "u32_array", "dst": "uint_array","type": "u32_array",
+          "fill": [32,32,32,32,32,32,32,32] },
+        { "src": "s32_array", "dst": "sint_array","type": "s32_array",
+          "fill": [-32,-32,-32,-32,-32,-32,-32,-32] },
+
+        { "src": "u64_array", "dst": "ulong_array","type": "u64_array",
+          "fill": [64,64,64,64,64,64,64,64] },
+        { "src": "s64_array", "dst": "slong_array","type": "s64_array",
+          "fill": [-64,-64,-64,-64,-64,-64,-64,-64] },
+
+        { "src": "f32_array", "dst": "float_array","type": "f32_array",
+          "fill": [32.50,32.50,32.50,32.50,32.50,32.50,32.50,32.50] },
+
+        { "src": "d64_array", "dst": "double_array","type": "d64_array",
+          "fill": [64.50,64.50,64.50,64.50,64.50,64.50,64.50,64.50] }
+
       ],
       "indices": [
         { "name": "time", "cols": [ "ts" ] },

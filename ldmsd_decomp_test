@@ -18,6 +18,7 @@ import pwd
 import sys
 import json
 import time
+import struct
 import argparse
 import TADA
 import logging
@@ -188,16 +189,42 @@ spec = {
             "hostname" : "samp-1",
             "component_id" : 1,
             "test_sampler_metrics" :
-                "component_id:m:u64:0,job_id:d:u64:0,app_id:d:u64:0,count:d:u64:0"
-                ",u16:d:u16:0,u32:d:u32:0,u32_array:d:u32_array:0:8",
+                "component_id:m:u64:0"
+                ",job_id:d:u64:0"
+                ",app_id:d:u64:0"
+                ",count:d:u64:0"
+                ",char:d:char:a"
+                ",u8:d:u8:0"
+                ",s8:d:s8:0"
+                ",u16:d:u16:0"
+                ",s16:d:s16:0"
+                ",char_array:d:char_array:a:8"
+                ",u8_array:d:u8_array:0:8"
+                ",s8_array:d:s8_array:0:8"
+                ",u16_array:d:u16_array:0:8"
+                ",s16_array:d:s16_array:0:8",
             "!extends" : "compute-node",
         },
         {
             "hostname" : "samp-2",
             "component_id" : 2,
             "test_sampler_metrics" :
-                "component_id:m:u64:0,job_id:d:u64:0,app_id:d:u64:0,count:d:u64:0"
-                ",u16:d:u16:0,u32_array:d:u32_array:0:8",
+                "component_id:m:u64:0"
+                ",job_id:d:u64:0"
+                ",app_id:d:u64:0"
+                ",count:d:u64:0"
+                ",u32:d:u32:0"
+                ",s32:d:s32:0"
+                ",u64:d:u64:0"
+                ",s64:d:s64:0"
+                ",f32:d:f32:0"
+                ",d64:d:d64:0"
+                ",u32_array:d:u32_array:0:8"
+                ",s32_array:d:s32_array:0:8"
+                ",u64_array:d:u64_array:0:8"
+                ",s64_array:d:s64_array:0:8"
+                ",f32_array:d:f32_array:0:8"
+                ",d64_array:d:d64_array:0:8",
             "!extends" : "compute-node",
         }
     ] + [
@@ -300,8 +327,8 @@ spec = {
 
 #### test definition ####
 
-ROW_SCHEMAS = [ 'test_sampler_8d2b8bd',
-                'test_sampler_95772b6',
+ROW_SCHEMAS = [ 'test_sampler_7e8c63d',
+                'test_sampler_5102c39',
                 'record_sampler_e1f021f',
                 'fill', 'filter', 'record' ]
 DECOMPS = [ 'as_is' ]*3 + [ 'static' ]*3
@@ -361,6 +388,13 @@ agg12 = cluster.get_container("agg-12")
 samp1 = cluster.get_container("samp-1")
 samp2 = cluster.get_container("samp-2")
 kafka = cluster.get_container("kafka")
+
+# Clean up residue from previous run (if any)
+kafka.exec_run("\
+  set -e ; \
+  cd /db/ ; \
+  rm -rf tmp/* rows/ kafka_logs kafka*.dump zoo_check.log ; \
+")
 
 agg2.exec_run('A=$(ls /db | grep -v tmp); [[ -z "${A}" ]] || rm -rf ${A}')
 
@@ -498,17 +532,29 @@ for sch in schemas:
     data["kafka"][sch] = decomp_out_parse(out)
 
 expected_schemas = {
-    "test_sampler_8d2b8bd": {
+    "test_sampler_7e8c63d": {
         "cols": ["timestamp", "component_id", "job_id", "app_id", "count",
-            "u16", "u32", "u32_array"],
+            "char",
+            "u8", "s8",
+            "u16", "s16",
+            "char_array",
+            "u8_array", "s8_array",
+            "u16_array", "s16_array",
+            ],
         "indices": [
             {"name": "timestamp", "cols": ["timestamp"]},
             {"name": "time_comp", "cols": ["timestamp", "component_id"]}
         ]
     },
-    "test_sampler_95772b6": {
+    "test_sampler_5102c39": {
         "cols": ["timestamp", "component_id", "job_id", "app_id", "count",
-            "u16", "u32_array"],
+            "u32", "s32",
+            "u64", "s64",
+            "f32", "d64",
+            "u32_array", "s32_array",
+            "u64_array", "s64_array",
+            "f32_array", "d64_array",
+            ],
         "indices": [
             {"name": "timestamp", "cols": ["timestamp"]},
             {"name": "time_comp", "cols": ["timestamp", "component_id"]}
@@ -545,19 +591,42 @@ expected_schemas = {
         ]
     },
     "fill": {
-        "cols": ["ts", "comp_id", "ushort", "uint", "ushort_array", "uint_array"],
+        "cols": ["ts", "comp_id",
+            "char",
+            "uchar", "schar",
+            "ushort", "sshort",
+            "uint", "sint",
+            "ulong", "slong",
+            "float", "double",
+            "str",
+            "uchar_array", "schar_array",
+            "ushort_array", "sshort_array",
+            "uint_array", "sint_array",
+            "ulong_array", "slong_array",
+            "float_array", "double_array",
+        ],
         "indices": [
             {"name": "ts", "cols": ["ts"]},
             {"name": "time_comp", "cols": ["ts", "comp_id"]}
         ],
         "fills": [
-            None, None, 16, 32,
-            [16,16,16,16,16,16,16,16],
-            [32,32,32,32,32,32,32,32]
+            None, None,
+            'F',
+            8, -8,
+            16, -16,
+            32, -32,
+            64, -64,
+            32.50, 64.50, # float, double
+            "filler",
+            8*[8], 8*[-8],
+            8*[16], 8*[-16],
+            8*[32], 8*[-32],
+            8*[64], 8*[-64],
+            8*[32.50], 8*[64.50],
         ]
     },
     "filter": {
-        "cols": ["ts", "prdcr", "inst", "count", "comp_id", "ushort", "uint_array"],
+        "cols": ["ts", "prdcr", "inst", "count", "comp_id"],
         "indices": [
             {"name": "ts", "cols": ["ts"]},
             {"name": "time_comp", "cols": ["ts", "comp_id"]}
@@ -632,6 +701,9 @@ def test_sampler_snap_check(snaps, assert_id, exp_comp_ids):
         comp_ids.add( comp_id )
         a = s["count"]
         arr = [ a ] * 8
+        _a = b'a'[0]
+        ach = bytes([ _a + (a*(_a + 1) % 26)]).decode()
+        astr = ach * 7
         for k, v in s.items():
             if k in [ "Time", "timestamp", "component_id", "job_id", "ts", "comp_id" ]:
                 continue # skip
@@ -643,6 +715,20 @@ def test_sampler_snap_check(snaps, assert_id, exp_comp_ids):
                 continue
             if k == "prdcr":
                 exp = f"samp-{comp_id}"
+                if v != exp:
+                    test.assert_test(assert_id, False, f"Expecting {exp}, but got {v}")
+                    return False
+                continue
+            if k == "char":
+                exp = ach
+                if type(v) == int:
+                    v = bytes([v]).decode()
+                if v != exp:
+                    test.assert_test(assert_id, False, f"Expecting {exp}, but got {v}")
+                    return False
+                continue
+            if k == "char_array":
+                exp = astr
                 if v != exp:
                     test.assert_test(assert_id, False, f"Expecting {exp}, but got {v}")
                     return False
@@ -662,10 +748,10 @@ def test_sampler_snap_check(snaps, assert_id, exp_comp_ids):
     test.assert_test(assert_id, True, "OK")
     return True
 
-def test_sampler_8d2b8bd_snap_check(snaps, assert_id):
+def test_sampler_7e8c63d_snap_check(snaps, assert_id):
     return test_sampler_snap_check(snaps, assert_id, set([1]))
 
-def test_sampler_95772b6_snap_check(snaps, assert_id):
+def test_sampler_5102c39_snap_check(snaps, assert_id):
     return test_sampler_snap_check(snaps, assert_id, set([2]))
 
 def rec_gen(i):
@@ -753,27 +839,70 @@ def record_sampler_e1f021f_snap_check(snaps, assert_id):
     test.assert_test(assert_id, True, "OK")
     return True
 
+# FILL_F32 = struct.unpack('f', struct.pack('f', 32.32))[0]
+
 FILL = {
+        "char":   'F',
+        "uchar":  8,
+        "schar":  -8,
         "ushort": 16,
-        "uint": 32,
-        "ushort_array": [16,16,16,16,16,16,16,16],
-        "uint_array": [32,32,32,32,32,32,32,32],
+        "sshort": -16,
+        "uint":   32,
+        "sint":   -32,
+        "ulong":  64,
+        "slong":  -64,
+        "float":  32.50,
+        "double": 64.50,
+
+        "str":   "filler",
+        "uchar_array":  8*[8],
+        "schar_array":  8*[-8],
+        "ushort_array": 8*[16],
+        "sshort_array": 8*[-16],
+        "uint_array":   8*[32],
+        "sint_array":   8*[-32],
+        "ulong_array":  8*[64],
+        "slong_array":  8*[-64],
+        "float_array":  8*[32.50],
+        "double_array": 8*[64.50],
         }
 def fill_snap_check(snaps, assert_id):
     comp_ids = set()
     for s in snaps.values():
         comp_id = s["comp_id"]
-        if comp_id not in [1, 2]:
+        if comp_id == 1:
+            a = s["ushort"]
+        elif comp_id == 2:
+            a = s["uint"]
+        else:
             test.assert_test(assert_id, False, f"Unexpected comp_id: {comp_id}")
             return False
         comp_ids.add( comp_id )
-        a = s["ushort"]
         arr = [ a ] * 8
+        _a = b'a'[0]
+        ach = bytes([ _a + (a*(_a + 1) % 26)]).decode()
+        astr = ach * 7
         for k, v in s.items():
             if k in ["comp_id", "ts", "Time"]:
                 continue
             f = FILL[k]
+            if k == "char":
+                if type(v) == int:
+                    v = bytes([v]).decode()
+                if v != ach and v != f:
+                    test.assert_test(assert_id, False,
+                            f"Expecting '{ach}' or '{f}', but got {v}")
+                    return False
+                continue
+            if k == "str":
+                if v != astr and v != f:
+                    test.assert_test(assert_id, False,
+                            f"Expecting '{astr}' or '{f}', but got {v}")
+                    return False
+                continue
             if type(f) == list:
+                if k == "schar_array" and v[0] > 0:
+                    v = list(struct.unpack(8*'b', struct.pack(8*'B', *v)))
                 if v != arr and v != f:
                     test.assert_test(assert_id, False, f"Expecting {arr} or {f}, but got {v}")
                     return False
@@ -811,8 +940,8 @@ def record_snap_check(snaps, assert_id):
     return True
 
 row_check_tbl = {
-    "test_sampler_8d2b8bd":   test_sampler_8d2b8bd_snap_check,
-    "test_sampler_95772b6":   test_sampler_95772b6_snap_check,
+    "test_sampler_7e8c63d":   test_sampler_7e8c63d_snap_check,
+    "test_sampler_5102c39":   test_sampler_5102c39_snap_check,
     "record_sampler_e1f021f": record_sampler_e1f021f_snap_check,
     "fill":                   fill_snap_check,
     "filter":                 filter_snap_check,
