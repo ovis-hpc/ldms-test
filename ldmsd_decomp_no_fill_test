@@ -296,7 +296,6 @@ spec = {
     },
     "mounts": [
         f"{DB}:/db:rw",
-        f"{DB}/tmp:/tmp:rw",
         f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
     ] + args.mount +
     ( [f"{SRC}:{SRC}:ro"] if SRC else [] ),
@@ -367,7 +366,7 @@ samp1 = cluster.get_container("samp-1")
 samp2 = cluster.get_container("samp-2")
 kafka = cluster.get_container("kafka")
 
-agg2.exec_run('A=$(ls /db | grep -v tmp); [[ -z "${A}" ]] || rm -rf ${A}')
+agg2.exec_run('rm -rf /db/*')
 
 agg2.exec_run("mkdir -p /store/{sos,csv}")
 
