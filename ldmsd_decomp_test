@@ -80,28 +80,37 @@ def strgp_cfg():
             "store_kafka": [
                 [ "as_is", "as_is_decomp.json", "test_sampler", "kafka:9092" ],
                 [ "as_is", "as_is_decomp.json", "record_sampler", "kafka:9092" ],
+                [ "as_is", "as_is_decomp.json", "test_list", "kafka:9092" ],
                 [ "static", "test_sampler_static_decomp.json",
                     "test_sampler", "kafka:9092" ],
                 [ "static", "record_sampler_static_decomp.json",
                     "record_sampler", "kafka:9092" ],
+                [ "static", "test_list_static_decomp.json",
+                    "test_list", "kafka:9092" ],
             ],
             "store_sos": [
                 [ "as_is", "as_is_decomp.json", "test_sampler", "test_sampler" ],
                 [ "as_is", "as_is_decomp.json", "record_sampler",
                     "record_sampler" ],
+                [ "as_is", "as_is_decomp.json", "test_list", "test_list" ],
                 [ "static", "test_sampler_static_decomp.json",
                     "test_sampler", "test_sampler" ],
                 [ "static", "record_sampler_static_decomp.json",
                     "record_sampler", "record_sampler" ],
+                [ "static", "test_list_static_decomp.json",
+                    "test_list", "test_list" ],
             ],
             "store_csv": [
                 [ "as_is", "as_is_decomp.json", "test_sampler", "test_sampler" ],
                 [ "as_is", "as_is_decomp.json", "record_sampler",
                     "record_sampler" ],
+                [ "as_is", "as_is_decomp.json", "test_list", "test_list" ],
                 [ "static", "test_sampler_static_decomp.json",
                     "test_sampler", "test_sampler" ],
                 [ "static", "record_sampler_static_decomp.json",
                     "record_sampler", "record_sampler" ],
+                [ "static", "test_list_static_decomp.json",
+                    "test_list", "test_list" ],
             ],
         }
     ret = list()
@@ -163,6 +172,27 @@ spec = {
                 "config name=test_sampler"
                 "       action=add_set schema=test_sampler producer=%hostname%"
                 "       instance=%hostname%/test_sampler"
+                "       component_id=%component_id%",
+                "config name=test_sampler action=add_schema schema=test_list"
+                "       metrics="
+                        "component_id:m:u64:0"
+                        ",job_id:d:u64:0"
+                        ",app_id:d:u64:0"
+                        ",count:d:u64:0"
+                        ",list_u8:d:list:[u8:1:1]:2"
+                        ",list_s8:d:list:[s8:2:1]:2"
+                        ",list_u16:d:list:[u16:3:1]:2"
+                        ",list_s16:d:list:[s16:4:1]:2"
+                        ",list_u32:d:list:[u32:5:1]:2"
+                        ",list_s32:d:list:[s32:6:1]:2"
+                        ",list_u64:d:list:[u64:7:1]:2"
+                        ",list_s64:d:list:[s64:8:1]:2"
+                        ",list_f32:d:list:[f32:9:1]:2"
+                        ",list_d64:d:list:[d64:10:1]:2"
+                        "",
+                "config name=test_sampler"
+                "       action=add_set schema=test_list producer=%hostname%"
+                "       instance=%hostname%/test_list"
                 "       component_id=%component_id%",
                 "start name=test_sampler interval=%INTERVAL% offset=0",
             ],
@@ -319,7 +349,6 @@ spec = {
     },
     "mounts": [
         f"{DB}:/db:rw",
-        f"{DB}/tmp:/tmp:rw",
         f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
     ] + args.mount +
     ( [f"{SRC}:{SRC}:ro"] if SRC else [] ),
@@ -330,7 +359,8 @@ spec = {
 ROW_SCHEMAS = [ 'test_sampler_7e8c63d',
                 'test_sampler_5102c39',
                 'record_sampler_e1f021f',
-                'fill', 'filter', 'record' ]
+                'test_list_33de7d6',
+                'fill', 'filter', 'record', 'test_list' ]
 DECOMPS = [ 'as_is' ]*3 + [ 'static' ]*3
 STORES = [ 'sos', 'csv', 'kafka' ]
 
@@ -390,13 +420,7 @@ samp2 = cluster.get_container("samp-2")
 kafka = cluster.get_container("kafka")
 
 # Clean up residue from previous run (if any)
-kafka.exec_run("\
-  set -e ; \
-  cd /db/ ; \
-  rm -rf tmp/* rows/ kafka_logs kafka*.dump zoo_check.log ; \
-")
-
-agg2.exec_run('A=$(ls /db | grep -v tmp); [[ -z "${A}" ]] || rm -rf ${A}')
+kafka.exec_run("rm -rf /db/*")
 
 agg2.exec_run("mkdir -p /store/{sos,csv}")
 
@@ -481,16 +505,20 @@ schemas = out.splitlines()
 # Expecting "test_sampler_HASH1", "test_sampler_HASH2", "record_sampler_HASH3"
 test_sampler_count = 0
 record_sampler_count = 0
+test_list_count = 0
 for s in schemas:
     if s.startswith("test_sampler"):
         test_sampler_count += 1
     elif s.startswith("record_sampler"):
         record_sampler_count += 1
+    elif s.startswith("test_list"):
+        test_list_count += 1
     else:
         raise RuntimeError(f"Unexpected schema: {s}")
 assert( test_sampler_count == 2 )
+assert( test_list_count == 1 )
 assert( record_sampler_count == 1 )
-schemas += [ "fill", "filter", "record" ] # from static decomp
+schemas += [ "fill", "filter", "record", "test_list" ] # from static decomp
 
 # kill ldmsd on agg-2 to save space consumed by the growing stores
 agg2.exec_run("pkill ldmsd")
@@ -507,8 +535,10 @@ data = { "kafka": dict(), "sos": dict(), "csv": dict() }
 for sch in schemas:
     if sch.startswith("record"):
         cont = "record_sampler"
-    else:
+    elif sch.startswith("test_sampler"):
         cont = "test_sampler"
+    elif sch.startswith("test_list"):
+        cont = "test_list"
     # sos
     rc, out = agg2.exec_run(
                 f"/tada-src/python/decomp_out.py --store sos"
@@ -638,7 +668,35 @@ expected_schemas = {
             {"name": "ts", "cols": ["ts"]},
             {"name": "time_comp", "cols": ["ts", "comp_id"]}
         ]
-    }
+    },
+    "test_list_33de7d6": {
+        "cols": [
+            "timestamp", "component_id", "job_id", "app_id", "count",
+            "list_u8", "list_s8",
+            "list_u16", "list_s16",
+            "list_u32", "list_s32",
+            "list_u64", "list_s64",
+            "list_f32", "list_d64",
+        ],
+        "indices": [
+            {"name": "timestamp", "cols": ["timestamp"]},
+            {"name": "time_comp", "cols": ["timestamp", "component_id"]}
+        ]
+    },
+    "test_list": {
+        "cols": [
+            "ts", "prdcr", "inst", "count", "comp_id",
+            "list_u8", "list_s8",
+            "list_u16", "list_s16",
+            "list_u32", "list_s32",
+            "list_u64", "list_s64",
+            "list_f32", "list_d64",
+        ],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ],
+    },
 }
 
 COL_RE = re.compile(r'([^.]+)(?:\.(.+))?')
@@ -939,13 +997,79 @@ def record_snap_check(snaps, assert_id):
     test.assert_test(assert_id, True, "OK")
     return True
 
+def test_list_33de7d6_check(snaps, assert_id):
+    comp_ids = set()
+    for s in snaps.values():
+        ts = s.pop("timestamp", s.pop("Time", None))
+        comp_id = s.pop("component_id")
+        comp_ids.add(comp_id)
+        job_id = s.pop("job_id")
+        app_id = s.pop("app_id")
+        count  = s.pop("count")
+        ev = count
+        z_count = 0
+        for k, v in s.items():
+            ev += 1
+            if v == ev:
+                continue # OK
+            if v == 0:
+                z_count += 1
+                continue
+            test.assert_test(assert_id, False,
+                            f"Column '{k}', expecting 0 or {ev} but got {v}")
+            return False
+        # all zero is not OK
+        if z_count == len(s):
+            test.assert_test(assert_id, False, f"Bad row, all zero values: {s}")
+            return False
+    if comp_ids != set([1,2]):
+        test.assert_test(assert_id, False,
+                        f"Expecting comp_ids to be {1,2}, but got: {comp_ids}")
+        return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+def test_list_check(snaps, assert_id):
+    comp_ids = set()
+    for s in snaps.values():
+        ts = s.pop("ts")
+        prdcr = s.pop("prdcr")
+        inst = s.pop("inst")
+        count  = s.pop("count")
+        comp_id = s.pop("comp_id")
+        comp_ids.add(comp_id)
+        ev = count
+        z_count = 0
+        for k, v in s.items():
+            ev += 1
+            if v == ev:
+                continue # OK
+            if v == 0:
+                z_count += 1
+                continue
+            test.assert_test(assert_id, False,
+                            f"Column '{k}', expecting 0 or {ev} but got {v}")
+            return False
+        # all zero is not OK
+        if z_count == len(s):
+            test.assert_test(assert_id, False, f"Bad row, all zero values: {s}")
+            return False
+    if comp_ids != set([1,2]):
+        test.assert_test(assert_id, False,
+                        f"Expecting comp_ids to be {1,2}, but got: {comp_ids}")
+        return False
+    test.assert_test(assert_id, True, "OK")
+    return True
+
 row_check_tbl = {
     "test_sampler_7e8c63d":   test_sampler_7e8c63d_snap_check,
     "test_sampler_5102c39":   test_sampler_5102c39_snap_check,
     "record_sampler_e1f021f": record_sampler_e1f021f_snap_check,
+    "test_list_33de7d6":      test_list_33de7d6_check,
     "fill":                   fill_snap_check,
     "filter":                 filter_snap_check,
     "record":                 record_snap_check,
+    "test_list":              test_list_check,
 }
 
 i = 1
