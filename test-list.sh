@@ -64,6 +64,7 @@ CONT_TEST_LIST=(
 	ldms_ipv6_test
 
 	ldmsd_decomp_static_omit_test
+	ldmsd_decomp_static_op_test
 	json_stream_sampler_test
 
 	ldms_qgroup_test

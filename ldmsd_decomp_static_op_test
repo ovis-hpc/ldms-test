@@ -1,0 +1,807 @@
+#!/usr/bin/env python3
+
+# NOTE Test `static` decomposition with 'op' with `store_sos`, `store_csv`, and
+#      `store_kafka`.
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+# TODO REVISE ME
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "LDMSD static decomposition 'op' test")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+STORE_ROOT = "/store" # path inside container (agg-2)
+
+def __strgp_cfg(plugin, decomp, decomp_json, schema, cont):
+    cfg = [
+        f"strgp_add name={plugin}_{decomp}_{schema} plugin={plugin}"
+        f" decomposition=/tada-src/conf/{decomp_json}"
+        f" container={cont} schema={schema}",
+        f"strgp_prdcr_add name={plugin}_{decomp}_{schema} regex=.*",
+        f"strgp_start name={plugin}_{decomp}_{schema}",
+    ]
+    return cfg
+
+def strgp_cfg():
+    tbl = {
+            "store_kafka": [
+                [ "static", "test_sampler_static_op_decomp.json",
+                    "test_sampler", "kafka:9092" ],
+                [ "static", "record_sampler_static_op_decomp.json",
+                    "record_sampler", "kafka:9092" ],
+            ],
+            "store_sos": [
+                [ "static", "test_sampler_static_op_decomp.json",
+                    "test_sampler", "test_sampler" ],
+                [ "static", "record_sampler_static_op_decomp.json",
+                    "record_sampler", "record_sampler" ],
+            ],
+            "store_csv": [
+                [ "static", "test_sampler_static_op_decomp.json",
+                    "test_sampler", "test_sampler" ],
+                [ "static", "record_sampler_static_op_decomp.json",
+                    "record_sampler", "record_sampler" ],
+            ],
+        }
+    ret = list()
+    for k, lst in tbl.items():
+        for p in lst:
+            ret += __strgp_cfg(k, *p)
+    return ret
+
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldmsd_decomp_static_op_test cluster".format(USER),
+    "type" : "NA",
+    "INTERVAL" : 1000000,
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                    "plugin" : "record_sampler",
+                    "interval" : "%INTERVAL%",
+                    "offset" : 0,
+                    "config" : [
+                        "component_id=%component_id%",
+                        "instance=%hostname%/%plugin%",
+                        "producer=%hostname%",
+                        "with_name=1"
+                    ],
+                    "start" : True,
+                },
+            ],
+            "config" : [
+                # additional config for test_sampler
+                "load name=test_sampler",
+                "config name=test_sampler action=add_schema schema=test_sampler"
+                "       metrics=%test_sampler_metrics%",
+                "config name=test_sampler"
+                "       action=add_set schema=test_sampler producer=%hostname%"
+                "       instance=%hostname%/test_sampler"
+                "       component_id=%component_id%",
+                "start name=test_sampler interval=%INTERVAL% offset=0",
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : "%INTERVAL%",
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [ # additional config applied after prdcrs
+                "prdcr_start_regex regex=.*",
+                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"samp-{i}",
+            "component_id" : i,
+            "test_sampler_metrics" :
+                "component_id:m:u64:0,job_id:d:u64:0,app_id:d:u64:0"
+                ",count:d:u64:0"
+                ",u8:d:u8:0"
+                ",s8:d:s8:0"
+                ",u16:d:u16:0"
+                ",s16:d:s16:0"
+                ",u32:d:u32:0"
+                ",s32:d:s32:0"
+                ",u64:d:u64:0"
+                ",s64:d:s64:0"
+                ",f32:d:f32:0"
+                ",d64:d:d64:0"
+                ,
+            "!extends" : "compute-node",
+        } for i in [1,2]
+    ] + [
+        {
+            "hostname" : f"agg-1{i}",
+            "i" : i,
+            "!extends" : "compute-node",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 200000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : "samp-%i%",
+                            "!extends" : "prdcr",
+                        }
+                    ],
+                },
+            ]
+        } for i in [1, 2]
+    ] + [
+        {
+            "hostname" : "agg-2",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "aggregator",
+                    "!extends" : "ldmsd-aggregator",
+                    "offset" : 400000,
+                    "prdcrs" : [ # these producers will turn into `prdcr_add`
+                        {
+                            "name" : f"agg-1{i}",
+                            "!extends" : "prdcr",
+                        } for i in [1,2]
+                    ],
+                    "config" : [
+                        # additional config, mainly storages
+                        # load storages
+                        f"load name=store_kafka",
+                        f"config name=store_kafka",
+                        f"load name=store_sos",
+                        f"config name=store_sos path=/{STORE_ROOT}/sos",
+                        f"load name=store_csv",
+                        f"config name=store_csv path=/{STORE_ROOT}/csv"
+                        f" buffer=0",
+                    ] + strgp_cfg() + [
+                        # updtr
+                        "prdcr_start_regex regex=.*",
+                        "updtr_add name=all interval=%INTERVAL% offset=%offset%",
+                        "updtr_prdcr_add name=all regex=.*",
+                        "updtr_start name=all",
+                    ],
+                },
+            ],
+        },
+        {
+            "hostname" : "kafka",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ],
+        },
+        {
+            "hostname" : "headnode",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR",
+        "KAFKA_OPTS": "-Djava.net.preferIPv4Stack=True",
+        "MALLOC_PERTURB_": "0x11",
+        "MALLOC_CHECK_": "1",
+    },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( [f"{SRC}:{SRC}:ro"] if SRC else [] ),
+}
+
+#### test definition ####
+
+ROW_SCHEMAS = [ 'ldms_test_op', 'record_op' ]
+DECOMPS = [ 'static' ] * 3
+STORES = [ 'sos', 'csv', 'kafka' ]
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_decomp_static_op_test",
+                 test_desc = "Static decomposition with 'op' test",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+# Test assertion
+i = 1
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} schema check")
+        i += 1
+
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} data check")
+        i += 1
+
+#### Helper Functions ####
+def ldms_ls(host, port = LDMSD_PORT, l = False):
+    try:
+        args = "-l -v" if l else ""
+        rc, out = headnode.exec_run("bash -c 'ldms_ls {args} -x sock -p {port}" \
+                                    "     -h {host} 2>/dev/null'" \
+                                    .format(host=host, port=port, args=args))
+        if l:
+            return parse_ldms_ls(out)
+        else:
+            return out.splitlines()
+    except:
+        return None
+
+RED = "\033[31m"
+GRN = "\033[32m"
+RST = "\033[0m"
+
+def dict_diff(d0:dict, d1:dict):
+    print(f"Dict diff {RED}-expecting {GRN}+getting")
+    k0 = set(d0.keys())
+    k1 = set(d1.keys())
+    for k in (k0 - k1):
+        print(f"{RED}- {k}: {d0[k]}{RST}")
+    for k in k0 & k1:
+        if d0[k] != d1[k]:
+            print(f"{RED}- {k}: {d0[k]}{RST}")
+            print(f"{GRN}+ {k}: {d1[k]}{RST}")
+    for k in (k1 - k0):
+        print(f"{GRN}+ {k}: {d1[k]}{RST}")
+
+def dict_expect(e:dict, v:dict, test_id):
+    if e == v:
+        return True
+    dict_diff(e, v)
+    test.assert_test(test_id, False, f"Expecting {e} but got {v}")
+    return False
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+headnode = cluster.get_container("headnode")
+agg2 = cluster.get_container("agg-2")
+agg11 = cluster.get_container("agg-11")
+agg12 = cluster.get_container("agg-12")
+samp1 = cluster.get_container("samp-1")
+samp2 = cluster.get_container("samp-2")
+kafka = cluster.get_container("kafka")
+
+headnode.exec_run("rm -rf /db/*")
+
+agg2.exec_run("mkdir -p /store/{sos,csv}")
+
+log.info("-- Start daemons --")
+
+# get kafka directory
+rc, out = kafka.exec_run("ls -d /opt/kafka*/")
+assert(rc == 0)
+out = out.splitlines()
+assert(len(out) == 1)
+KFK_DIR = out[0]
+KFK_LOG_DIR = "/db/kafka_logs"
+rc, out = kafka.exec_run(f"mkdir {KFK_LOG_DIR}")
+
+# start zookeeper
+ZOO_BIN = f"{KFK_DIR}/bin/zookeeper-server-start.sh"
+ZOO_CONF = f"{KFK_DIR}/config/zookeeper.properties"
+zoo_cmd = f"LOG_DIR={KFK_LOG_DIR} {ZOO_BIN} -daemon {ZOO_CONF}"
+rc, out = kafka.exec_run(zoo_cmd)
+assert(rc == 0)
+
+rc, out = kafka.exec_run("/tada-src/python/zoo_check.py >/db/zoo_check.log 2>&1")
+assert(rc == 0)
+
+# start kafka
+KFK_BIN = f"{KFK_DIR}/bin/kafka-server-start.sh"
+KFK_CONF = f"{KFK_DIR}/config/server.properties"
+kfk_cmd = f"LOG_DIR={KFK_LOG_DIR} {KFK_BIN} -daemon {KFK_CONF}"
+rc, out = kafka.exec_run(kfk_cmd)
+assert(rc == 0)
+
+# start daemons defined in the spec
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(10)
+
+def kafka_topic_verify(topics):
+    topics = set(topics)
+    S = set(ROW_SCHEMAS)
+    return topics == S
+
+retry = 5
+while retry:
+    time.sleep(1)
+    rc, out = kafka.exec_run(f"/tada-src/scripts/kafka-topic --list")
+    if rc == 0:
+        topics = out.splitlines()
+        if kafka_topic_verify(topics):
+            break;
+    retry -= 1
+else:
+    raise RuntimeError(f"kafka-topic verification error, rc: {rc}, out: {out}")
+for topic in topics:
+    rc, out = kafka.exec_run(f"/bin/bash -c '/tada-src/scripts/kafka-console-consumer --topic {topic} > /db/kafka-{topic}.dump & '")
+
+# Let it run for a while
+time.sleep(20)
+
+# kill ldmsd on agg-2 to save space consumed by the growing stores
+agg2.exec_run("pkill ldmsd")
+
+agg2.exec_run("mkdir -p /db/rows")
+
+def decomp_out_parse(out):
+    lines = out.splitlines()
+    objs = [ json.loads(l) for l in lines ]
+    return { "schema": objs[0], "rows": objs[1:] }
+
+# convert store data into rows
+def read_data():
+    data = { "kafka": dict(), "sos": dict(), "csv": dict() }
+    for sch in ROW_SCHEMAS:
+        if sch.startswith("record"):
+            cont = "record_sampler"
+        else:
+            cont = "test_sampler"
+        # sos
+        rc, out = agg2.exec_run(
+                    f"/tada-src/python/decomp_out.py --store sos"
+                    f" --path /store/sos/{cont} --schema {sch}"
+                )
+        assert( rc == 0 )
+        data["sos"][sch] = decomp_out_parse(out)
+        # csv
+        rc, out = agg2.exec_run(
+                    f"/tada-src/python/decomp_out.py --store csv"
+                    f" --path /store/csv/{cont}/{sch}"
+                )
+        assert( rc == 0 )
+        data["csv"][sch] = decomp_out_parse(out)
+        # kafka
+        rc, out = kafka.exec_run(
+                    f"/tada-src/python/decomp_out.py --store kafka"
+                    f" --path /db/kafka-{sch}.dump"
+                )
+        assert( rc == 0 )
+        data["kafka"][sch] = decomp_out_parse(out)
+    return data
+data = read_data()
+
+expected_schemas = {
+    "ldms_test_op": {
+        "cols": [
+            "timestamp", "producer", "instance", "count", "component_id",
+            "s8",  "s8_diff",  "s8_min",  "s8_mean",  "s8_max",
+            "u8",  "u8_diff",  "u8_min",  "u8_mean",  "u8_max",
+            "s16", "s16_diff", "s16_min", "s16_mean", "s16_max",
+            "u16", "u16_diff", "u16_min", "u16_mean", "u16_max",
+            "s32", "s32_diff", "s32_min", "s32_mean", "s32_max",
+            "u32", "u32_diff", "u32_min", "u32_mean", "u32_max",
+            "s64", "s64_diff", "s64_min", "s64_mean", "s64_max",
+            "u64", "u64_diff", "u64_min", "u64_mean", "u64_max",
+            "f32", "f32_diff", "f32_min", "f32_mean", "f32_max",
+            "d64", "d64_diff", "d64_min", "d64_mean", "d64_max",
+        ],
+        "indices": [
+            {"name": "timestamp", "cols": ["timestamp"]},
+            {"name": "time_comp", "cols": ["timestamp", "component_id"]}
+        ]
+    },
+    "record_op": {
+		"cols": [
+			"timestamp", "producer", "instance", "round", "component_id",
+			"dev_name",
+			"dev_s8", "dev_s8_diff", "dev_s8_min", "dev_s8_mean", "dev_s8_max",
+			"dev_u8", "dev_u8_diff", "dev_u8_min", "dev_u8_mean", "dev_u8_max",
+			"dev_s16", "dev_s16_diff", "dev_s16_min", "dev_s16_mean", "dev_s16_max",
+			"dev_u16", "dev_u16_diff", "dev_u16_min", "dev_u16_mean", "dev_u16_max",
+			"dev_s32", "dev_s32_diff", "dev_s32_min", "dev_s32_mean", "dev_s32_max",
+			"dev_u32", "dev_u32_diff", "dev_u32_min", "dev_u32_mean", "dev_u32_max",
+			"dev_s64", "dev_s64_diff", "dev_s64_min", "dev_s64_mean", "dev_s64_max",
+			"dev_u64", "dev_u64_diff", "dev_u64_min", "dev_u64_mean", "dev_u64_max",
+			"dev_f32", "dev_f32_diff", "dev_f32_min", "dev_f32_mean", "dev_f32_max",
+			"dev_d64", "dev_d64_diff", "dev_d64_min", "dev_d64_mean", "dev_d64_max"
+		],
+		"indices": [
+			{ "name": "timestamp", "cols": [ "timestamp" ] },
+			{ "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+		]
+	},
+}
+
+VA_RE = re.compile('([^[]+)\[(.*)\]')
+
+def row_to_obj(cols, row):
+    # convert a row into dict object
+    obj = dict()
+    for c, v in zip(cols, row):
+        m = VA_RE.fullmatch(c)
+        if m is not None:
+            a, b = m.groups()
+            o = obj.setdefault(a, dict())
+            o[b] = v
+        else:
+            if c == "Time":
+                c = "timestamp"
+            obj[c] = v
+    # put record into a list
+    ret = { k: [v] if type(v) is dict else v for k,v in obj.items() }
+    return ret
+
+def data_to_snaps(_data):
+    # converts rows into set snapshots
+    cols = _data["schema"]["cols"]
+    rows = _data["rows"]
+    snaps = list()
+    ts_col = -1
+    comp_col = -1
+    i = 0
+    for c in cols:
+        if c in [ "Time", "ts", "timestamp" ]:
+            ts_col = i
+        if c in [ "component_id", "comp_id" ]:
+            comp_col = i
+        i += 1
+    assert( ts_col   > -1 )
+    assert( comp_col > -1 )
+    for row in rows:
+        obj = row_to_obj(cols, row)
+        snaps.append(obj)
+    return snaps
+
+def gen_record_op(ts, comp_id, _round, dev_name, kc):
+    obj = dict()
+    obj["timestamp"] = ts
+    obj["producer"] = f"samp-{comp_id}"
+    obj["instance"] = f"samp-{comp_id}/record_sampler"
+    obj["round"] = _round
+    obj["component_id"] = comp_id
+    obj["dev_name"] = dev_name
+
+    j = int(dev_name.removeprefix("list"))
+    i = _round + j
+
+    k = min(kc, 2)
+
+    u8 = i % 256
+    obj['dev_u8'] = u8
+    obj['dev_u8_diff'] = 1 if k else 0
+    obj['dev_u8_min'] = u8 - k
+    obj['dev_u8_max'] = u8
+    obj['dev_u8_mean'] = u8 - k if k < 2 else u8 - 1
+
+    s8 = -(i % 128)
+    obj['dev_s8'] = s8
+    obj['dev_s8_diff'] = -1 if k else 0
+    obj['dev_s8_min'] = s8
+    obj['dev_s8_max'] = s8 + k
+    obj['dev_s8_mean'] = s8 + k if k < 2 else s8 + 1
+
+    u16 = i + 1000
+    obj['dev_u16'] = u16
+    obj['dev_u16_diff'] = 1 if k else 0
+    obj['dev_u16_min'] = u16 - k
+    obj['dev_u16_max'] = u16
+    obj['dev_u16_mean'] = u16 - k if k < 2 else u16 - 1
+
+    s16 = -(i + 1000)
+    obj['dev_s16'] = s16
+    obj['dev_s16_diff'] = -1 if k else 0
+    obj['dev_s16_min'] = s16
+    obj['dev_s16_max'] = s16 + k
+    obj['dev_s16_mean'] = s16 + k if k < 2 else s16 + 1
+
+    u32 = i + 100000
+    obj['dev_u32'] = u32
+    obj['dev_u32_diff'] = 1 if k else 0
+    obj['dev_u32_min'] = u32 - k
+    obj['dev_u32_max'] = u32
+    obj['dev_u32_mean'] = u32 - k if k < 2 else u32 - 1
+
+    s32 = -(i + 100000)
+    obj['dev_s32'] = s32
+    obj['dev_s32_diff'] = -1 if k else 0
+    obj['dev_s32_min'] = s32
+    obj['dev_s32_max'] = s32 + k
+    obj['dev_s32_mean'] = s32 + k if k < 2 else s32 + 1
+
+    u64 = i + 200000
+    obj['dev_u64'] = u64
+    obj['dev_u64_diff'] = 1 if k else 0
+    obj['dev_u64_min'] = u64 - k
+    obj['dev_u64_max'] = u64
+    obj['dev_u64_mean'] = u64 - k if k < 2 else u64 - 1
+
+    s64 = -(i + 200000)
+    obj['dev_s64'] = s64
+    obj['dev_s64_diff'] = -1 if k else 0
+    obj['dev_s64_min'] = s64
+    obj['dev_s64_max'] = s64 + k
+    obj['dev_s64_mean'] = s64 + k if k < 2 else s64 + 1
+
+    f32 = float(i)
+    obj['dev_f32'] = f32
+    obj['dev_f32_diff'] = 1 if k else 0
+    obj['dev_f32_min'] = f32 - k
+    obj['dev_f32_max'] = f32
+    obj['dev_f32_mean'] = f32 - k/2 if k < 2 else f32 - 1
+
+
+    d64 = float(i)
+    obj['dev_d64'] = d64
+    obj['dev_d64_diff'] = 1 if k else 0
+    obj['dev_d64_min'] = d64 - k
+    obj['dev_d64_max'] = d64
+    obj['dev_d64_mean'] = d64 - k/2 if k < 2 else d64 - 1
+
+    return obj
+
+def gen_ldms_test_op(ts, comp_id, count, kc):
+    obj = dict()
+    obj["timestamp"] = ts
+    obj["producer"] = f"samp-{comp_id}"
+    obj["instance"] = f"samp-{comp_id}/test_sampler"
+    obj["count"] = count
+    obj["component_id"] = comp_id
+
+    i = count
+
+    k = min(kc, 2)
+
+    u8 = i % 256
+    obj['u8'] = u8
+    obj['u8_diff'] = 1 if k else 0
+    obj['u8_min'] = u8 - k
+    obj['u8_max'] = u8
+    obj['u8_mean'] = u8 - k if k < 2 else u8 - 1
+
+    s8 = i % 256
+    obj['s8'] = s8
+    obj['s8_diff'] = 1 if k else 0
+    obj['s8_min'] = s8 - k
+    obj['s8_max'] = s8
+    obj['s8_mean'] = s8 - k if k < 2 else s8 - 1
+
+    u16 = i
+    obj['u16'] = u16
+    obj['u16_diff'] = 1 if k else 0
+    obj['u16_min'] = u16 - k
+    obj['u16_max'] = u16
+    obj['u16_mean'] = u16 - k if k < 2 else u16 - 1
+
+    s16 = i
+    obj['s16'] = s16
+    obj['s16_diff'] = 1 if k else 0
+    obj['s16_min'] = s16 - k
+    obj['s16_max'] = s16
+    obj['s16_mean'] = s16 - k if k < 2 else s16 - 1
+
+    u32 = i
+    obj['u32'] = u32
+    obj['u32_diff'] = 1 if k else 0
+    obj['u32_min'] = u32 - k
+    obj['u32_max'] = u32
+    obj['u32_mean'] = u32 - k if k < 2 else u32 - 1
+
+    s32 = i
+    obj['s32'] = s32
+    obj['s32_diff'] = 1 if k else 0
+    obj['s32_min'] = s32 - k
+    obj['s32_max'] = s32
+    obj['s32_mean'] = s32 - k if k < 2 else s32 - 1
+
+    u64 = i
+    obj['u64'] = u64
+    obj['u64_diff'] = 1 if k else 0
+    obj['u64_min'] = u64 - k
+    obj['u64_max'] = u64
+    obj['u64_mean'] = u64 - k if k < 2 else u64 - 1
+
+    s64 = i
+    obj['s64'] = s64
+    obj['s64_diff'] = 1 if k else 0
+    obj['s64_min'] = s64 - k
+    obj['s64_max'] = s64
+    obj['s64_mean'] = s64 - k if k < 2 else s64 - 1
+
+    f32 = float(i)
+    obj['f32'] = f32
+    obj['f32_diff'] = 1 if k else 0
+    obj['f32_min'] = f32 - k
+    obj['f32_max'] = f32
+    obj['f32_mean'] = f32 - k/2 if k < 2 else f32 - 1
+
+    d64 = float(i)
+    obj['d64'] = d64
+    obj['d64_diff'] = 1 if k else 0
+    obj['d64_min'] = d64 - k
+    obj['d64_max'] = d64
+    obj['d64_mean'] = d64 - k/2 if k < 2 else d64 - 1
+
+    return obj
+
+def record_op_snaps_check(snaps, test_id, store):
+    key_count = dict()
+    start = 0 if store != "kafka" else 2
+    for v in snaps:
+        ts = v['timestamp']
+        comp_id = v['component_id']
+        _round = v['round']
+        dev_name = v['dev_name']
+        key = (comp_id, dev_name)
+        kc = key_count.get(key, start)
+        g = gen_record_op(ts, comp_id, _round, dev_name, kc)
+        key_count[key] = kc + 1
+        if not dict_expect(g, v, test_id):
+            return
+    test.assert_test(test_id, True, f"OK")
+
+def ldms_test_op_snaps_check(snaps, test_id, store):
+    key_count = dict()
+    start = 0 if store != "kafka" else 2
+    for v in snaps:
+        ts = v['timestamp']
+        comp_id = v['component_id']
+        count = v['count']
+        key = (comp_id)
+        kc = key_count.get(key, start)
+        g = gen_ldms_test_op(ts, comp_id, count, kc)
+        key_count[key] = kc + 1
+        if not dict_expect(g, v, test_id):
+            return
+    test.assert_test(test_id, True, f"OK")
+
+####################
+### schema check ###
+####################
+i = 1
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        # test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} schema check")
+        data_sch = data[st][rs]["schema"]
+        exp_sch = expected_schemas[rs]
+        while True: # will break
+            exp_cols = list(exp_sch["cols"])
+            data_cols = list(data_sch["cols"])
+            if data_cols[0] not in ["Time", "ts", "timestamp"]:
+                test.assert_test(i, False, f"Missing leading timesrtamp column")
+                break
+            exp_cols = exp_cols[1:]
+            data_cols = data_cols[1:]
+            if data_cols != exp_cols:
+                test.assert_test(i, False, f"columns mismatch")
+                break
+            if st == "sos" and data_sch["indices"] != exp_sch["indices"]:
+                test.assert_test(i, False, f"indices mismatch")
+                break
+            test.assert_test(i, True, f"OK")
+            break
+        i += 1
+
+row_check_tbl = {
+    "ldms_test_op" : ldms_test_op_snaps_check,
+    "record_op" : record_op_snaps_check,
+}
+
+##################
+### data check ###
+##################
+for st in STORES:
+    for dc, rs in zip(DECOMPS, ROW_SCHEMAS):
+        # test.add_assertion(i, f"`{dc}` decomposition, {rs} {st} data check")
+        check_fn = row_check_tbl[rs]
+        rows = data[st][rs]["rows"]
+        snaps = data_to_snaps(data[st][rs])
+        check_fn(snaps, i, st)
+        i += 1
+
+test.finish()
