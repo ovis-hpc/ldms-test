@@ -1,0 +1,81 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "record_op",
+      "cols": [
+        { "src":"timestamp" }
+        ,{ "src":"producer" }
+        ,{ "src":"instance" }
+        ,{ "src":"round" }
+        ,{ "src":"component_id" }
+        ,{ "src":"device_list[name]", "dst": "dev_name" }
+
+        ,{ "src":"device_list[LDMS_V_S8]", "dst": "dev_s8" }
+        ,{ "src":"device_list[LDMS_V_S8]", "dst": "dev_s8_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_S8]", "dst": "dev_s8_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_S8]", "dst": "dev_s8_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_S8]", "dst": "dev_s8_max",  "op": "max"  }
+        ,{ "src":"device_list[LDMS_V_U8]", "dst": "dev_u8" }
+        ,{ "src":"device_list[LDMS_V_U8]", "dst": "dev_u8_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_U8]", "dst": "dev_u8_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_U8]", "dst": "dev_u8_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_U8]", "dst": "dev_u8_max",  "op": "max"  }
+
+        ,{ "src":"device_list[LDMS_V_S16]", "dst": "dev_s16" }
+        ,{ "src":"device_list[LDMS_V_S16]", "dst": "dev_s16_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_S16]", "dst": "dev_s16_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_S16]", "dst": "dev_s16_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_S16]", "dst": "dev_s16_max",  "op": "max"  }
+        ,{ "src":"device_list[LDMS_V_U16]", "dst": "dev_u16" }
+        ,{ "src":"device_list[LDMS_V_U16]", "dst": "dev_u16_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_U16]", "dst": "dev_u16_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_U16]", "dst": "dev_u16_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_U16]", "dst": "dev_u16_max",  "op": "max"  }
+
+        ,{ "src":"device_list[LDMS_V_S32]", "dst": "dev_s32" }
+        ,{ "src":"device_list[LDMS_V_S32]", "dst": "dev_s32_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_S32]", "dst": "dev_s32_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_S32]", "dst": "dev_s32_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_S32]", "dst": "dev_s32_max",  "op": "max"  }
+        ,{ "src":"device_list[LDMS_V_U32]", "dst": "dev_u32" }
+        ,{ "src":"device_list[LDMS_V_U32]", "dst": "dev_u32_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_U32]", "dst": "dev_u32_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_U32]", "dst": "dev_u32_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_U32]", "dst": "dev_u32_max",  "op": "max"  }
+
+        ,{ "src":"device_list[LDMS_V_S64]", "dst": "dev_s64" }
+        ,{ "src":"device_list[LDMS_V_S64]", "dst": "dev_s64_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_S64]", "dst": "dev_s64_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_S64]", "dst": "dev_s64_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_S64]", "dst": "dev_s64_max",  "op": "max"  }
+        ,{ "src":"device_list[LDMS_V_U64]", "dst": "dev_u64" }
+        ,{ "src":"device_list[LDMS_V_U64]", "dst": "dev_u64_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_U64]", "dst": "dev_u64_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_U64]", "dst": "dev_u64_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_U64]", "dst": "dev_u64_max",  "op": "max"  }
+
+        ,{ "src":"device_list[LDMS_V_F32]", "dst": "dev_f32" }
+        ,{ "src":"device_list[LDMS_V_F32]", "dst": "dev_f32_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_F32]", "dst": "dev_f32_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_F32]", "dst": "dev_f32_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_F32]", "dst": "dev_f32_max",  "op": "max"  }
+
+        ,{ "src":"device_list[LDMS_V_D64]", "dst": "dev_d64" }
+        ,{ "src":"device_list[LDMS_V_D64]", "dst": "dev_d64_diff", "op": "diff" }
+        ,{ "src":"device_list[LDMS_V_D64]", "dst": "dev_d64_min",  "op": "min"  }
+        ,{ "src":"device_list[LDMS_V_D64]", "dst": "dev_d64_mean", "op": "mean" }
+        ,{ "src":"device_list[LDMS_V_D64]", "dst": "dev_d64_max",  "op": "max"  }
+      ],
+      "group": {
+        "limit": 3,
+        "index": ["component_id", "dev_name"],
+        "order": ["timestamp"]
+      },
+      "indices": [
+        { "name": "timestamp", "cols": [ "timestamp" ] },
+        { "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+      ]
+    }
+  ]
+}

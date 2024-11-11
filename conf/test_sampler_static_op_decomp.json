@@ -1,0 +1,82 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "ldms_test_op",
+      "cols": [
+        { "src":"timestamp" }
+        ,{ "src":"producer" }
+        ,{ "src":"instance" }
+        ,{ "src":"count" }
+        ,{ "src":"component_id" }
+
+        ,{ "src":"s8" }
+        ,{ "src":"s8", "op" : "diff", "dst": "s8_diff" }
+        ,{ "src":"s8", "op" : "min",  "dst": "s8_min"  }
+        ,{ "src":"s8", "op" : "mean", "dst": "s8_mean" }
+        ,{ "src":"s8", "op" : "max",  "dst": "s8_max"  }
+        ,{ "src":"u8" }
+        ,{ "src":"u8", "op" : "diff", "dst": "u8_diff" }
+        ,{ "src":"u8", "op" : "min",  "dst": "u8_min"  }
+        ,{ "src":"u8", "op" : "mean", "dst": "u8_mean" }
+        ,{ "src":"u8", "op" : "max",  "dst": "u8_max"  }
+
+        ,{ "src":"s16" }
+        ,{ "src":"s16", "op" : "diff", "dst": "s16_diff" }
+        ,{ "src":"s16", "op" : "min",  "dst": "s16_min"  }
+        ,{ "src":"s16", "op" : "mean", "dst": "s16_mean" }
+        ,{ "src":"s16", "op" : "max",  "dst": "s16_max"  }
+        ,{ "src":"u16" }
+        ,{ "src":"u16", "op" : "diff", "dst": "u16_diff" }
+        ,{ "src":"u16", "op" : "min",  "dst": "u16_min"  }
+        ,{ "src":"u16", "op" : "mean", "dst": "u16_mean" }
+        ,{ "src":"u16", "op" : "max",  "dst": "u16_max"  }
+
+        ,{ "src":"s32" }
+        ,{ "src":"s32", "op" : "diff", "dst": "s32_diff" }
+        ,{ "src":"s32", "op" : "min",  "dst": "s32_min"  }
+        ,{ "src":"s32", "op" : "mean", "dst": "s32_mean" }
+        ,{ "src":"s32", "op" : "max",  "dst": "s32_max"  }
+        ,{ "src":"u32" }
+        ,{ "src":"u32", "op" : "diff", "dst": "u32_diff" }
+        ,{ "src":"u32", "op" : "min",  "dst": "u32_min"  }
+        ,{ "src":"u32", "op" : "mean", "dst": "u32_mean" }
+        ,{ "src":"u32", "op" : "max",  "dst": "u32_max"  }
+
+
+        ,{ "src":"s64" }
+        ,{ "src":"s64", "op" : "diff", "dst": "s64_diff" }
+        ,{ "src":"s64", "op" : "min",  "dst": "s64_min"  }
+        ,{ "src":"s64", "op" : "mean", "dst": "s64_mean" }
+        ,{ "src":"s64", "op" : "max",  "dst": "s64_max"  }
+        ,{ "src":"u64" }
+        ,{ "src":"u64", "op" : "diff", "dst": "u64_diff" }
+        ,{ "src":"u64", "op" : "min",  "dst": "u64_min"  }
+        ,{ "src":"u64", "op" : "mean", "dst": "u64_mean" }
+        ,{ "src":"u64", "op" : "max",  "dst": "u64_max"  }
+
+        ,{ "src":"f32" }
+        ,{ "src":"f32", "op" : "diff", "dst": "f32_diff" }
+        ,{ "src":"f32", "op" : "min",  "dst": "f32_min"  }
+        ,{ "src":"f32", "op" : "mean", "dst": "f32_mean" }
+        ,{ "src":"f32", "op" : "max",  "dst": "f32_max"  }
+
+        ,{ "src":"d64" }
+        ,{ "src":"d64", "op" : "diff", "dst": "d64_diff" }
+        ,{ "src":"d64", "op" : "min",  "dst": "d64_min"  }
+        ,{ "src":"d64", "op" : "mean", "dst": "d64_mean" }
+        ,{ "src":"d64", "op" : "max",  "dst": "d64_max"  }
+
+      ],
+      "group": {
+        "limit": 3,
+        "index": ["component_id"],
+        "order": ["timestamp"]
+      },
+      "indices": [
+        { "name": "timestamp", "cols": [ "timestamp" ] },
+        { "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+      ]
+    }
+  ]
+}

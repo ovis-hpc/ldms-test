@@ -57,6 +57,7 @@ CONT_TEST_LIST=(
 	dump_cfg_test
 
 	ldmsd_decomp_static_omit_test
+	ldmsd_decomp_static_op_test
 )
 
 INSIDE_CONT_TEST_LIST=(
