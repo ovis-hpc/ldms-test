@@ -14,8 +14,6 @@ import TADA
 import logging
 import atexit
 
-# TODO REVISE ME
-
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls
