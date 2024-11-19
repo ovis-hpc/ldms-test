@@ -539,6 +539,10 @@ for sch in schemas:
         cont = "test_sampler"
     elif sch.startswith("test_list"):
         cont = "test_list"
+    elif sch in [ "fill", "filter" ]:
+        cont = "test_sampler"
+    else:
+        raise RuntimeError(f"Unrecognized schema: {sch}")
     # sos
     rc, out = agg2.exec_run(
                 f"/tada-src/python/decomp_out.py --store sos"
