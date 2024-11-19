@@ -1,0 +1,32 @@
+{
+  "type": "static",
+  "rows": [
+    {
+      "schema": "ldms_test_small_op",
+      "cols": [
+        { "src":"timestamp" }
+        ,{ "src":"producer" }
+        ,{ "src":"instance" }
+        ,{ "src":"count" }
+        ,{ "src":"component_id" }
+
+        ,{ "src":"u16" }
+        ,{ "src":"u16", "op" : "diff", "dst": "u16_diff" }
+        ,{ "src":"u16", "op" : "min",  "dst": "u16_min"  }
+        ,{ "src":"u16", "op" : "mean", "dst": "u16_mean" }
+        ,{ "src":"u16", "op" : "max",  "dst": "u16_max"  }
+
+      ],
+      "group": {
+        "limit": 3,
+        "index": ["component_id"],
+        "order": ["timestamp"],
+	"timeout": "2s"
+      },
+      "indices": [
+        { "name": "timestamp", "cols": [ "timestamp" ] },
+        { "name": "time_comp", "cols": [ "timestamp", "component_id" ] }
+      ]
+    }
+  ]
+}

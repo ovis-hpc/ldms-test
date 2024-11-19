@@ -58,6 +58,7 @@ CONT_TEST_LIST=(
 
 	ldmsd_decomp_static_omit_test
 	ldmsd_decomp_static_op_test
+	ldmsd_decomp_static_rowcache_test
 )
 
 INSIDE_CONT_TEST_LIST=(
