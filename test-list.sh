@@ -65,6 +65,8 @@ CONT_TEST_LIST=(
 
 	ldmsd_decomp_static_omit_test
 	ldmsd_decomp_static_op_test
+	ldmsd_decomp_static_rowcache_test
+
 	json_stream_sampler_test
 
 	ldms_qgroup_test
