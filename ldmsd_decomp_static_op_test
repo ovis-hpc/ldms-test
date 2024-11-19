@@ -103,7 +103,7 @@ spec = {
     "name" : CLUSTERNAME,
     "description" : "{}'s ldmsd_decomp_static_op_test cluster".format(USER),
     "type" : "NA",
-    "INTERVAL" : 1000000,
+    "INTERVAL" : 2000000,
     "templates" : { # generic template can apply to any object by "!extends"
         "compute-node" : {
             "daemons" : [
@@ -162,7 +162,7 @@ spec = {
             "!extends" : "ldmsd-base",
             "config" : [ # additional config applied after prdcrs
                 "prdcr_start_regex regex=.*",
-                "updtr_add name=all interval=1000000 offset=%offset%",
+                "updtr_add name=all interval=2000000 offset=%offset%",
                 "updtr_prdcr_add name=all regex=.*",
                 "updtr_start name=all"
             ],
@@ -201,7 +201,7 @@ spec = {
                 {
                     "name" : "agg",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 200000,
+                    "offset" : 400000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "samp-%i%",
@@ -222,7 +222,7 @@ spec = {
                 {
                     "name" : "aggregator",
                     "!extends" : "ldmsd-aggregator",
-                    "offset" : 400000,
+                    "offset" : 900000,
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : f"agg-1{i}",
@@ -565,7 +565,7 @@ def gen_record_op(ts, comp_id, _round, dev_name, kc):
     obj["component_id"] = comp_id
     obj["dev_name"] = dev_name
 
-    j = int(dev_name.removeprefix("list"))
+    j = int(dev_name.replace("list", ""))
     i = _round + j
 
     k = min(kc, 2)
