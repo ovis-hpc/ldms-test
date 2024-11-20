@@ -72,6 +72,9 @@ CONT_TEST_LIST=(
 	ldms_qgroup_test
 	ldmsd_qgroup_test
 
+	# Peer Daemon Advertisement
+	peer_daemon_advertisement_test
+
 	# old test, shall be removed when we move to 4.5 keep here for a
 	#   refernece for now
 	#
