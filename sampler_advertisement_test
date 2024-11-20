@@ -1,0 +1,490 @@
+#!/usr/bin/env python3
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import shutil
+import sys
+import time
+
+import TADA
+
+from LDMS_Test import LDMSDCluster,LDMSDContainer, process_args, \
+                      add_common_args
+
+# Scenarios needed to be tested
+# - sampler daemon starts before L1
+#   - Sampler daemon periodically tries to reconnect until L1 starts
+#   - L1 creates the producer with a correct name?
+#   - L1 starts the producer
+#   - L1 collects the producer's sets
+#   - L1 updates the producer's sets
+# - L1 starts before sampler daemon
+# - After L1 collects the sets,
+#   - Sampler daemon is gone
+#     - On L1,
+#           - the producer is in the DISCONNECTED state
+#           - The sets are gone
+#     - On L2,
+#           - the sets are gone
+#   - Sampler daemon revives
+#     - The producer state is moved to the CONNECTED state
+#     - The sets are collected
+#   - L1 is gone
+#     - sampler daemon periodically reconnects to L1 until L1 is back
+#   - L1 is revived
+#     - L1 connected to sampler
+#     - L1 collects the sets
+#
+# - sampler advertises to multiple L1
+#
+# - Agg have multiple prdcr_listens.
+#   - condition overlapped
+#   - conditions have conflicts
+#
+# Test cases
+# prdcr_listen
+# - prdcr_listen with no restrictions
+# - prdcr_listen with IP masks
+# - prdcr_listen with regex matching hostnames
+# advertiser_start
+# - Return an error when connect to unresolve address
+
+if __name__ != "__main__":
+        raise RuntimeError("This should not be imported as a module.")
+
+class Debug(object):
+        pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = shutil.which("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+LDMSD_PORT = 10000
+LDMSD_XPRT = "sock"
+RECONNECT_US = 200000
+SAMPLE_US = UPDATE_US = 1000000
+SAMPLER_PI = ["meminfo", "vmstat"]
+
+HOSTNAME_REGEX = '^node-3$'
+CIDR = None
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test the Sampler Advertisement Functionalities" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+
+#### spec #### -------------------------------------------------------
+NUM_COMPUTE = 4
+
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+]
+
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s Sampler Advertisement Cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "compute-node" : {
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "!extends" : "ldmsd-sampler",
+                },
+            ],
+        },
+        "sampler_plugin" : {
+            "interval" : SAMPLE_US,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT },
+            ],
+        },
+        "ldmsd-sampler" : {
+            "!extends" : "ldmsd-base",
+            "samplers" : [
+                {
+                     "plugin" : p,
+                     "!extends" : "sampler_plugin"
+                } for p in SAMPLER_PI
+            ],
+            "advertisers" : [
+                {
+                    "name" : "%hostname%",
+                    "host" : "%agg%",
+                    "xprt" : LDMSD_XPRT,
+                    "port" : LDMSD_PORT,
+                    "reconnect" : RECONNECT_US
+                },
+            ]
+        },
+        "ldmsd-aggregator" : {
+            "!extends" : "ldmsd-base",
+            "config" : [
+                f"updtr_add name=all interval={UPDATE_US} offset=%updt_offset%",
+                "updtr_prdcr_add name=all regex=.*",
+                "updtr_start name=all"
+            ],
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : f"node-{i}",
+            "component_id" : i,
+            "agg"      : "agg11" if i in [1, 2] else "agg12",
+            "!extends" : "compute-node",
+        } for i in range(1, NUM_COMPUTE+1)
+    ] + [
+        {
+            "hostname" : f"agg11",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg11",
+                    "!extends" : "ldmsd-aggregator",
+                    "updt_offset" : UPDATE_US/8,
+                    "prdcr_listen" : [
+                        {
+                            "name" : "wildcard"
+                        }
+                    ]
+                },
+            ]
+        },
+        {
+            "hostname" : f"agg12",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "agg12",
+                    "!extends" : "ldmsd-aggregator",
+                    "updt_offset" : UPDATE_US/8,
+                },
+            ]
+        },
+    ] + [
+        {
+            "hostname" : "agg21",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                     "name" : "agg21",
+                     "!extends" : "ldmsd-base",
+                     "prdcrs" : [
+                        {
+                            "name" : "agg11",
+                            "host" : "agg11",
+                            "port" : LDMSD_PORT,
+                            "xprt" : LDMSD_XPRT,
+                            "type" : "active",
+                            "interval" : RECONNECT_US
+                        }
+                     ],
+                     "config" : [
+                        "prdcr_start_regex regex=.*",
+                        f"updtr_add name=agg11 interval={UPDATE_US} offset={UPDATE_US/4}",
+                        "updtr_prdcr_add name=agg11 regex=.*",
+                        "updtr_start name=agg11"
+                     ]
+                }
+            ]
+        }
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro"
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### Utility functions ####
+def ldms_ls(cont, host = "localhost", xprt = LDMSD_XPRT, port = LDMSD_PORT):
+    cmd = f"bash -c 'ldms_ls -x {xprt} -p {port} -h {host}'"
+    rc, out = cont.exec_run(cmd)
+    if rc:
+          raise Exception(f"ldms_ls -l failed with error {rc}: {out}")
+    return out.splitlines()
+
+def send_request(cont, cmd, xprt = LDMSD_XPRT, port = LDMSD_PORT, host = "localhost"):
+    s = f"/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H {host}"
+    s += f" --cmd '{cmd}'"
+    errcode, out = cont.exec_run(s)
+    return errcode, out.strip()
+
+def advertiser_status(cont):
+    rc, adv = send_request(cont, cmd = "prdcr_status")
+    if rc != 0:
+         raise Exception(f"{cont._name}: advertiser_status failed with error {rc}. {adv}")
+    return json.loads(adv)
+
+def prdcr_listen_status(cont):
+    rc, pl = send_request(cont, cmd = "prdcr_listen_status")
+    if rc != 0:
+         raise Exception(f"{cont._name}: prdcr_listen_status failed with error {rc}. {pl}")
+    return json.loads(pl)
+
+def get_prdcrs(cont):
+    errcode, prdcrs = send_request(cont, "prdcr_status")
+    if errcode != 0:
+         raise Exception(f"'prdcr_status' failed. Error {errcode}. {prdcrs}.")
+    return json.loads(prdcrs)
+
+def verify_prdcr(cont, exp):
+    prdcrs = get_prdcrs(cont) # Get all producers
+    for p in prdcrs:
+        del p['port']
+        del p['reconnect_us']
+    return prdcrs == exp
+
+def verify_sets(cont, exp, exist):
+    set_names = ldms_ls(cont)
+    if exist:
+        return all(s in set_names for s in exp)
+    else:
+         return all(s not in set_names for s in exp)
+
+def get_exp_prdcr(name, host, state, sets, type="advertised", transport="sock"):
+    e = {
+        'name' : name,
+        'type' : type,
+        'host' : host,
+        'state' : state,
+        'transport' : transport,
+        'sets' : [{ 'inst_name'   : f"{host}/{s['schema']}",
+                    'schema_name' : s['schema'],
+                    'state'       : s['state']
+                    } for s in sets]
+    }
+    return e
+
+#### Test logic ############
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type  = "FVT",
+                 test_name  = "agg_test",
+                 test_desc  = "Sampler Advertisement Functionality Test",
+                 test_user  = args.user,
+                 commit_id  = COMMIT_ID,
+                 tada_addr  = args.tada_addr)
+
+test.add_assertion("start_1", "node-1's Advertiser starts before agg11's prdcr_listen starts.")
+test.add_assertion("start_2", "node-2's Advertiser starts after agg11's prdcr_listen starts.")
+test.add_assertion("agg21-aggregation-1", "agg21 sees and updates node-1's sets.")
+test.add_assertion("agg21-aggregation-2", "agg21 sees and updates node-2's sets.")
+test.add_assertion("agg11-remove-sets-1", "Sets removed from agg11 after disconnecting from sampler daemon.")
+test.add_assertion("agg21-remove-sets-1", "Sets removed from agg21 after agg11 disconnecting from sampler daemon.")
+test.add_assertion("sampler-revive-1", "Agg11 collects sets from node-2 after reviving sampler daemon.")
+test.add_assertion("sampler-revive-2", "Agg21 collects sets from agg11 after reviving sampler daemon.")
+test.add_assertion("agg21-remove-sets-2", "Agg21 removed all sets after disconnecting from agg11.")
+test.add_assertion("agg11-revive-1", "Agg11 collects all sets after restarting.")
+test.add_assertion("agg11-revive-2", "Agg21 collects all sets after agg11 get restarted.")
+test.add_assertion("prdcr_listen_not_start", "Agg12 doesn't collect any sets before prdcr_listen start.")
+test.add_assertion("prdcr_listen_limit_hostname", "Agg12 collects node-1's sets after prdcr_listen accepting only node-1's hostname starts.")
+test.add_assertion("prdcr_listen_limit_ip", "Agg12 collects node-2's sets after prdcr_listen accepting only node-1's IP starts.")
+test.add_assertion("advertiser_status", "'advertiser_status' correctly reports the output")
+test.add_assertion("prdcr_listen_status-1", "'prdcr_listen_status' correctly report the single prdcr_listen.")
+test.add_assertion("prdcr_listen_status-2", "'prdcr_listen_status' correctly report the two prdcr_listen objects.")
+test.add_assertion("restart_advertised_prdcr-1", "Stopping an advertised producer")
+test.add_assertion("restart_advertised_prdcr-2", "Restarting an advertised producer")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+nodes = [node_1, node_2, node_3, node_4] = [cluster.get_container(f"node-{i}") for i in range(1, NUM_COMPUTE+1)]
+agg11 = cluster.get_container("agg11")
+agg12 = cluster.get_container("agg12")
+agg21 = cluster.get_container('agg21')
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(1)
+
+# Start advertiser on node-1
+send_request(node_1, cmd = "advertiser_start name=node-1")
+time.sleep(0.5) # Make sure that the advertiser was started before the prdcr_listen
+# Start prdcr_listen on agg11
+send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
+time.sleep(RECONNECT_US/1000000.0*2) # Give agg11 to start prdcr_listen
+
+exp_prdcr_node_1 = [get_exp_prdcr(name = 'node-1', host = 'node-1', state = "CONNECTED",
+                                 sets = [{'schema' : s, 'state' : 'READY'} for s in SAMPLER_PI])
+                   ]
+test.assert_test("start_1", verify_prdcr(agg11, exp_prdcr_node_1), "Advertised producer 'node-1' exists on agg11 and is in the correct state.")
+node_1_set_names = [f'node-1/{p}' for p in SAMPLER_PI]
+test.assert_test("agg21-aggregation-1", verify_sets(agg21, node_1_set_names, exist = True), f'{node_1_set_names} exist on agg21')
+
+# Start advertiser on node-2
+send_request(node_2, cmd = "advertiser_start name=node-2")
+exp_prdcr_node_2 = [get_exp_prdcr(name='node-2', host='node-2', state="CONNECTED",
+                                 sets=[{'schema':s, 'state':'READY'} for s in SAMPLER_PI])
+                   ]
+time.sleep(RECONNECT_US/1000000.0*2 + UPDATE_US/1000000.0)
+test.assert_test("start_2", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Advertised producer 'node-2' exists on agg11 and is in the correct state.")
+node_2_set_names = [f'node-1/{p}' for p in SAMPLER_PI] + [f'node-2/{p}' for p in SAMPLER_PI]
+test.assert_test("agg21-aggregation-2", verify_sets(agg21, node_2_set_names, exist = True), f'{node_2_set_names} exist on agg21')
+
+# Kill ldmsd on node-1
+nodes[0].kill_ldmsd()
+time.sleep(0.2)
+test.assert_test("agg11-remove-sets-1", verify_sets(agg11, node_1_set_names, exist = False), f"agg11 doesn't have {node_1_set_names}.")
+test.assert_test("agg21-remove-sets-1", verify_sets(agg21, node_1_set_names, exist = False), f"agg21 doesn't have {node_1_set_names}.")
+
+# Revive ldmsd on node-1 and start the advertisement
+time.sleep(0.5)
+nodes[0].start_ldmsd()
+send_request(nodes[0], cmd = "advertiser_start name=node-1")
+time.sleep(0.5)
+test.assert_test("sampler-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 starts updating node-1's sets after node-1's ldmsd gets revived.")
+test.assert_test("sampler-revive-2", verify_sets(agg21, node_1_set_names, exist = True), "Agg21 starts updating node-1's sets after node-1's ldmsd gets revived.")
+
+# kill L1
+agg11.kill_ldmsd()
+time.sleep(0.2)
+test.assert_test("agg21-remove-sets-2", verify_sets(agg21, node_1_set_names, exist=False), f"agg21 doesn't have {node_1_set_names}.")
+time.sleep(RECONNECT_US/1000000 + 1)
+agg11.start_ldmsd()
+send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
+time.sleep(RECONNECT_US/1000000 + 1)
+test.assert_test("agg11-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 connected to ldmsd on node-1.")
+time.sleep(0.5)
+test.assert_test("agg11-revive-2", verify_sets(agg21, node_1_set_names + node_2_set_names, exist = True), f"agg21 collects the sets from agg11.")
+
+# Multiple prdcr_listen on agg12
+send_request(agg12, cmd = f"prdcr_listen_add name=limit_hostname regex={HOSTNAME_REGEX}")
+CIDR = node_4_cidr = node_4.ip_addr.rsplit('.', 1)[0] + '.0' + '/8'
+
+send_request(agg12, cmd = f"prdcr_listen_add name=limit_ip ip={node_4_cidr}")
+send_request(node_3, cmd = "advertiser_start name=node-3")
+send_request(node_4, cmd = "advertiser_start name=node-4")
+time.sleep(0.5)
+node_3_set_names = [f"node-3/{s}" for s in SAMPLER_PI]
+node_4_set_names = [f"node-4/{s}" for s in SAMPLER_PI]
+test.assert_test("prdcr_listen_not_start",
+                  verify_sets(agg12, node_1_set_names + node_2_set_names +
+                                     node_3_set_names + node_4_set_names, exist = False),
+                  "Agg12 doesn't collect any sets.")
+send_request(agg12, cmd = "prdcr_listen_start name=limit_hostname")
+time.sleep(RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
+exp_prdcr_node_3 = [get_exp_prdcr(name='node-3', host='node-3', state="CONNECTED",
+                                  sets=[{'schema': s, 'state':'READY'}
+                    for s in SAMPLER_PI])
+                   ]
+exp_prdcr_node_4 = [get_exp_prdcr(name='node-4', host='node-4', state="CONNECTED",
+                                  sets=[{'schema': s, 'state':'READY'}
+                    for s in SAMPLER_PI])
+                   ]
+test.assert_test("prdcr_listen_limit_hostname", verify_prdcr(agg12, exp_prdcr_node_3), "Agg12 collects sets from node-3.")
+send_request(agg12, cmd = "prdcr_listen_start name=limit_ip")
+time.sleep(RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
+test.assert_test("prdcr_listen_limit_ip", verify_prdcr(agg12, exp_prdcr_node_3 + exp_prdcr_node_4), "Agg12 collects sets from node-4.")
+
+# Check advertiser status
+adv = advertiser_status(node_1)
+exp_adv_node_1 = [{ "name" : "node-1",
+                   "host" : "agg11",
+                   "port" : LDMSD_PORT,
+                   "transport" : LDMSD_XPRT,
+                   "reconnect_us" : f"{RECONNECT_US}",
+                   "type" : "advertiser",
+                   "state" : "CONNECTED",
+                   "sets" : []
+                 }]
+test.assert_test("advertiser_status", adv == exp_adv_node_1, f"{adv} == {exp_adv_node_1}")
+
+# Check prdcr_listen status
+pl_agg11 = prdcr_listen_status(agg11)
+exp_pl_agg11 = [{ "name" : "wildcard",
+                  "state" : "running",
+                  "regex" : "-",
+                  "IP range" : "-",
+                  "producers" : ["node-1", "node-2"]
+                  }]
+test.assert_test("prdcr_listen_status-1", pl_agg11 == exp_pl_agg11, f"{pl_agg11} == {exp_pl_agg11}")
+
+pl_agg12 = prdcr_listen_status(agg12)
+exp_pl_agg12 = [{ "name" : "limit_hostname",
+                  "regex" : HOSTNAME_REGEX,
+                  "state" : "running",
+                  "IP range" : "-",
+                  "producers" : ["node-3"]},
+                { "name" : "limit_ip",
+                  "IP range"   : CIDR,
+                  "regex" : "-",
+                  "state" : "running",
+                  "producers" : ["node-4"]}
+               ]
+test.assert_test("prdcr_listen_status-2", pl_agg12 == exp_pl_agg12, f"{pl_agg12} == {exp_pl_agg12}")
+
+# Restarting advertised producer
+send_request(agg12, cmd = "prdcr_stop name=node-3")
+exp_prdcr_node_3_standby = [get_exp_prdcr(name='node-3', host='node-3', state="STANDBY",
+                                  sets=[])
+                   ]
+test.assert_test("restart_advertised_prdcr-1",
+                  verify_prdcr(agg12, exp_prdcr_node_3_standby + exp_prdcr_node_4),
+                  "Advertised producer is in STANDBY as expected.")
+
+send_request(agg12, cmd = "prdcr_start name=node-3")
+time.sleep(UPDATE_US/1000000)
+test.assert_test("restart_advertised_prdcr-2",
+                  verify_prdcr(agg12, exp_prdcr_node_3 + exp_prdcr_node_4),
+                  "Advertised producer is in CONNECTED as expected")
