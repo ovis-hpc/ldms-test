@@ -3047,6 +3047,22 @@ def get_ldmsd_config(spec, ver=None):
         # replaces all %VAR%
         samp_cfg = re.sub(r'%(\w+)%', lambda m: samp[m.group(1)], samp_cfg)
         sio.write(samp_cfg)
+    # process `advertiser`
+    for ad in spec.get("advertisers", []):
+        ad = deep_copy(ad)
+        ad_add = f'advertiser_add name={ad.pop("name")}'
+        for k, v in ad.items():
+            ad_add += f" {k}={v}"
+        sio.write(ad_add)
+        sio.write("\n")
+    # process `prdcr_listen`
+    for pl in spec.get("prdcr_listen", []):
+        pl = deep_copy(pl)
+        pl_add = f'prdcr_listen_add name={pl["name"]}'
+        for k, v in pl.items():
+            pl_add += f" {k}={v}"
+        sio.write(pl_add)
+        sio.write("\n")
     # process `prdcrs`
     for prdcr in spec.get("prdcrs", []):
         prdcr = deep_copy(prdcr)
