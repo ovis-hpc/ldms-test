@@ -241,6 +241,8 @@ test.add_assertion(21, "nada publish from L1 (srv4)")
 test.add_assertion(22, "Check stream stats in each process")
 test.add_assertion(23, "Check stream client stats in each process")
 
+test.add_assertion(24, "Check forged publishing block")
+
 # Test switches for convenience while debugging
 test1  = True
 test2  = True
@@ -262,6 +264,7 @@ test20 = True
 test21 = True
 test22 = True
 test23 = True
+test24 = True
 
 cluster = None
 test.start()
@@ -466,6 +469,10 @@ def py_pty_get_pub_addr(tty):
         return LdmsAddr.from_str(tty.node.ip_addr)
     raise RuntimeError("Unsupported script")
 
+def py_pty_forged_publish(tty, uid:int, gid:int):
+    out = tty.pycmd(f"os.write(3, forge_msg({uid}, {gid}))")
+    return out
+
 def bind(inst, name, fn):
     setattr(inst, name, fn.__get__(inst, type(inst)))
 
@@ -490,6 +497,7 @@ def py_pty(node, script_path, user = None):
     bind(_pty, "stream_stats_get", py_pty_stream_stats_get)
     bind(_pty, "stream_client_stats_get", py_pty_stream_client_stats_get)
     bind(_pty, "get_pub_addr", py_pty_get_pub_addr)
+    bind(_pty, "forged_publish", py_pty_forged_publish)
     _pty._addr = _pty.get_pub_addr()
     return _pty
 
@@ -1428,6 +1436,19 @@ while test16to19: # will break; series of test16 - 19
     all_edata0 = [ edata7, none, edata7, none, none, none, edata7, edata7 ]
 
     all_cdata_assert(19, all_edata0, all_cdata0, True)
+    break
+
+while test24: # will break
+    pub4foo.forged_publish(BAR_UID, BAR_GID) # try to forge as bar
+    pub4foo.forged_publish(0, 0) # try to forge as root
+    pub4foo.forged_publish(FOO_UID, FOO_GID) # pub as foo
+    all_cdata = get_all_cdata()
+    e4 = SData(name = 'name', uid=FOO_UID, gid=FOO_GID, perm=0o444, is_json=0,
+               data='data')
+    edata4 = [ e4, None, None, None, None ]
+    none = 5*[None]
+    all_edata = [ none, none, none, edata4, none, none, none, none ]
+    all_cdata_assert(24, all_edata, all_cdata, True)
     break
 
 # see at_exit()
