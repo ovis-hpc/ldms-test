@@ -72,6 +72,8 @@ CONT_TEST_LIST=(
 	ldms_qgroup_test
 	ldmsd_qgroup_test
 
+	ldmsd_sampler_exclusive_thread_test
+
 	# Peer Daemon Advertisement
 	peer_daemon_advertisement_test
 

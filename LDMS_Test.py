@@ -3026,6 +3026,9 @@ def get_ldmsd_config(spec, ver=None):
         offset = samp.get("offset", "")
         if offset != "":
             offset = "offset={}".format(offset)
+        xthread = samp.get("exclusive_thread", "")
+        if xthread is not "":
+            xthread = f"exclusive_thread={xthread}"
         if ver and ver >= (4,100,0):
             samp_temp = \
                 "load name={plugin}\n" \
@@ -3038,12 +3041,12 @@ def get_ldmsd_config(spec, ver=None):
         else:
             samp_temp = \
                 "load name={plugin}\n" \
-                "config name={plugin} {config}\n"
+                "config name={plugin} {config} {xthread}\n"
             if samp.get("start"):
                 samp_temp += "start name={plugin} {interval} {offset}\n"
         samp_cfg = samp_temp.format(
             plugin = plugin, config = " ".join(samp["config"]),
-            interval = interval, offset = offset
+            interval = interval, offset = offset, xthread = xthread,
         )
 
         # replaces all %VAR%
