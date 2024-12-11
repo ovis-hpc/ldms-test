@@ -877,12 +877,14 @@ def icmd(tty, cmd, prompt, retry = 3, idle_timeout = 0.1):
     # remove the echoed cmd and the prompt
     return o[ 2 : -len(prompt) ]
 
-def py_pty(node, script_path, user = None):
+def py_pty(node, script_path=None, user = None):
     global loggger
     log = logger
     as_user = f"as {user}" if user is not None else ""
-    log.info(f"starting {script_path} on {node.name} {as_user}")
-    _cmd = f"ZAP_POOLS=8 /usr/bin/python3 -i {script_path}"
+    if not script_path:
+        script_path = ""
+    log.info(f"starting python {script_path} on {node.name} {as_user}")
+    _cmd = f"ZAP_POOLS=8 /usr/bin/python3 -qi {script_path}"
     if user:
         shell = f"su -s /bin/bash {user}"
     else:
@@ -899,7 +901,7 @@ class PyPty(object):
     """PyPty(node, script_path, user = None)
 
     PTY for Pyton program inside a container"""
-    def __init__(self, node, script_path, user = None):
+    def __init__(self, node, script_path=None, user = None):
         self.pty = py_pty(node, script_path, user)
 
     def cmd(self, cmd, retry = 3):
