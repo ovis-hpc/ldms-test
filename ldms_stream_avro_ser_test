@@ -1,0 +1,306 @@
+#!/usr/bin/env python3
+
+#
+# Test AVRO/Serdes support in LDMS stream
+#
+# Use Confluent Schema Registry server
+#
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+import datetime
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls, \
+                      PyPty, StreamData, LdmsAddr
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test multiple store_avro_kafka instances" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+SCHEMA_REGISTRY_COUNT = 1
+
+#### spec #### -------------------------------------------------------
+common_plugin_config = [
+        "component_id=%component_id%",
+        "instance=%hostname%/%plugin%",
+        "producer=%hostname%",
+    ]
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s test_agg cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+        "sampler_plugin" : {
+            "interval" : 1000000,
+            "offset" : 0,
+            "config" : common_plugin_config,
+            "start" : True,
+        },
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : "sock" },
+            ],
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : "sock",
+            "type" : "active",
+            "interval" : 1000000,
+        },
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "ldmsd",
+                    "!extends" : "ldmsd-base",
+                },
+            ]
+        },
+    ] + [
+        {
+            "hostname" : "kafka-1",
+            "daemons" : [ { "name" : "sshd", "type" : "sshd", } ],
+        } for i in range(1, SCHEMA_REGISTRY_COUNT+1)
+    ] + [
+        {
+            "hostname" : f"schema-registry-{i}",
+            "image" : "confluentinc/cp-schema-registry",
+            "env" : {
+                'SCHEMA_REGISTRY_HOST_NAME':'%hostname',
+                'SCHEMA_REGISTRY_KAFKASTORE_CONNECTION_URL':f'kafka-{i}:2181',
+                'SCHEMA_REGISTRY_LISTENERS':'http://0.0.0.0:8081',
+                'SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS':f'PLAINTEXT://kafka-{i}:9092',
+            },
+        } for i in range(1, SCHEMA_REGISTRY_COUNT+1)
+    ], # nodes
+
+    #"image": "ovis-centos-build:slurm",
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : {
+        "FOO": "BAR" ,
+        "KAFKA_OPTS": "-Djava.net.preferIPv4Stack=True",
+    },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldms_stream_avro_ser_test",
+                 test_desc = "Test AVRO/Serdes support in LDMS stream",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "Python subscriber received data from Python publisher")
+test.add_assertion(2, "Python subscriber received data from C publisher")
+test.add_assertion(3, "C subscriber received data from Python publisher")
+test.add_assertion(4, "C subscriber received data from C publisher")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+node1 = cluster.get_container("node-1")
+kafka1 = cluster.get_container("kafka-1")
+reg1 = cluster.get_container("schema-registry-1")
+
+# Start kafka first
+
+def start_kafka(cont):
+    rc, out = cont.exec_run("ls -d /opt/kafka*/")
+    assert(rc == 0)
+    out = out.splitlines()
+    assert(len(out) == 1)
+    KFK_DIR = out[0]
+    KFK_LOG_DIR = "/db/kafka_logs"
+    rc, out = cont.exec_run(f"mkdir {KFK_LOG_DIR}")
+
+    # start zookeeper
+    ZOO_BIN = f"{KFK_DIR}/bin/zookeeper-server-start.sh"
+    ZOO_CONF = f"{KFK_DIR}/config/zookeeper.properties"
+    zoo_cmd = f"LOG_DIR={KFK_LOG_DIR} {ZOO_BIN} -daemon {ZOO_CONF}"
+    rc, out = cont.exec_run(zoo_cmd)
+    assert(rc == 0)
+
+    rc, out = cont.exec_run("/tada-src/python/zoo_check.py >/db/zoo_check.log 2>&1")
+    assert(rc == 0)
+
+    # start kafka
+    KFK_BIN = f"{KFK_DIR}/bin/kafka-server-start.sh"
+    KFK_CONF = f"{KFK_DIR}/config/server.properties"
+    kfk_cmd = f"LOG_DIR={KFK_LOG_DIR} {KFK_BIN} -daemon {KFK_CONF}"
+    rc, out = cont.exec_run(kfk_cmd)
+    assert(rc == 0)
+
+def start_schema_registry(cont):
+    rc, out = cont.exec_run(
+                "/etc/confluent/docker/run" \
+                " >/var/log/schema_registry.log 2>&1 &", user="root")
+
+def check_schema_registry(cont, retry = None):
+    while retry is None or retry > 0:
+        time.sleep(1)
+        rc, out = cont.exec_run("grep 'Server started' /var/log/schema_registry.log",
+                                user="root")
+        if rc == 0:
+            return
+    raise RuntimeError("Server not started")
+
+start_kafka(kafka1)
+time.sleep(5)
+
+start_schema_registry(reg1)
+
+check_schema_registry(reg1, retry=30)
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd's are up")
+time.sleep(2)
+
+# Build `pub` and `sub` programs
+log.info("Building pub and sub programs...")
+rc, out = node1.exec_run("make -C /tada-src/C/avro_ser DESTDIR=/bin")
+if rc:
+    raise RuntimeError(f"sub/pub program build error, output: {out}")
+
+log.info("Starting subscriber ...")
+pysub = PyPty(node1, "/tada-src/python/ldms_stream_avro_ser_sub.py")
+csub  = node1.exec_interact("/bin/sub")
+time.sleep(1)
+
+log.info("Starting publishers ...")
+pypub = PyPty(node1, "/tada-src/python/ldms_stream_avro_ser_pub.py")
+time.sleep(1)
+cpub  = node1.exec_interact("/bin/pub")
+
+log.info("Getting data from subscribers ...")
+
+def EXPECT(e, o):
+    if o != e:
+        raise ValueError(f"Expecting '{e}', but got '{o}'")
+
+pyout0 = pysub.cmd("sc.get_data()")
+pyout1 = pysub.cmd("sc.get_data()")
+pyout2 = pysub.cmd("sc.get_data()")
+EXPECT('', pyout2)
+pyobjs = [ eval(pyout0), eval(pyout1) ]
+pydata = [ p.data for p in pyobjs ]
+
+cout = csub.read()
+
+def parse_cout(cout):
+    ret = list()
+    lines = cout.splitlines()
+    itr = iter(lines)
+    l = next(itr, None)
+    while l:
+        EXPECT("stream_event: LDMS_STREAM_EVENT_RECV(0)", l)
+        l = next(itr, None)
+        EXPECT("stream_type: LDMS_STREAM_AVRO_SER(2)", l)
+        l = next(itr, None)
+        if not l.startswith("data: "):
+            raise ValueError(f"Expecting 'data: ...' but got {l}")
+        data = l[6:]
+        obj = json.loads(data)
+        ret.append(obj)
+        l = next(itr, None)
+    return ret
+
+cdata = parse_cout(cout)
+
+# /opt/kafka_*/bin/kafka-topics.sh --zookeeper kafka-1 --list
+# /opt/kafka_*/bin/kafka-console-consumer.sh --bootstrap-server kafka-3:9092 --topic meminfo_39e8567
+
+FROM_C = {'name': 'bob', 'uid': 1000, 'gid': 2000}
+FROM_PY = {'name': 'job1', 'cmd': '/bin/bash', 'uid': 1001, 'gid': 2001, 'pid': 111}
+
+#test.add_assertion(1, "Python subscriber received data from Python publisher")
+test.assert_test(1, FROM_PY in pydata, "")
+
+#test.add_assertion(2, "Python subscriber received data from C publisher")
+test.assert_test(2, FROM_C in pydata, "")
+
+#test.add_assertion(3, "C subscriber received data from Python publisher")
+test.assert_test(3, FROM_PY in cdata, "")
+
+#test.add_assertion(4, "C subscriber received data from C publisher")
+test.assert_test(4, FROM_C in cdata, "")
+
+def get_kafka_topics(cont, zookeeper):
+    rc, out = cont.exec_run(f"/opt/kafka_*/bin/kafka-topics.sh"\
+                            f" --zookeeper {zookeeper} --list")
+    assert(rc == 0)
+    lines = out.splitlines()
+    return [ l for l in lines if not l.startswith('_') ]
+
+# see `at_exit()` function
