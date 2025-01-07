@@ -288,10 +288,25 @@ def verify_sets(cont, exp, exist):
     else:
          return all(s not in set_names for s in exp)
 
-def get_exp_prdcr(name, host, state, sets, type="advertised", transport="sock"):
+PRDCR_TYPE_ADVERTISED = 0b001
+PRDCR_TYPE_PASSIVE    = 0b010
+PRDCR_TYPE_ACTIVE     = 0b100
+
+def get_prdcr_type_str(prdcr_type):
+    if prdcr_type & PRDCR_TYPE_ADVERTISED:
+        s = "advertised"
+    else:
+         s = ""
+    if prdcr_type & PRDCR_TYPE_PASSIVE:
+         s = f"{s}, passive"
+    else:
+         s = f"{s}, active"
+    return s
+
+def get_exp_prdcr(name, host, state, sets, type=PRDCR_TYPE_ADVERTISED|PRDCR_TYPE_PASSIVE, transport="sock"):
     e = {
         'name' : name,
-        'type' : type,
+        'type' : get_prdcr_type_str(type),
         'host' : host,
         'state' : state,
         'transport' : transport,
@@ -395,7 +410,7 @@ test.assert_test("agg21-remove-sets-1", verify_sets(agg21, node_1_set_names, exi
 time.sleep(0.5)
 nodes[0].start_ldmsd()
 send_request(nodes[0], cmd = "advertiser_start name=node-1")
-time.sleep(0.5)
+time.sleep(1)
 test.assert_test("sampler-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 starts updating node-1's sets after node-1's ldmsd gets revived.")
 test.assert_test("sampler-revive-2", verify_sets(agg21, node_1_set_names, exist = True), "Agg21 starts updating node-1's sets after node-1's ldmsd gets revived.")
 
