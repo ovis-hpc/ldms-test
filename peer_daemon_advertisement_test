@@ -302,12 +302,15 @@ def get_exp_prdcr(name, host, state, sets, type="advertised", transport="sock"):
     }
     return e
 
+def get_prdcr_name(host):
+     return f"{host}:{LDMSD_PORT}"
+
 #### Test logic ############
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type  = "FVT",
-                 test_name  = "agg_test",
-                 test_desc  = "Sampler Advertisement Functionality Test",
+                 test_name  = "advertisement_test",
+                 test_desc  = "Peer Daemon Advertisement Functionality Test",
                  test_user  = args.user,
                  commit_id  = COMMIT_ID,
                  tada_addr  = args.tada_addr)
@@ -365,7 +368,7 @@ time.sleep(0.5) # Make sure that the advertiser was started before the prdcr_lis
 send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
 time.sleep(RECONNECT_US/1000000.0*2) # Give agg11 to start prdcr_listen
 
-exp_prdcr_node_1 = [get_exp_prdcr(name = 'node-1', host = 'node-1', state = "CONNECTED",
+exp_prdcr_node_1 = [get_exp_prdcr(name = get_prdcr_name("node-1"), host = 'node-1', state = "CONNECTED",
                                  sets = [{'schema' : s, 'state' : 'READY'} for s in SAMPLER_PI])
                    ]
 test.assert_test("start_1", verify_prdcr(agg11, exp_prdcr_node_1), "Advertised producer 'node-1' exists on agg11 and is in the correct state.")
@@ -374,7 +377,7 @@ test.assert_test("agg21-aggregation-1", verify_sets(agg21, node_1_set_names, exi
 
 # Start advertiser on node-2
 send_request(node_2, cmd = "advertiser_start name=node-2")
-exp_prdcr_node_2 = [get_exp_prdcr(name='node-2', host='node-2', state="CONNECTED",
+exp_prdcr_node_2 = [get_exp_prdcr(name=get_prdcr_name("node-2"), host='node-2', state="CONNECTED",
                                  sets=[{'schema':s, 'state':'READY'} for s in SAMPLER_PI])
                    ]
 time.sleep(RECONNECT_US/1000000.0*2 + UPDATE_US/1000000.0)
@@ -424,11 +427,11 @@ test.assert_test("prdcr_listen_not_start",
                   "Agg12 doesn't collect any sets.")
 send_request(agg12, cmd = "prdcr_listen_start name=limit_hostname")
 time.sleep(RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
-exp_prdcr_node_3 = [get_exp_prdcr(name='node-3', host='node-3', state="CONNECTED",
+exp_prdcr_node_3 = [get_exp_prdcr(name=get_prdcr_name("node-3"), host='node-3', state="CONNECTED",
                                   sets=[{'schema': s, 'state':'READY'}
                     for s in SAMPLER_PI])
                    ]
-exp_prdcr_node_4 = [get_exp_prdcr(name='node-4', host='node-4', state="CONNECTED",
+exp_prdcr_node_4 = [get_exp_prdcr(name=get_prdcr_name("node-4"), host='node-4', state="CONNECTED",
                                   sets=[{'schema': s, 'state':'READY'}
                     for s in SAMPLER_PI])
                    ]
@@ -456,7 +459,7 @@ exp_pl_agg11 = [{ "name" : "wildcard",
                   "state" : "running",
                   "regex" : "-",
                   "IP range" : "-",
-                  "producers" : ["node-1", "node-2"]
+                  "producers" : [get_prdcr_name("node-1"), get_prdcr_name("node-2")]
                   }]
 test.assert_test("prdcr_listen_status-1", pl_agg11 == exp_pl_agg11, f"{pl_agg11} == {exp_pl_agg11}")
 
@@ -465,25 +468,25 @@ exp_pl_agg12 = [{ "name" : "limit_hostname",
                   "regex" : HOSTNAME_REGEX,
                   "state" : "running",
                   "IP range" : "-",
-                  "producers" : ["node-3"]},
+                  "producers" : [get_prdcr_name("node-3")]},
                 { "name" : "limit_ip",
                   "IP range"   : CIDR,
                   "regex" : "-",
                   "state" : "running",
-                  "producers" : ["node-4"]}
+                  "producers" : [get_prdcr_name("node-4")]}
                ]
 test.assert_test("prdcr_listen_status-2", pl_agg12 == exp_pl_agg12, f"{pl_agg12} == {exp_pl_agg12}")
 
 # Restarting advertised producer
-send_request(agg12, cmd = "prdcr_stop name=node-3")
-exp_prdcr_node_3_standby = [get_exp_prdcr(name='node-3', host='node-3', state="STANDBY",
+send_request(agg12, cmd = f"prdcr_stop name={get_prdcr_name('node-3')}")
+exp_prdcr_node_3_standby = [get_exp_prdcr(name=get_prdcr_name("node-3"), host='node-3', state="STANDBY",
                                   sets=[])
                    ]
 test.assert_test("restart_advertised_prdcr-1",
                   verify_prdcr(agg12, exp_prdcr_node_3_standby + exp_prdcr_node_4),
                   "Advertised producer is in STANDBY as expected.")
 
-send_request(agg12, cmd = "prdcr_start name=node-3")
+send_request(agg12, cmd = f"prdcr_start name={get_prdcr_name('node-3')}")
 time.sleep(UPDATE_US/1000000)
 test.assert_test("restart_advertised_prdcr-2",
                   verify_prdcr(agg12, exp_prdcr_node_3 + exp_prdcr_node_4),
