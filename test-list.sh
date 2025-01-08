@@ -59,6 +59,9 @@ CONT_TEST_LIST=(
 	ldmsd_decomp_static_omit_test
 	ldmsd_decomp_static_op_test
 	ldmsd_decomp_static_rowcache_test
+
+	# Peer Daemon Advertisement
+	peer_daemon_advertisement_test
 )
 
 INSIDE_CONT_TEST_LIST=(
