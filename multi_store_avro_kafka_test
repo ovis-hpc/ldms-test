@@ -132,9 +132,9 @@ spec = {
                         }
                     ],
                     "config" : [
-                        f"load name=ss0 plugin=store_avro_kafka",
+                        f"load name=store_avro_kafka instance=ss0",
                         f"config name=ss0 serdes_conf=/etc/serdes-1.conf",
-                        f"load name=ss1 plugin=store_avro_kafka",
+                        f"load name=store_avro_kafka instance=ss1",
                         f"config name=ss1 encoding=json",
                         f"strgp_add name=p0 plugin=ss0 container=kafka-1" \
                                  f" regex=.* decomposition=/etc/decomp.json",
