@@ -5,7 +5,6 @@
 #  |
 #  '----------------------> agg2 (classic store_sos load)
 #
-# samp2 (double load meminfo as m0 and m1, expecting a failure)
 
 import os
 import re
@@ -115,24 +114,6 @@ spec = {
             ]
         },
         {
-            "hostname" : "node-2",
-            "component_id" : 2,
-            "daemons" : [
-                {
-                    "name" : "sshd", # for debugging
-                    "type" : "sshd",
-                },
-                {
-                    "name" : "sampler-daemon",
-                    "!extends" : "ldmsd-base",
-                    "config" : [
-                        f"load name=m0 plugin=meminfo",
-                        f"load name=m1 plugin=meminfo",
-                    ],
-                },
-            ]
-        },
-        {
             "hostname" : "agg-1",
             "daemons" : [
                 {
@@ -150,9 +131,9 @@ spec = {
                         }
                     ],
                     "config" : [
-                        f"load name=ss0 plugin=store_sos",
+                        f"load name=store_sos instance=ss0",
                         f"config name=ss0 path=/store0",
-                        f"load name=ss1 plugin=store_sos",
+                        f"load name=store_sos instance=ss1",
                         f"config name=ss1 path=/store1",
                         f"strgp_add name=p0 plugin=ss0 container=cont0" \
                                  f" regex=.* decomposition=/etc/decomp.json",
@@ -229,7 +210,6 @@ test = TADA.Test(test_suite = "LDMSD",
                  tada_addr = args.tada_addr)
 test.add_assertion(1, "Check containers (multi-instance plugin)")
 test.add_assertion(2, "Check containers (old style plugin)")
-test.add_assertion(3, "Check multiple load of old-style plugin")
 
 #### Start! ####
 cluster = None
@@ -249,7 +229,6 @@ headnode = cluster.get_container("headnode")
 agg2 = cluster.get_container("agg-2")
 agg1 = cluster.get_container("agg-1")
 node1 = cluster.get_container("node-1")
-node2 = cluster.get_container("node-2")
 
 txt = """\
 {
@@ -317,11 +296,5 @@ while True: # will break
         break;
     test.assert_test(2, True, f"verified")
     break
-
-rc, out = node2.exec_run('grep "does not support multiple instances" /var/log/ldmsd.log')
-if rc == 0:
-    test.assert_test(3, True, "an error is properly reported")
-else:
-    test.assert_test(3, False, "NO error is reported")
 
 # see `at_exit()` function
