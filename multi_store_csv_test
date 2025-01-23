@@ -133,9 +133,9 @@ spec = {
                         }
                     ],
                     "config" : [
-                        f"load name=ss0 plugin=store_csv",
+                        f"load instance=ss0 name=store_csv",
                         f"config name=ss0 path=/store0",
-                        f"load name=ss1 plugin=store_csv",
+                        f"load instance=ss1 name=store_csv",
                         f"config name=ss1 path=/store1",
                         f"strgp_add name=p0 plugin=ss0 container=cont0" \
                                  f" regex=.* decomposition=/etc/decomp.json",
