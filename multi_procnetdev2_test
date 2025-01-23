@@ -89,16 +89,16 @@ spec = {
                     "name" : "sampler-daemon",
                     "!extends" : "ldmsd-base",
                     "config" : [
-                        f"load name=p0 plugin=procnetdev2",
+                        f"load instance=p0 name=procnetdev2",
                         f"config name=p0 producer=%hostname%"
                         f"       instance=%hostname%/netdev0"
                         f"       ifaces=eth0,eth1",
                         f"start name=p0 interval=1s offset=0",
 
-                        f"load name=p1 plugin=procnetdev2",
+                        f"load instance=p1 name=procnetdev2",
                         f"config name=p1 producer=%hostname%"
                         f"       instance=%hostname%/netdev1"
-                        f"       excludes=eth0,eth1",
+                        f"       exclude=eth0,eth1",
                         f"start name=p1 interval=1s offset=0",
                     ],
                 },
@@ -116,7 +116,7 @@ spec = {
                     "name" : "sampler-daemon",
                     "!extends" : "ldmsd-base",
                     "config" : [
-                        f"load name=procnetdev2 plugin=procnetdev2",
+                        f"load name=procnetdev2",
                         f"config name=procnetdev2 producer=%hostname%"
                         f"       instance=%hostname%/netdev2",
                         f"start name=procnetdev2 interval=1s offset=0",
@@ -241,7 +241,7 @@ while True: # will break
         test.assert_test(1, False, f"plugn_status error, rc: {rc1}, out: {out1}")
         break
     l11, l12 = out1.splitlines()[2:]
-    if not l11.startswith('p0 ') or not l12.startswith('p1 '):
+    if not l11.startswith('procnetdev2  p0 ') or not l12.startswith('procnetdev2  p1 '):
         test.assert_test(1, False, f"Bad output: {out1}")
         break
     test.assert_test(1, True, "verified")
