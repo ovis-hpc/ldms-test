@@ -226,7 +226,7 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "agg_test",
+                 test_name = "multi_store_avro_kafka_test",
                  test_desc = "Minimal LDMSD 2-level aggregation test",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
