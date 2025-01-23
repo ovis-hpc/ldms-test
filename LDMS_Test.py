@@ -606,7 +606,7 @@ class Spec(dict):
 
     """
     MAX_DEPTH = 64
-    VAR_RE = re.compile(r'%([^%]+)%')
+    VAR_RE = re.compile(r'%([0-9a-zA-Z-._]*)%')
     PRIMITIVES = set([int, float, bool, str])
 
     def __init__(self, spec):
@@ -645,6 +645,7 @@ class Spec(dict):
         """(private) starting point of %VAR% substitute"""
         self.VAR = { k:v for k,v in self.items() \
                          if type(v) in self.PRIMITIVES }
+        self.VAR[''] = '%'
         for k,v in self.items():
             if k == "templates":
                 continue
@@ -2995,10 +2996,11 @@ def cond_timedwait(cond, timeout=10, interval=0.1):
         time.sleep(interval)
     return False
 
-def get_ldmsd_config(spec, ver=None):
+def get_ldmsd_config(_spec, ver=None):
     """Generate ldmsd config `str` from given spec"""
     sio = StringIO()
     # process `default_quota`
+    spec = Spec(_spec)
     q = spec.get("quota", None)
     if q:
         cfgcmd = f"default_quota quota={q}\n"
@@ -3050,8 +3052,8 @@ def get_ldmsd_config(spec, ver=None):
         )
 
         # replaces all %VAR%
-        samp_cfg = re.sub(r'%(\w+)%', lambda m: samp[m.group(1)], samp_cfg)
-        sio.write(samp_cfg)
+        out_samp_cfg = spec._subst_str(samp_cfg)
+        sio.write(out_samp_cfg)
     # process `advertiser`
     for ad in spec.get("advertisers", []):
         ad = deep_copy(ad)
