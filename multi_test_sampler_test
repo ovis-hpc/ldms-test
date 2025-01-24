@@ -89,7 +89,7 @@ spec = {
                     "name" : "sampler-daemon",
                     "!extends" : "ldmsd-base",
                     "config" : [
-                        f"load name=j0 plugin=test_sampler",
+                        f"load instance=j0 name=test_sampler",
                         f"config name=j0 action=add_schema schema=one"
                         f"       num_metrics=1 type=u64",
                         f"config name=j0 action=add_set schema=one"
@@ -97,7 +97,7 @@ spec = {
                         f"       component_id=1",
                         f"start name=j0 interval=1s offset=0",
 
-                        f"load name=j1 plugin=test_sampler",
+                        f"load instance=j1 name=test_sampler",
                         f"config name=j1 action=add_schema schema=two"
                         f"       num_metrics=2 type=u64",
                         f"config name=j1 action=add_set schema=two"
@@ -265,7 +265,7 @@ while True: # will break
         test.assert_test(1, False, f"plugn_status error, rc: {rc1}, out: {out1}")
         break
     l11, l12 = out1.splitlines()[2:]
-    if not l11.startswith('j0 ') or not l12.startswith('j1 '):
+    if not l11.startswith('test_sampler j0 ') or not l12.startswith('test_sampler j1 '):
         test.assert_test(1, False, f"Bad output: {out1}")
         break
     test.assert_test(1, True, "verified")
