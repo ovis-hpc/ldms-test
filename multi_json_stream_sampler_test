@@ -89,13 +89,13 @@ spec = {
                     "name" : "sampler-daemon",
                     "!extends" : "ldmsd-base",
                     "config" : [
-                        f"load name=j0 plugin=json_stream_sampler",
+                        f"load instance=j0 name=json_stream_sampler",
                         f"config name=j0 stream=s0 producer=%hostname%"
-                        f" instance=%hostname%/s0 component_id=%component_id%",
+                        f" instance_fmt=%%P/s0 component_id=%component_id%",
                         f"start name=j0 interval=1s offset=0",
-                        f"load name=j1 plugin=json_stream_sampler",
+                        f"load instance=j1 name=json_stream_sampler",
                         f"config name=j1 stream=s1 producer=%hostname%"
-                        f" instance=%hostname%/s1 component_id=%component_id%",
+                        f" instance_fmt=%%P/s1 component_id=%component_id%",
                         f"start name=j1 interval=1s offset=0",
                     ],
                 },
@@ -116,7 +116,7 @@ spec = {
                         f"load name=json_stream_sampler",
                         f"config name=json_stream_sampler stream=s0"
                         f" producer=%hostname%"
-                        f" instance=%hostname%/s0 component_id=%component_id%",
+                        f" instance_fmt=%%P/s0 component_id=%component_id%",
                         f"start name=json_stream_sampler interval=1s offset=0",
                     ],
                 },
@@ -248,7 +248,8 @@ while True: # will break
         test.assert_test(1, False, f"plugn_status error, rc: {rc1}, out: {out1}")
         break
     l11, l12 = out1.splitlines()[2:]
-    if not l11.startswith('j0 ') or not l12.startswith('j1 '):
+    if not l11.startswith('json_stream  j0 ') or \
+       not l12.startswith('json_stream  j1 '):
         test.assert_test(1, False, f"Bad output: {out1}")
         break
     test.assert_test(1, True, "verified")
@@ -263,7 +264,7 @@ while True: # will break
         test.assert_test(2, False, f"plugn_status error, rc: {rc2}, out: {out2}")
         break
     l21,     = out2.splitlines()[2:]
-    if not l21.startswith('json_stream_sampler '):
+    if not l21.startswith('json_stream  json_stream_sampler '):
         test.assert_test(2, False, f"Bad output: {out2}")
         break
     test.assert_test(2, True, "verified")
