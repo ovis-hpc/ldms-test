@@ -3,11 +3,12 @@
 #include <libserdes/serdes.h>
 
 #include <unistd.h>
-
 #include "ldms/ldms.h"
 
-int stream_cb(ldms_stream_event_t ev, void *cb_arg)
+#include "ldms/ldms_stream_avro_ser.h"
+int stream_cb(ldms_stream_avro_ser_event_t aev, void *cb_arg)
 {
+	ldms_stream_event_t ev = &aev->ev;
 	printf("stream_event: %s(%d)\n", ldms_stream_event_type_sym(ev->type),
 					 ev->type);
 	if (ev->type != LDMS_STREAM_EVENT_RECV) {
@@ -22,12 +23,13 @@ int stream_cb(ldms_stream_event_t ev, void *cb_arg)
 	}
 
 	int rc;
-	avro_value_t *av = ev->recv.avro_value;
+	avro_value_t *av = aev->avro_value;
 	char *js = NULL;
 	rc = avro_value_to_json(av, 1, &js);
 	if (rc == 0)
 		printf("data: %s\n", js);
 	free(js);
+	return 0;
 }
 
 int main(int argc, char **argv)

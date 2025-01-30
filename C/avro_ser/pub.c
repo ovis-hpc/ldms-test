@@ -2,7 +2,7 @@
 #include <avro.h>
 #include <libserdes/serdes.h>
 
-#include "ldms/ldms.h"
+#include "ldms/ldms_stream_avro_ser.h"
 
 int main(int argc, char **argv)
 {
