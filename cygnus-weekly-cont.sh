@@ -329,7 +329,7 @@ elif [[ "${PAPI_AVAIL}0" -eq 0 ]] ; then
 	INFO "No PAPI presets availalbe, skip PAPI-related test"
 else
 	INFO "Add PAPI-related tests into the test list"
-	LIST=( "${LIST[@]}" "${PAPI_CONT_TEST_LIST[@]}" )
+	LIST=( "${PAPI_CONT_TEST_LIST[@]}" "${LIST[@]}" )
 fi
 
 TEST_OPTS=(
