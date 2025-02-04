@@ -156,26 +156,31 @@ aggregators:
         type      : active
         updaters  : *updtr
 
+plugins:
+  meminfo1:
+    name        : meminfo # Variables can be specific to plugin
+    interval    : "1s" # Used when starting the sampler plugin
+    offset      : "0s"
+    config : &simple_samp_config
+      - schema : meminfo
+        component_id : "${{COMPID}}"
+        perm : "0777"
+  store_sos1:
+    name: store_sos
+    config:
+      - path: {STORE_PATH}
 samplers:
   - daemons : *sampler-daemons
-    plugins : &sampler-plugins
-      - name        : meminfo # Variables can be specific to plugin
-        interval    : "1s" # Used when starting the sampler plugin
-        offset      : "0s"
-        config : &simple_samp_config
-          - component_id : "${{COMPID}}"
-            perm : "0777"
+    plugins :
+      - meminfo1
 
 stores:
-  - name      : sos-meminfo
+  sos-meminfo :
     daemons   : *l2-daemons
     container : ldms_data
     schema    : meminfo
     flush     : 10s
-    plugin :
-      name   : store_sos
-      config :
-        - path : {STORE_PATH}
+    plugin    : store_sos1
 """
 
 #### spec #### -------------------------------------------------------
