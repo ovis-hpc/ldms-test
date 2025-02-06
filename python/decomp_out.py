@@ -126,7 +126,7 @@ def csv_proc(args):
         if c == "Time":
             acts.append(csv_atomic)
             cols.append("Time")
-        elif c == "Time_usec":
+        elif c.endswith("_usec"):
             acts.append(csv_col_ts_usec)
         else:
             p, a, b = prefix(c, next_col)

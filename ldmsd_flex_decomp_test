@@ -85,8 +85,13 @@ COMMIT_ID = args.commit_id
 SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
-LDMSD_PORT = 10000
+LDMSD_PORT = 411
 STORE_ROOT = "/store" # path inside container (agg-2)
+
+SAMP1_TEST_DIGEST_STR = "8D2B8BD27CD9C888010D9B24F52F8E80E4AA2EAB2AD8690D7845902F2B2CDA12"
+SAMP2_TEST_DIGEST_STR = "95772B66C5BCDAFE2C40E3B60063258DB0E13F4E235F0F26F97F42FFBB986ED4"
+SAMP1_RECORD_DIGEST_STR = "E1F021F9273566F3675C1378CD29C6A3769AEE4178C198704E4D6A9130065F2B"
+SAMP2_RECORD_DIGEST_STR = SAMP1_RECORD_DIGEST_STR
 
 def __strgp_cfg(plugin, decomp, decomp_json, cont):
     cfg = [
@@ -318,7 +323,8 @@ spec = {
 
 ROW_SCHEMAS = [ 'test_sampler_95772b6',
                 'record_sampler_e1f021f',
-                'fill', 'filter', 'record' ]
+                'fill', 'filter', 'record',
+                'meta_test', 'meta_record' ]
 STORES = [ 'sos', 'csv', 'kafka' ]
 
 test = TADA.Test(test_suite = "LDMSD",
@@ -424,7 +430,7 @@ time.sleep(10)
 
 def kafka_topic_verify(topics):
     topics = set(topics)
-    S = set(["fill", "filter", "record"])
+    S = set(["fill", "filter", "record", "meta_record", "meta_test"])
     if not S <= topics:
         return False
     topics -= S
@@ -564,7 +570,27 @@ expected_schemas = {
             {"name": "ts", "cols": ["ts"]},
             {"name": "time_comp", "cols": ["ts", "comp_id"]}
         ]
-    }
+    },
+    "meta_test": {
+        "cols": [
+            "ts", "comp_id", "M_card", "M_digest", "M_duration", "M_gid",
+            "M_instance", "M_perm", "M_producer", "M_schema", "M_uid", "u16"
+        ],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ]
+    },
+    "meta_record": {
+        "cols": [
+            "ts", "comp_id", "M_card", "M_digest", "M_duration", "M_gid",
+            "M_instance", "M_perm", "M_producer", "M_schema", "M_uid", "round"
+        ],
+        "indices": [
+            {"name": "ts", "cols": ["ts"]},
+            {"name": "time_comp", "cols": ["ts", "comp_id"]}
+        ]
+    },
 }
 
 COL_RE = re.compile(r'([^.]+)(?:\.(.+))?')
@@ -802,12 +828,124 @@ def record_snap_check(snaps, assert_id):
     test.assert_test(assert_id, True, "OK")
     return True
 
+def gen_meta_test(ts, comp_id, duration, u16):
+    obj = dict()
+    obj["ts"] = ts
+    obj["comp_id"] = comp_id
+    obj["M_card"] = 7 if comp_id == 1 else 6
+    obj["M_digest"] = SAMP1_TEST_DIGEST_STR if comp_id == 1 else \
+                      SAMP2_TEST_DIGEST_STR
+    obj["M_duration"] = duration
+    obj["M_gid"] = 0
+    obj["M_instance"] = f"samp-{comp_id}/test_sampler"
+    obj["M_perm"] = 0o440
+    obj["M_producer"] = f"samp-{comp_id}"
+    obj["M_schema"] = "test_sampler"
+    obj["M_uid"] = 0
+    obj["u16"] = u16
+
+    return obj
+
+def meta_test_snap_check(snaps, assert_id):
+    prev_u16 = [ None, None, None ]
+    for s in snaps.values():
+        ts = s.pop("ts", s.pop("Time", None))
+        s["ts"] = ts
+        comp_id    = s.get("comp_id")
+        M_card     = s.get("M_card")
+        M_digest   = s.get("M_digest")
+        M_duration = s.get("M_duration")
+        M_gid      = s.get("M_gid")
+        M_instance = s.get("M_instance")
+        M_perm     = s.get("M_perm")
+        M_producer = s.get("M_producer")
+        M_schema   = s.get("M_schema")
+        M_uid      = s.get("M_uid")
+        u16        = s.get("u16")
+        if prev_u16[comp_id] is not None:
+            e_u16 = prev_u16[comp_id] + 1
+        else:
+            e_u16 = u16
+        e = gen_meta_test(ts, comp_id, M_duration, e_u16)
+
+        if e.keys() != s.keys():
+            test.assert_test(assert_id, False,
+                             f"Expecting keys {e.keys()} but got {s.keys()}")
+            return False
+        for k in e:
+            v0 = e[k]
+            v1 = s[k]
+            if v0 != v1:
+                test.assert_test(assert_id, False, f"Expecting {v0} but got {v1}")
+                return False
+        prev_u16[comp_id] = u16
+
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+def gen_meta_record(ts, comp_id, duration, _round):
+    obj = dict()
+    obj["ts"] = ts
+    obj["comp_id"] = comp_id
+    obj["M_card"] = 7
+    obj["M_digest"] = SAMP1_RECORD_DIGEST_STR if comp_id == 1 else \
+                      SAMP2_RECORD_DIGEST_STR
+    obj["M_duration"] = duration
+    obj["M_gid"] = 0
+    obj["M_instance"] = f"samp-{comp_id}/record_sampler"
+    obj["M_perm"] = 0o440
+    obj["M_producer"] = f"samp-{comp_id}"
+    obj["M_schema"] = "record_sampler"
+    obj["M_uid"] = 0
+    obj["round"] = _round
+
+    return obj
+
+def meta_record_snap_check(snaps, assert_id):
+    prev_round = [ None, None, None ]
+    for s in snaps.values():
+        ts = s.pop("ts", s.pop("Time", None))
+        s["ts"] = ts
+        comp_id    = s.get("comp_id")
+        M_card     = s.get("M_card")
+        M_digest   = s.get("M_digest")
+        M_duration = s.get("M_duration")
+        M_gid      = s.get("M_gid")
+        M_instance = s.get("M_instance")
+        M_perm     = s.get("M_perm")
+        M_producer = s.get("M_producer")
+        M_schema   = s.get("M_schema")
+        M_uid      = s.get("M_uid")
+        _round        = s.get("round")
+        if prev_round[comp_id] is not None:
+            e_round = prev_round[comp_id] + 1
+        else:
+            e_round = _round
+        e = gen_meta_record(ts, comp_id, M_duration, e_round)
+        if e.keys() != s.keys():
+            test.assert_test(assert_id, False,
+                             f"Expecting keys {e.keys()} but got {s.keys()}")
+            return False
+        for k in e:
+            v0 = e[k]
+            v1 = s[k]
+            if v0 != v1:
+                test.assert_test(assert_id, False, f"Expecting {v0} but got {v1}")
+                return False
+        prev_round[comp_id] = _round
+
+    test.assert_test(assert_id, True, "OK")
+    return True
+
+
 row_check_tbl = {
     "test_sampler_95772b6":   test_sampler_95772b6_snap_check,
     "record_sampler_e1f021f": record_sampler_e1f021f_snap_check,
     "fill":                   fill_snap_check,
     "filter":                 filter_snap_check,
     "record":                 record_snap_check,
+    "meta_test":              meta_test_snap_check,
+    "meta_record":            meta_record_snap_check,
 }
 
 i = 1
