@@ -385,10 +385,12 @@ def find_log_msg(cont, msg, begin = {'offset': None, 'whence': 0}, is_loop = Tru
     return False
 
 def multilist_err_msg(schema, plugin):
-    if plugin == "store_sos":
+    if plugin == "store.sos":
         msg = f"{plugin}: 'sampler/{schema}' contains multiple lists"
-    elif plugin == "store_csv":
+    elif plugin == "store.store_csv":
         msg = f"{plugin}: Set 'sampler/{schema}' contains multiple lists"
+    else:
+        raise RuntimeError(f"Unknown plugin '{plugin}'")
     return msg
 
 #### Test Definition ####
@@ -517,7 +519,7 @@ test.assert_test(SOS_RESTART_VERIFY_DATA, good, reason)
 res, cond = True, f"store_sos reported the multiple list error messages."
 for vt in MULTI_LISTS_CFGFILE:
     s = schema_from_types(vt)
-    msg = multilist_err_msg(s, "store_sos")
+    msg = multilist_err_msg(s, "store.sos")
     have = find_log_msg(agg_sos, msg)
     if not have:
         res, cond = False, f"'{msg}' in the ldmsd log"
@@ -530,7 +532,7 @@ for vt in MULTI_LISTS_LDMSD_CONTROLLER:
 sleep(1)
 res, cond = True, f"store_sos reported the multiple list error messages."
 for vt in MULTI_LISTS_LDMSD_CONTROLLER:
-    msg = multilist_err_msg(schema_from_types(vt), "store_sos")
+    msg = multilist_err_msg(schema_from_types(vt), "store.sos")
     have = find_log_msg(agg_sos, msg)
     if not have:
         res, cond = False, f"'{msg}' in the ldmsd log"
@@ -582,7 +584,7 @@ test.assert_test(CSV_RESTART_VERIFY_DATA, good, reason)
 res, cond = True, f"store_csv reported the multiple list error messages."
 for vt in MULTI_LISTS_CFGFILE:
     s = schema_from_types(vt)
-    msg = multilist_err_msg(s, "store_csv")
+    msg = multilist_err_msg(s, "store.store_csv")
     have = find_log_msg(agg_csv, msg)
     if not have:
         res, cond = False, f"'{msg}' in the ldmsd log"
@@ -595,7 +597,7 @@ for vt in MULTI_LISTS_LDMSD_CONTROLLER:
 sleep(1)
 res, cond =True, f"store_csv reported the multiple list error messages."
 for vt in MULTI_LISTS_LDMSD_CONTROLLER:
-    msg = multilist_err_msg(schema_from_types(vt), "store_csv")
+    msg = multilist_err_msg(schema_from_types(vt), "store.store_csv")
     have = find_log_msg(agg_csv, msg)
     if not have:
         res, cond = False, f"'{msg}' in the ldmsd log"
