@@ -310,6 +310,7 @@ def get_exp_prdcr(name, host, state, sets, type=PRDCR_TYPE_ADVERTISED|PRDCR_TYPE
         'host' : host,
         'state' : state,
         'transport' : transport,
+        'auth' : 'DEFAULT',
         'sets' : [{ 'inst_name'   : f"{host}/{s['schema']}",
                     'schema_name' : s['schema'],
                     'state'       : s['state']
@@ -464,6 +465,7 @@ exp_adv_node_1 = [{ "name" : "node-1",
                    "reconnect_us" : f"{RECONNECT_US}",
                    "type" : "advertiser",
                    "state" : "CONNECTED",
+                   "auth" : "DEFAULT",
                    "sets" : []
                  }]
 test.assert_test("advertiser_status", adv == exp_adv_node_1, f"{adv} == {exp_adv_node_1}")
@@ -474,6 +476,9 @@ exp_pl_agg11 = [{ "name" : "wildcard",
                   "state" : "running",
                   "regex" : "-",
                   "IP range" : "-",
+                  "type": "passive",
+                  "rx_rate": "-1",
+                  "quota": "-1",
                   "producers" : [get_prdcr_name("node-1"), get_prdcr_name("node-2")]
                   }]
 test.assert_test("prdcr_listen_status-1", pl_agg11 == exp_pl_agg11, f"{pl_agg11} == {exp_pl_agg11}")
@@ -483,11 +488,17 @@ exp_pl_agg12 = [{ "name" : "limit_hostname",
                   "regex" : HOSTNAME_REGEX,
                   "state" : "running",
                   "IP range" : "-",
+                  "type": "passive",
+                  "rx_rate": "-1",
+                  "quota": "-1",
                   "producers" : [get_prdcr_name("node-3")]},
                 { "name" : "limit_ip",
                   "IP range"   : CIDR,
                   "regex" : "-",
                   "state" : "running",
+                  "type": "passive",
+                  "rx_rate": "-1",
+                  "quota": "-1",
                   "producers" : [get_prdcr_name("node-4")]}
                ]
 test.assert_test("prdcr_listen_status-2", pl_agg12 == exp_pl_agg12, f"{pl_agg12} == {exp_pl_agg12}")
