@@ -369,10 +369,10 @@ __kill_ldmsd(headnode, ldmsd_pid)
 case_name = "ldmsd-3.1"
 listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
 conf = f"""
-load name=meminfo
+load name=meminfo plugin=meminfo
 config name=meminfo producer=samplerd instance=producer/meminfo perm=0777
 start name=meminfo interval={SMP_INTRVL}
-load name=vmstat
+load name=vmstat plugin=vmstat
 config name=vmstat producer=samplerd instance=producer/vmstat schema=my_vmstat uid=0100 gid=0100
 start name=vmstat interval={SMP_INTRVL}
 """
@@ -387,10 +387,10 @@ worker_threads num=1
 default_credits credits=-1
 auth_add name=DEFAULT plugin=none
 {listen_conf} auth=DEFAULT
-load name=meminfo
+load name=meminfo plugin=meminfo
 config name=meminfo producer=samplerd instance=producer/meminfo perm=0777
 start name=meminfo interval={SMP_INTRVL} offset=0
-load name=vmstat
+load name=vmstat plugin=vmstat
 config name=vmstat producer=samplerd instance=producer/vmstat schema=my_vmstat uid=0100 gid=0100
 start name=vmstat interval={SMP_INTRVL} offset=0
 """
@@ -402,9 +402,8 @@ __kill_ldmsd(headnode, ldmsd_pid)
 case_name = "ldmsd-3.2"
 listen_conf = f"listen xprt={LDMS_XPRT} port={LDMS_PORT}"
 conf = f"""
-load name=test_sampler
+load name=test_sampler plugin=test_sampler
 config name=test_sampler action=add_schema schema=test_schema num_metrics=5 type=u64 perm=0700
-config name=test_sampler action=add_set schema=test_schema producer=samplerd instance=samplerd/my_set
 """
 cfg_name = write_ldmsd_config_file(headnode, case_name, listen_conf + conf)
 __start_ldmsd(headnode, cfg = cfg_name)
@@ -440,7 +439,7 @@ updtr_add name=updtr_meminfo interval={UPDT_INTRVL} offset={UPDT_OFFSET}
 updtr_prdcr_add name=updtr_meminfo regex=.*
 updtr_match_add name=updtr_meminfo regex=meminfo match=schema
 updtr_start name=updtr_meminfo
-load name=store_sos
+load name=store_sos plugin=store_sos
 config name=store_sos path=/db/sos
 strgp_add name=strgp_meminfo container=meminfo plugin=store_sos schema=meminfo
 strgp_start name=strgp_meminfo
@@ -468,7 +467,7 @@ exp += "\n".join([ f"updtr_prdcr_add name=updtr_meminfo regex=^node-{i}$" for i 
 exp += f"""
 updtr_match_add name=updtr_meminfo match=schema regex=^meminfo$
 updtr_start name=updtr_meminfo
-load name=store_sos
+load name=store_sos plugin=store_sos
 config name=store_sos path=/db/sos
 strgp_add name=strgp_meminfo container=meminfo plugin=store_sos schema=meminfo flush=0 perm=1016
 strgp_start name=strgp_meminfo
