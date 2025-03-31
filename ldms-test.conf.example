@@ -12,7 +12,7 @@
 [ldms-test]
 # ldms-test section contains non-runtime specific parameters
 
-runtime = singularity
+runtime = docker
 # specify the runtime: `singularity` or `docker`.
 
 #mount = /home:/home:ro
@@ -57,7 +57,7 @@ runtime = singularity
 # mode is on, the test scripts stop immediately when encountering failed
 # assertion.
 
-image = ovis-centos-build
+image = ovishpc/ldms-dev
 # Optionally specify container image. The default is 'ovis-centos-build'.
 
 
