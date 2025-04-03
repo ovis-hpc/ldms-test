@@ -298,18 +298,29 @@ def jprint(obj):
     """Pretty print JSON object"""
     print(json.dumps(obj, indent=2))
 
-def get_ovis_commit_id(prefix):
+def get_ovis_commit_id(args):
     """Get commit_id of the ovis installation"""
-    try:
-        path = "{}/bin/ldms-pedigree".format(prefix)
-        f = open(path)
-        for l in f.readlines():
-            if l.startswith("echo commit-id: "):
-                e, c, commit_id = l.split()
-                return commit_id
-    except:
-        pass
-    return "NONE"
+    prefix = args.prefix
+    if args.prefix:
+        prefix = args.prefix
+        try:
+            path = "{}/bin/ldms-pedigree".format(prefix)
+            f = open(path)
+            for l in f.readlines():
+                if l.startswith("echo commit-id: "):
+                    e, c, commit_id = l.split()
+                    return commit_id
+        except:
+            return "NONE"
+    # No prefix given, assumes /opt/ovis existed in the image
+    cmd = f"docker run --rm {args.image} bash -c '/opt/ovis/sbin/ldmsd -V'"
+    rc, out = sp.getstatusoutput(cmd)
+    if rc:
+        return "NONE"
+    arr = re.findall('git-SHA: (.*)', out)
+    if not arr:
+        return "NONE"
+    return arr[0]
 
 def guess_ovis_prefix():
     """Guess ovis prefix from the environment"""
@@ -339,7 +350,7 @@ def get_cluster_name(parsed_args):
     test = os.path.basename(sys.argv[0])
     if test.endswith('.py'):
         test = test[:-3]
-    commit_id = get_ovis_commit_id(parsed_args.prefix)
+    commit_id = get_ovis_commit_id(parsed_args)
     parsed_args.clustername = "{}-{}-{:.7}".format(uname, test, commit_id)
     return parsed_args.clustername
 
@@ -356,7 +367,7 @@ def add_common_args(parser):
     parser.add_argument("--user", default = _USER,
             help = "Specify the user who run the test.")
     parser.add_argument("--prefix", type = str,
-            default = guess_ovis_prefix(),
+            default = None,
             help = "The OVIS installation path on the host. This will be mounted to /opt/ovis in containers.")
     parser.add_argument("--direct-prefix", type = str,
             default = guess_ovis_prefix(),
@@ -390,7 +401,7 @@ def process_config_file(path = None):
     _USER = pwd.getpwuid(os.geteuid())[0]
     _DEFAULT_CONFIG = {
             "ldms-test": {
-                "prefix": guess_ovis_prefix(),
+                "prefix": None,
                 "direct_prefix": guess_ovis_prefix(),
                 "runtime": "docker",
                 "clustername": None,
@@ -440,7 +451,7 @@ def process_args(parsed_args):
         args.data_root = os.path.expanduser("~{a.user}/db/{a.clustername}".format(a = args))
     if not os.path.exists(args.data_root):
         os.makedirs(args.data_root)
-    args.commit_id = get_ovis_commit_id(args.prefix)
+    args.commit_id = get_ovis_commit_id(args)
     # then, apply the final args values to the ldms-test config section
     for k, v in G.args.__dict__.items():
         if type(v) == list:
@@ -461,6 +472,7 @@ DEEP_COPY_TBL = {
         float: lambda x: x,
         str: lambda x: x,
         bool: lambda x: x,
+        type(None): lambda x: None,
     }
 
 def deep_copy(obj):
@@ -621,6 +633,7 @@ class Spec(dict):
             int: self._subst_scalar,
             float: self._subst_scalar,
             bool: self._subst_scalar,
+            type(None): self._subst_scalar,
         }
         self.EXPAND_TBL = {
             dict: self._expand_dict,
@@ -630,6 +643,7 @@ class Spec(dict):
             float: self._expand_scalar,
             str: self._expand_scalar,
             bool: self._expand_scalar,
+            type(None): self._expand_scalar,
         }
         self._start_expand()
         self._start_subst()
@@ -3029,7 +3043,7 @@ def get_ldmsd_config(_spec, ver=None):
         if offset != "":
             offset = "offset={}".format(offset)
         xthread = samp.get("exclusive_thread", "")
-        if xthread is not "":
+        if xthread != "":
             xthread = f"exclusive_thread={xthread}"
         if ver and ver >= (4,100,0):
             samp_temp = \

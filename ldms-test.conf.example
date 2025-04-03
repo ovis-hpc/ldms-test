@@ -33,8 +33,10 @@ runtime = docker
 # the script.
 
 #prefix = /opt/ovis
-# Optionally specify the ovis installation prefix. If not specified, LDMS_Test
-# will try to determine from `which ldmsd`.
+# Optionally specify the ovis prefix binary location to be mounted for the
+# containers. The given `{prefix}` will be mounted as `/opt/ovis` in the
+# container (-v "${prefix}:/opt/ovis" docker option) If not specified, LDMS_Test
+# assumes that the image already has /opt/ovis binaries installed.
 
 #direct_prefix = /opt/ovis
 # `direct_prefix` is used in `direct_*` tests. This points to the binaries of
