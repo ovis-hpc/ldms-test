@@ -96,7 +96,10 @@ static int sample(struct ldmsd_sampler *self)
 	return 0;
 }
 
-static int test_stream_recv_cb(ldms_stream_event_t ev, void *cb_arg);
+static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
+			 ldmsd_stream_type_t stream_type,
+			 const char *msg, size_t msg_len,
+			 json_entity_t entity);
 
 FILE *out = NULL;
 
@@ -110,7 +113,7 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct
 		stream = strdup(value);
 	else
 		stream = strdup("test_stream");
-	ldms_stream_subscribe(stream, 0, test_stream_recv_cb, self, "test_stream_sampler");
+	ldmsd_stream_subscribe(stream, test_stream_recv_cb, self);
 
 	value = av_value(avl, "output");
 	if (!value)
@@ -128,16 +131,17 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct
 	return rc;
 }
 
-static int test_stream_recv_cb(ldms_stream_event_t ev, void *cb_arg)
+static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
+			 ldmsd_stream_type_t stream_type,
+			 const char *msg, size_t msg_len,
+			 json_entity_t entity)
 {
 	int rc = 0;
 	char soh = 1; /* start of heading */
 	char stx = 2; /* start of text */
 	char etx = 3; /* end of text */
-	if (ev->type != LDMS_STREAM_EVENT_RECV)
-		return 0;
 	fwrite(&soh, 1, 1, out);
-	switch (ev->recv.type) {
+	switch (stream_type) {
 	case LDMSD_STREAM_STRING:
 		fwrite("string", 1, 6, out);
 		break;
@@ -149,7 +153,7 @@ static int test_stream_recv_cb(ldms_stream_event_t ev, void *cb_arg)
 		break;
 	}
 	fwrite(&stx, 1, 1, out);
-	fwrite(ev->recv.data, 1, ev->recv.data_len, out);
+	fwrite(msg, 1, msg_len, out);
 	fwrite(&etx, 1, 1, out);
 	return rc;
 }
