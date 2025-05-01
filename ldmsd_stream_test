@@ -388,6 +388,7 @@ def subscriber_case(sub_cont, pub_cont, hostname, stream_type, data_sz):
     try:
         D.result = result = subscriber_output_check(cont_fout, cont_fin, stream_type, SAMPLE_SIZES[data_sz])
     except LDMSDStreamTestFail as e:
+        raise
         test.assert_test(ASSERTIONS[_assert_name], False, "{}".format(e))
     except:
         raise
@@ -432,6 +433,7 @@ def ldmsd_case(pub_cont, samplerd_cont, agg_cont, stream_type, data_sz):
     try:
         result = test_stream_sampler_check(samplerd_cont, cont_fin, cont_samplerd_fout, SAMPLE_SIZES[data_sz])
     except LDMSDStreamTestFail as e:
+        raise
         test.assert_test(ASSERTIONS[_assert_name], False, "{}".format(e))
     except:
         raise
@@ -445,6 +447,7 @@ def ldmsd_case(pub_cont, samplerd_cont, agg_cont, stream_type, data_sz):
     try:
         result = test_stream_sampler_check(agg_cont, cont_fin, cont_agg_fout, SAMPLE_SIZES[data_sz])
     except LDMSDStreamTestFail as e:
+        raise
         test.assert_test(ASSERTIONS[_assert_name], False, "{}".format(e))
     except:
         raise
@@ -480,5 +483,11 @@ for t in STREAM_TYPES:
     for sz in DATA_SIZES:
         subscriber_case(sub_cont, pub_cont, sub_cont.hostname, t, sz)
         ldmsd_case(pub_cont, samplerd_cont, agg_cont, t, sz)
+        samplerd_cont.kill_ldmsd()
+        agg_cont.kill_ldmsd()
+        time.sleep(2)
+        samplerd_cont.start_ldmsd()
+        agg_cont.start_ldmsd()
+        time.sleep(2)
 
 # see at_exit()
