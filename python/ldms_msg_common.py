@@ -11,8 +11,8 @@ HOSTNAME = socket.gethostname()
 class Global(object): pass
 G = Global()
 
-def stream_connect(host, port = 411, cb=None, cb_arg=None, rail_eps=4):
-    """stream_connect(host, port=411, cb=None, cb_arg=None)"""
+def msg_connect(host, port = 411, cb=None, cb_arg=None, rail_eps=4):
+    """msg_connect(host, port=411, cb=None, cb_arg=None)"""
     r = ldms.Xprt(name = "sock", auth = "munge", rail_eps = rail_eps,
                   rail_recv_limit = 128 )
     r.connect(host, port, cb, cb_arg)

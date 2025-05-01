@@ -56,7 +56,8 @@ CONT_TEST_LIST=(
 	ldmsd_long_config_test
 	ldms_rail_test
 	ldmsd_rail_test
-	ldms_stream_test
+	ldms_msg_test
+	ldmsd_msg_test
 	set_sec_mod_test
 	dump_cfg_test
 	ldmsd_stream_rate_test

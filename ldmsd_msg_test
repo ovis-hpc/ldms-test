@@ -2,14 +2,14 @@
 #
 # README
 # ------
-# Test the LDMS stream on rails with `ldmsd`.
+# Test the LDMS msg on rails with `ldmsd`.
 #
 # - The new `ldmsd` shall be able to consume the old `ldmsd_stream` (from older
 #   version of `ldmsd`) and forward the stream data if needed.
 # - The new `ldmsd` shall be able to `prdcr_subscribe` to the old ldmsds with
 #   exact name macthing stream.
 # - The new `ldmsd` shall be able to `prdcr_subscribe` to the new ldmsds with
-#   regular expression stream name matching.
+#   either ldmsd_stream or regular expression message channel name matching.
 #
 # Connectivity
 #
@@ -45,7 +45,7 @@ import logging
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, PyPty, \
-                      StreamData, LdmsAddr
+                      MsgData, LdmsAddr
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -69,7 +69,7 @@ else:
     default_prefix = "/opt/ovis"
 
 #### argument parsing #### -------------------------------------------
-ap = argparse.ArgumentParser(description = "Test ldms_stream features with ldmsd")
+ap = argparse.ArgumentParser(description = "Test ldms_msg features with ldmsd")
 add_common_args(ap)
 args = ap.parse_args()
 process_args(args)
@@ -102,7 +102,7 @@ base_daemons = [
     ]
 spec = {
     "name" : CLUSTERNAME,
-    "description" : "{}'s ldms_stream test cluster".format(USER),
+    "description" : "{}'s ldms_msg test cluster".format(USER),
     "type" : "NA",
     "templates" : { # generic template can apply to any object by "!extends"
         "ldmsd_daemon" : {
@@ -149,8 +149,12 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=agg-1 stream=.*",
+                        "config name=stream_dump op=msg_subscribe " \
+                            "message_channel=.* path=/db/%hostname%-new.txt",
+                        "config name=stream_dump op=stream_subscribe " \
+                            "stream=old path=/db/%hostname%-old.txt",
+
+                        "prdcr_subscribe regex=agg-1 message_channel=.* stream=old",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -177,8 +181,11 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=new stream=new.*",
+                        "config name=stream_dump op=msg_subscribe " \
+                            "message_channel=.* path=/db/%hostname%-new.txt",
+                        "config name=stream_dump op=stream_subscribe " \
+                            "stream=old path=/db/%hostname%-old.txt",
+                        "prdcr_subscribe regex=new message_channel=new.*",
                         "prdcr_subscribe regex=old stream=old",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
@@ -209,7 +216,7 @@ spec = {
     "ovis_prefix": PREFIX,
     "env" : {
         "FOO": "BAR" ,
-        "LDMS_STREAM_STATS_LEVEL" : "2",
+        "LDMS_MSG_STATS_LEVEL" : "2",
     },
     "mounts": [
         "{}:/db:rw".format(DB),
@@ -228,8 +235,8 @@ def EXPECT(val, expected):
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "ldmsd_stream_test",
-                 test_desc = "Test ldms_stream (on rails) with ldmsd",
+                 test_name = "ldmsd_msg_test",
+                 test_desc = "Test ldms_msg (on rails) with ldmsd",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
@@ -238,30 +245,30 @@ test.add_assertion( 1, "Check data from old ldmsd_stream at agg-1")
 test.add_assertion( 2, "Check data from old ldmsd_stream at agg-2")
 test.add_assertion( 3, "Check data from old ldmsd_stream at the last subscriber")
 
-test.add_assertion( 4, "Check data from the matching new ldms stream at agg-1")
-test.add_assertion( 5, "Check data from the matching new ldms stream at agg-2")
-test.add_assertion( 6, "Check data from the matching new ldms stream at the last subscriber")
+test.add_assertion( 4, "Check data from the matching new ldms msg at agg-1")
+test.add_assertion( 5, "Check data from the matching new ldms msg at agg-2")
+test.add_assertion( 6, "Check data from the matching new ldms msg at the last subscriber")
 
 test.add_assertion( 7, "Check data from the non-matching new ldms stream at agg-1")
 test.add_assertion( 8, "Check data from the non-matching new ldms stream at agg-2")
 test.add_assertion( 9, "Check data from the non-matching new ldms stream at last subscriber")
 
-test.add_assertion(10, "Check stream_stats before stream data transfer")
-test.add_assertion(11, "Check stream_client_stats before stream data transfer")
-test.add_assertion(12, "Check stream_stats after stream data transfer")
-test.add_assertion(13, "Check stream_client_stats after stream data transfer")
+test.add_assertion(10, "Check msg_stats before stream data transfer")
+test.add_assertion(11, "Check msg_client_stats before stream data transfer")
+test.add_assertion(12, "Check msg_stats after stream data transfer")
+test.add_assertion(13, "Check msg_client_stats after stream data transfer")
 
 # ===== Helping functions =====
-def get_stream_stats(node):
-    cmd = f"echo stream_stats json=1 | ldmsd_controller --xprt sock --port 10000 --host localhost"
+def get_msg_stats(node):
+    cmd = f"echo msg_stats json=1 | ldmsd_controller --xprt sock --port 10000 --host localhost"
     rc, out = node.exec_run(['/bin/bash', '-c', cmd])
     if rc:
         raise RuntimeError(f"error rc: {rc}, out: {out}")
     objs = json.loads(out)
     return objs
 
-def get_stream_client_stats(node):
-    cmd = f"echo stream_client_stats json=1 | ldmsd_controller --xprt sock --port 10000 --host localhost"
+def get_msg_client_stats(node):
+    cmd = f"echo msg_client_stats json=1 | ldmsd_controller --xprt sock --port 10000 --host localhost"
     rc, out = node.exec_run(['/bin/bash', '-c', cmd])
     if rc:
         raise RuntimeError(f"error rc: {rc}, out: {out}")
@@ -298,24 +305,24 @@ pypub = PyPty(new, "/tada-src/python/pypubsub.py")
 pysub = PyPty(agg2, "/tada-src/python/pypubsub.py")
 
 # subscirbe all streams from agg-2
-pysub.cmd("r.stream_subscribe('.*', True)")
+pysub.cmd("r.msg_subscribe('.*', True)")
 
 # prep 'old' stream data
 old.exec_run("""echo '{"name":"data"}' > /db/data.json""")
 
-ss0 = get_stream_stats(agg2)
-cs0 = get_stream_client_stats(agg2)
+ss0 = get_msg_stats(agg2)
+cs0 = get_msg_client_stats(agg2)
 
 # publish 'old' stream
 old.exec_run("ldmsd_stream_publish -x sock -h localhost -p 10000 -s old -t string -f /db/data.json")
 old.exec_run("ldmsd_stream_publish -x sock -h localhost -p 10000 -s old -t json -f /db/data.json")
 
-# publish 'foo' stream; should not reach agg-1
-pypub.cmd("r.stream_publish('foo', 'FOOFOO')")
+# publish 'foo' msg; should not reach agg-1
+pypub.cmd("r.msg_publish('foo', 'FOOFOO')")
 
-# publish 'new' stream
-pypub.cmd("r.stream_publish('new_string', 'some string')")
-pypub.cmd("r.stream_publish('new_json', {'new':'json'})")
+# publish 'new' message
+pypub.cmd("r.msg_publish('new_string', 'some string')")
+pypub.cmd("r.msg_publish('new_json', {'new':'json'})")
 
 # pause a little, making sure that the data all arrive at the final subscriber
 time.sleep(2)
@@ -324,15 +331,17 @@ subdata = [ pysub.cmd("scli.get_data()") for i in range(0, 5) ]
 subobjs = [ eval(o) if o else None for o in subdata ]
 
 EXPECTED_OBJS = [
-        StreamData(name='old', is_json=0, data='{"name":"data"}\n\x00'),
-        StreamData(name='old', is_json=1, data={"name":"data"}),
-        StreamData(name='new_string', is_json=0, data='some string'),
-        StreamData(name='new_json', is_json=1, data={'new': 'json'}),
+        MsgData(name='new_string', is_json=0, data='some string'),
+        MsgData(name='new_json', is_json=1, data={'new': 'json'}),
         None,
+        None,
+        None
         ]
 
-agg1_dump = open(f"{DB}/agg-1.txt").read()
-agg2_dump = open(f"{DB}/agg-2.txt").read()
+agg1_old_dump = open(f"{DB}/agg-1-old.txt").read()
+agg2_old_dump = open(f"{DB}/agg-2-old.txt").read()
+agg1_new_dump = open(f"{DB}/agg-1-new.txt").read()
+agg2_new_dump = open(f"{DB}/agg-2-new.txt").read()
 
 def dump2array(dump_text):
     rec_list = dump_text.split('\x01')[1:] # skip the first empty record
@@ -342,8 +351,14 @@ EXPECTED_RECS = [ '{"name":"data"}\n\n' ,
                   '{"name":"data"}\n\n' ,
                   'some string\n'       ,
                   '{"new": "json"}\n'     ]
-agg1_recs = dump2array(agg1_dump)
-agg2_recs = dump2array(agg2_dump)
+
+agg1_old_recs = dump2array(agg1_old_dump)
+agg2_old_recs = dump2array(agg2_old_dump)
+agg1_new_recs = dump2array(agg1_new_dump)
+agg2_new_recs = dump2array(agg2_new_dump)
+
+agg1_recs = agg1_old_recs + agg1_new_recs
+agg2_recs = agg2_old_recs + agg2_new_recs
 
 # For old ldmsd_stream
 _sli = slice(0, 2)
@@ -353,11 +368,17 @@ ERECS   = EXPECTED_RECS[_sli]
 test.assert_test(1, a1_recs == ERECS, "")
 test.assert_test(2, a2_recs == ERECS, "")
 
-objs = subobjs[_sli]
-EOBJS = EXPECTED_OBJS[_sli]
-test.assert_test(3, objs == EOBJS, "")
+# The old stream shall not reach the new subscriber
+for o in subobjs:
+    if o and 'old' in o.name:
+        # found old stream ...
+        test.assert_test(3, False, "Found 'old' stream in the new subscriber, obj: {o}")
+        break
+else:
+    # no old stream found
+    test.assert_test(3, True, "")
 
-# For the new stream
+# For the new messages
 _sli = slice(2, 4)
 a1_recs = agg1_recs[_sli]
 a2_recs = agg2_recs[_sli]
@@ -365,33 +386,31 @@ ERECS   = EXPECTED_RECS[_sli]
 test.assert_test(4, a1_recs == ERECS, "")
 test.assert_test(5, a2_recs == ERECS, "")
 
-objs = subobjs[_sli]
-EOBJS = EXPECTED_OBJS[_sli]
-test.assert_test(6, objs == EOBJS, "")
+test.assert_test(6, subobjs == EXPECTED_OBJS, "")
 
-# For the non-matching stream
+# For the non-matching msgs
 test.assert_test(7, len(agg1_recs) == 4, "")
 test.assert_test(8, len(agg2_recs) == 4, "")
 test.assert_test(9, subobjs[4:] == EXPECTED_OBJS[4:], "")
 
-ss1 = get_stream_stats(agg2)
-cs1 = get_stream_client_stats(agg2)
+ss1 = get_msg_stats(agg2)
+cs1 = get_msg_client_stats(agg2)
 
-# test.add_assertion(10, "Check stream_stats before stream data transfer")
+# test.add_assertion(10, "Check msg_stats before stream data transfer")
 test.assert_test(10, ss0 == [], "")
 
-CLIENT_DESCS = set(["stream_dump, path:/db/agg-2.txt", "remote_client"])
+CLIENT_DESCS = set(["stream_dump, path:/db/agg-2-new.txt", "remote_client"])
 
-# test.add_assertion(11, "Check stream_client_stats before stream data transfer")
+# test.add_assertion(11, "Check msg_client_stats before stream data transfer")
 while True: # will break
     if len(cs0) != 2:
-        test.assert_test(11, False, f"bad stream_client_stats data: {cs0}")
+        test.assert_test(11, False, f"bad msg_client_stats data: {cs0}")
         break
     break0 = True
     for s in cs0:
         if s['tx']['bytes'] != 0 or s['drops']['bytes'] != 0 \
                 or s['tx']['count'] != 0 or s['drops']['count'] != 0:
-            test.assert_test(11, False, f"bad stream_client_stats data: {cs0}")
+            test.assert_test(11, False, f"bad msg_client_stats data: {cs0}")
             break
     else:
         break0 = False
@@ -399,34 +418,34 @@ while True: # will break
         break
     client_descs = set(o['desc'] for o in cs0)
     if client_descs != CLIENT_DESCS:
-        test.assert_test(11, False, f"bad stream_client_stats data: {cs0}")
+        test.assert_test(11, False, f"bad msg_client_stats data: {cs0}")
         break
     test.assert_test(11, True, "")
     break
 
-# test.add_assertion(12, "Check stream_stats after stream data transfer")
+# test.add_assertion(12, "Check msg_stats after stream data transfer")
 while True: # will break
-    EXPECTED_NAMES = set(["new_json", "new_string", "old"])
+    EXPECTED_NAMES = set(["new_json", "new_string"])
     names = set([ o["name"] for o in ss1])
     if names != EXPECTED_NAMES:
-        test.assert_test(12, False, f"bad stream_stats data: {ss1}")
+        test.assert_test(12, False, f"bad msg_stats data: {ss1}")
         break
     break0 = True
     for o in ss1:
         descs = set( e["client_desc"] for e in o["clients"] )
         if descs != CLIENT_DESCS:
-            test.assert_test(12, False, f"bad stream_stats data: {ss1}")
+            test.assert_test(12, False, f"bad msg_stats data: {ss1}")
             break
         srcs = [ (v['bytes'], v['count']) for v in o['sources'].values() ]
         EXPECTED = [ (o['rx']['bytes'], o['rx']['count']) ]
         if srcs != EXPECTED:
-            test.assert_test(12, False, f"bad stream_stats data: {ss1}")
+            test.assert_test(12, False, f"bad msg_stats data: {ss1}")
             break
         break1 = True
         for c in o['clients']:
             tx = [ (c['tx']['bytes'], c['tx']['count']) ]
             if tx != EXPECTED:
-                test.assert_test(12, False, f"bad stream_stats data: {ss1}")
+                test.assert_test(12, False, f"bad msg_stats data: {ss1}")
                 break
         else:
             break1 = False
@@ -441,10 +460,9 @@ while True: # will break
     EXPECTED = set([
                 ("new_json",   15, 1),
                 ("new_string", 11, 1),
-                ("old",        34, 2),
                 ])
     if data != EXPECTED:
-        test.assert_test(12, False, f"bad stream_stats data: {ss1}")
+        test.assert_test(12, False, f"bad msg_stats data: {ss1}")
         break
     test.assert_test(12, True, "")
     break
@@ -456,49 +474,47 @@ def client_xtract(c):
     obj = dict()
     obj['tx'] = dict_filter(c['tx'], ['bytes', 'count'])
     obj['drops'] = dict_filter(c['drops'], ['bytes', 'count'])
-    streams = list()
-    for s in c['streams']:
+    channels = list()
+    for s in c['channels']:
         _s = dict()
-        _s['stream_name'] = s['stream_name']
+        _s['name'] = s['name']
         _s['tx'] = dict_filter(s['tx'], ['bytes', 'count'])
         _s['drops'] = dict_filter(s['drops'], ['bytes', 'count'])
-        streams.append(_s)
-    streams.sort(key = lambda o: o['stream_name'])
-    obj['streams'] = streams
+        channels.append(_s)
+    channels.sort(key = lambda o: o['name'])
+    obj['channels'] = channels
     return obj
 
-# test.add_assertion(13, "Check stream_client_stats after stream data transfer")
+# test.add_assertion(13, "Check msg_client_stats after stream data transfer")
 while True: # will break
     descs = set( o['desc'] for o in cs1 )
     if descs != CLIENT_DESCS:
-        test.assert_test(13, False, f"bad stream_client_stats data: {cs1}")
+        test.assert_test(13, False, f"bad msg_client_stats data: {cs1}")
         break
     # only 2 clients with same stats
     cx0 = client_xtract(cs1[0])
     cx1 = client_xtract(cs1[1])
     EXPECTED = {
-            'tx': {'bytes': 60, 'count': 4},
+            'tx': {'bytes': 26, 'count': 2},
             'drops': {'bytes': 0, 'count': 0},
-            'streams': [
+            'channels': [
                 {
-                    'stream_name': 'new_json',
+                    'name': 'new_json',
                     'tx': {'bytes': 15, 'count': 1},
                     'drops': {'bytes': 0, 'count': 0},
                 },
                 {
-                    'stream_name': 'new_string',
+                    'name': 'new_string',
                     'tx': {'bytes': 11, 'count': 1},
-                    'drops': {'bytes': 0, 'count': 0},
-                },
-                {
-                    'stream_name': 'old',
-                    'tx': {'bytes': 34, 'count': 2},
                     'drops': {'bytes': 0, 'count': 0},
                 },
             ]
         }
-    if cx0 != EXPECTED or cx1 != EXPECTED:
-        test.assert_test(13, False, f"bad stream_client_stats data: {cs1}")
+    if cx0 != EXPECTED:
+        test.assert_test(13, False, f"bad msg_client_stats data: {cx0}")
+        break
+    if cx1 != EXPECTED:
+        test.assert_test(13, False, f"bad msg_client_stats data: {cx1}")
         break
     test.assert_test(13, True, "")
     break

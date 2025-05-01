@@ -9,7 +9,7 @@ import socket
 
 ldms.init(128 * 1024 * 1024)
 
-scli = ldms.StreamClient('.*', is_regex = True)
+scli = ldms.MsgClient('.*', is_regex = True)
 
 PORT = int(os.environ.get("LDMSD_PORT", "10000"))
 

@@ -947,8 +947,8 @@ class ControllerPty(object):
     def cmd(self, cmd, retry = 3):
         return icmd(self.pty, cmd, self.prompt, retry=retry, idle_timeout=0.3)
 
-class StreamData(object):
-    """StreamData representation"""
+class MsgData(object):
+    """MsgData representation"""
 
     __slots__ = ('name', 'src', 'tid', 'uid', 'gid', 'perm', 'is_json', 'data')
     __cmp_fields__ = ('name', 'src', 'uid', 'gid', 'perm', 'is_json', 'data')
@@ -956,7 +956,7 @@ class StreamData(object):
 
     def __init__(self, *args, **kwargs):
         if args and kwargs:
-            raise ValueError("StreamData can be initialized with either *args or **kwargs but not both")
+            raise ValueError("MsgData can be initialized with either *args or **kwargs but not both")
         for k in self.__slots__:
             setattr(self, k, None)
         if args:
@@ -977,7 +977,7 @@ class StreamData(object):
         return tuple( getattr(self, f) for f in self.__slots__ )
 
     def __eq__(self, other):
-        if type(other) != StreamData:
+        if type(other) != MsgData:
             return False
         # compare all fields, except when it is None
         for k in self.__cmp_fields__:
@@ -997,7 +997,7 @@ class StreamData(object):
         return o
 
     def __repr__(self):
-        return f"StreamData{self.as_tuple()}"
+        return f"MsgData{self.as_tuple()}"
 
 def obj_xeq(a, b):
     if isinstance(a, list):
@@ -1146,38 +1146,38 @@ class TimeSpec(XCmp):
     tv_nsec: int = None
 
 @dataclass()
-class StreamCounters(XCmp):
+class MsgCounters(XCmp):
     first_ts: TimeSpec = None
     last_ts:  TimeSpec = None
     count:    int      = None
     bytes:    int      = None
 
 @dataclass()
-class StreamSrcStats(XCmp):
+class MsgSrcStats(XCmp):
     src: LdmsAddr     = None
-    rx:  StreamCounters = None
+    rx:  MsgCounters = None
 
 @dataclass()
-class StreamClientPairStats(XCmp):
-    stream_name:  str            = None
+class MsgChannelClientStats(XCmp):
+    name:         str            = None
     client_match: str            = None
     client_desc:  str            = None
     is_regex:     int            = None
-    tx:           StreamCounters = None
-    drops:        StreamCounters = None
+    tx:           MsgCounters = None
+    drops:        MsgCounters = None
 
 @dataclass()
-class StreamStats(XCmp):
-    rx:      StreamCounters = None
+class MsgChannelStats(XCmp):
+    rx:      MsgCounters = None
     sources: dict           = None
     clients: dict           = None
     name:    str            = None
 
 @dataclass()
-class StreamClientStats(XCmp):
-    tx:       StreamCounters = None
-    drops:    StreamCounters = None
-    streams:  dict           = None
+class MsgClientStats(XCmp):
+    tx:       MsgCounters = None
+    drops:    MsgCounters = None
+    channels: dict           = None
     dest:     LdmsAddr     = None
     is_regex: int            = None
     match:    str            = None

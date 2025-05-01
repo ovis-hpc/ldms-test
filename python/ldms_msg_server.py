@@ -2,13 +2,13 @@
 #
 # SYNOPSIS
 # --------
-# ldms_stream_server.py - stream server script (interactive) for using in `ldms_stream_test`.
+# ldms_msg_server.py - msg server script (interactive) for using in `ldms_msg_test`.
 
 from ovis_ldms import ldms
-from ldms_stream_common import *
+from ldms_msg_common import *
 
 ldms.init(64*1024*1024)
-ldms.stream_stats_level_set(2)
+ldms.msg_stats_level_set(2)
 xlist = list()
 
 xprt_free_list = list()
@@ -27,21 +27,21 @@ def listen_fn(x, ev, arg):
 r = ldms.Xprt(name = "sock", auth = "munge", rail_eps = 4, rail_recv_limit = 128 )
 r.listen(cb = listen_fn, cb_arg = None)
 
-# setting up local stream clients
+# setting up local msg clients
 
 dot_star_cb_data = list()
 l1_cb_data = list()
 l2_cb_data = list()
 l3_cb_data = list()
-dot_star_stream_cb_data = list()
+dot_star_msg_cb_data = list()
 
 dot_star_data = list()
 l1_data = list()
 l2_data = list()
 l3_data = list()
-dot_star_stream_data = list()
+dot_star_msg_data = list()
 
-def stream_cb(client, sdata, arg):
+def msg_cb(client, sdata, arg):
     _list = arg
     _list.append(sdata)
 
@@ -57,21 +57,21 @@ def compare_data():
     assert( l1_cb_data == l1_data )
     assert( l2_cb_data == l2_data )
     assert( l3_cb_data == l3_data )
-    assert( dot_star_stream_cb_data == dot_star_stream_data )
+    assert( dot_star_msg_cb_data == dot_star_msg_data )
     return True
 
 # clients without and with callback
-dot_star = ldms.StreamClient('.*', is_regex = True)
-dot_star_cb = ldms.StreamClient('.*', is_regex = True, cb = stream_cb, cb_arg = dot_star_cb_data)
-l1 = ldms.StreamClient('l1-stream', is_regex = False)
-l1_cb = ldms.StreamClient('l1-stream', is_regex = False, cb = stream_cb, cb_arg = l1_cb_data)
-l2 = ldms.StreamClient('l2-stream', is_regex = False)
-l2_cb = ldms.StreamClient('l2-stream', is_regex = False, cb = stream_cb, cb_arg = l2_cb_data)
-l3 = ldms.StreamClient('l3-stream', is_regex = False)
-l3_cb = ldms.StreamClient('l3-stream', is_regex = False, cb = stream_cb, cb_arg = l3_cb_data)
-dot_star_stream = ldms.StreamClient('.*-stream', is_regex = True)
-dot_star_stream_cb = ldms.StreamClient('.*-stream', is_regex = True,
-                        cb = stream_cb, cb_arg = dot_star_stream_cb_data)
+dot_star = ldms.MsgClient('.*', is_regex = True)
+dot_star_cb = ldms.MsgClient('.*', is_regex = True, cb = msg_cb, cb_arg = dot_star_cb_data)
+l1 = ldms.MsgClient('l1-msg', is_regex = False)
+l1_cb = ldms.MsgClient('l1-msg', is_regex = False, cb = msg_cb, cb_arg = l1_cb_data)
+l2 = ldms.MsgClient('l2-msg', is_regex = False)
+l2_cb = ldms.MsgClient('l2-msg', is_regex = False, cb = msg_cb, cb_arg = l2_cb_data)
+l3 = ldms.MsgClient('l3-msg', is_regex = False)
+l3_cb = ldms.MsgClient('l3-msg', is_regex = False, cb = msg_cb, cb_arg = l3_cb_data)
+dot_star_msg = ldms.MsgClient('.*-msg', is_regex = True)
+dot_star_msg_cb = ldms.MsgClient('.*-msg', is_regex = True,
+                        cb = msg_cb, cb_arg = dot_star_msg_cb_data)
 
 A = int(HOSTNAME[-1])
 G.prdcrs = []
@@ -86,17 +86,17 @@ def right_connect():
     if not R:
         return None
     try:
-        con = stream_connect(f"node-{R}")
+        con = msg_connect(f"node-{R}")
         con.set_xprt_free_cb(xprt_free_cb)
     except:
         return None
     if A == 1:
-        con.stream_subscribe(".*-stream", True)
+        con.msg_subscribe(".*-msg", True)
     elif A == 2:
-        con.stream_subscribe("l2-stream", False)
-        con.stream_subscribe("l3-stream", False)
+        con.msg_subscribe("l2-msg", False)
+        con.msg_subscribe("l3-msg", False)
     elif A == 3:
-        con.stream_subscribe(".*-stream", True)
+        con.msg_subscribe(".*-msg", True)
     else:
         raise RuntimeError(f"Invalid node ID {A}")
     return con
@@ -105,17 +105,17 @@ def left_connect():
     if not L:
         return None
     try:
-        con = stream_connect(f"node-{L}")
+        con = msg_connect(f"node-{L}")
         con.set_xprt_free_cb(xprt_free_cb)
     except:
         return None
     if A == 1:
-        con.stream_subscribe("l3-stream", False)
+        con.msg_subscribe("l3-msg", False)
     elif A == 2:
-        con.stream_subscribe("l2-stream", False)
-        con.stream_subscribe("l3-stream", False)
+        con.msg_subscribe("l2-msg", False)
+        con.msg_subscribe("l3-msg", False)
     elif A == 3:
-        con.stream_subscribe(".*-stream", True)
+        con.msg_subscribe(".*-msg", True)
     else:
         raise RuntimeError(f"Invalid node ID {A}")
     return con
