@@ -68,13 +68,14 @@
 #include <ctype.h>
 #include <pwd.h>
 #include <grp.h>
-#include <coll/htbl.h>
-#include <ovis_json/ovis_json.h>
-#include <ovis_log/ovis_log.h>
+#include "coll/htbl.h"
+#include "ovis_json/ovis_json.h"
+#include "ovis_log/ovis_log.h"
 #include <assert.h>
 #include <sched.h>
 #include "ldms/ldms.h"
 #include "ldms/ldmsd.h"
+#include "ldms/ldmsd_plug_api.h"
 #include "ldms/ldmsd_stream.h"
 
 #include "ovis-ldms-config.h" /* for OVIS_GIT_LONG */
@@ -85,13 +86,13 @@ static char tada_user[64]; /* populated in get_plugin */
 
 static char *stream;
 
-static const char *usage(struct ldmsd_plugin *self)
+static const char *usage(ldmsd_plug_handle_t handle)
 {
 	return  "config name=test_stream_sampler path=<path> port=<port_no> log=<path>\n"
 		"     output    The path to a file to dump stream output to.\n";
 }
 
-static int sample(struct ldmsd_sampler *self)
+static int sample(ldmsd_plug_handle_t handle)
 {
 	return 0;
 }
@@ -103,7 +104,8 @@ static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 
 FILE *out = NULL;
 
-static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct attr_value_list *avl)
+static int config(ldmsd_plug_handle_t handle, struct attr_value_list *kwl,
+		  struct attr_value_list *avl)
 {
 	char *value;
 	int rc;
@@ -113,7 +115,7 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl, struct
 		stream = strdup(value);
 	else
 		stream = strdup("test_stream");
-	ldmsd_stream_subscribe(stream, test_stream_recv_cb, self);
+	ldmsd_stream_subscribe(stream, test_stream_recv_cb, handle);
 
 	value = av_value(avl, "output");
 	if (!value)
@@ -158,7 +160,7 @@ static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 	return rc;
 }
 
-static void term(struct ldmsd_plugin *self)
+static void term(ldmsd_plug_handle_t handle)
 {
 	if (out) {
 		fclose(out);

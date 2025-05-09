@@ -19,7 +19,6 @@
 } while(0);
 
 typedef struct test_store_inst_s {
-	struct ldmsd_store *store;
 	char *key;
 	FILE *file;
 	pthread_mutex_t lock;
@@ -83,14 +82,14 @@ static void free_inst(test_store_inst_t inst)
 
 /* -------------- COMMON API ------------------ */
 
-static const char *usage(struct ldmsd_plugin *self)
+static const char *usage(ldmsd_plug_handle_t handle)
 {
 	return  "    A store plugin for testing in the TADA framework\n"
 		"  config name=test_store path=<path>\n"
 		"    path     The path to the storage\n";
 }
 
-static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl,
+static int config(ldmsd_plug_handle_t handle, struct attr_value_list *kwl,
 					     struct attr_value_list *avl)
 {
 	char *v;
@@ -107,7 +106,7 @@ static int config(struct ldmsd_plugin *self, struct attr_value_list *kwl,
 	return 0;
 }
 
-static void close_store(ldmsd_store_handle_t sh)
+static void close_store(ldmsd_plug_handle_t handle, ldmsd_store_handle_t sh)
 {
 	test_store_inst_t inst = sh;
 	if (!sh)
@@ -119,7 +118,7 @@ static void close_store(ldmsd_store_handle_t sh)
 	free_inst(inst);
 }
 
-static void term(struct ldmsd_plugin *self)
+static void term(ldmsd_plug_handle_t handle)
 {
 	test_store_inst_t inst;
 
@@ -132,8 +131,8 @@ static void term(struct ldmsd_plugin *self)
 }
 
 static ldmsd_store_handle_t
-open_store(struct ldmsd_store *s, const char *container, const char *schema,
-	   struct ldmsd_strgp_metric_list *metric_list, void *ucontext)
+open_store(ldmsd_plug_handle_t handle, const char *container, const char *schema,
+	   struct ldmsd_strgp_metric_list *metric_list)
 {
 	int rc;
 	char *key, *common_path, *header_path, *data_path;
@@ -176,7 +175,6 @@ open_store(struct ldmsd_store *s, const char *container, const char *schema,
 		inst->file = fopen(data_path, "w");
 		if (!inst->file)
 			goto err;
-		inst->store = s;
 		rc = print_header(header_path, metric_list);
 		if (rc)
 			goto err;
@@ -205,7 +203,8 @@ err:
 #define ELE_DELIM ";"
 
 static int
-store(ldmsd_store_handle_t sh, ldms_set_t set, int *metric_arry, size_t metric_count)
+store(ldmsd_plug_handle_t handle, ldmsd_store_handle_t sh,
+      ldms_set_t set, int *metric_arry, size_t metric_count)
 {
 	test_store_inst_t inst = sh;
 	struct ldms_timestamp ts = ldms_transaction_timestamp_get(set);
@@ -347,7 +346,7 @@ store(ldmsd_store_handle_t sh, ldms_set_t set, int *metric_arry, size_t metric_c
 	return 0;
 }
 
-static int flush_store(ldmsd_store_handle_t sh)
+static int flush_store(ldmsd_plug_handle_t handle, ldmsd_store_handle_t sh)
 {
 	int rc;
 	test_store_inst_t inst;
@@ -358,11 +357,6 @@ static int flush_store(ldmsd_store_handle_t sh)
 		pthread_mutex_unlock(&inst->lock);
 	}
 	return 0;
-}
-
-static void *get_ucontext(ldmsd_store_handle_t sh)
-{
-	return NULL;
 }
 
 static struct ldmsd_store test_store = {
@@ -376,13 +370,12 @@ static struct ldmsd_store test_store = {
 	.open = open_store,
 	.close = close_store,
 	.store = store,
-	.get_context = get_ucontext,
 	.flush = flush_store,
 };
 
 struct ldmsd_plugin *get_plugin()
 {
-	mylog = ovis_log_create("store.test", "Messages for test_store");
+	mylog = ovis_log_register("store.test", "Messages for test_store");
 	assert(mylog);
 	return &test_store.base;
 }
