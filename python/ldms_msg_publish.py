@@ -41,4 +41,8 @@ def forge_msg(uid:int, gid:int):
     ])
     return msg
 
-r = msg_connect(HOSTNAME, rail_eps = 1)
+events = list()
+def cb_fn(r, ev, arg):
+    events.append(ev)
+
+r = msg_connect(HOSTNAME, rail_eps = 1, cb = cb_fn)

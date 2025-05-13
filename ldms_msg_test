@@ -243,6 +243,12 @@ test.add_assertion(23, "Check msg client stats in each process")
 
 test.add_assertion(24, "Check forged publishing block")
 
+test.add_assertion(25, "pub-5 publish completed with a status after srv-5 disabled msg service")
+test.add_assertion(26, "no data get propagated")
+test.add_assertion(27, "pub-5 synchronously failed to publish afterward")
+
+test.add_assertion(28, "pub-5-new (new connection) synchronously failed to publish")
+
 # Test switches for convenience while debugging
 test1  = True
 test2  = True
@@ -265,6 +271,8 @@ test21 = True
 test22 = True
 test23 = True
 test24 = True
+test25to27 = True
+test28 = True
 
 cluster = None
 test.start()
@@ -1449,6 +1457,36 @@ while test24: # will break
     none = 5*[None]
     all_edata = [ none, none, none, edata4, none, none, none, none ]
     all_cdata_assert(24, all_edata, all_cdata, True)
+    break
+
+# disable msg service on srv-5 for test25-26
+srv5.pycmd("ldms.msg_disable()")
+
+# test.add_assertion(25, "pub-5 publish completed with a status after srv-5 disabled msg service")
+# test.add_assertion(26, "no data get propagated")
+# test.add_assertion(27, "pub-5 synchronously failed to publish afterward")
+while test25to27: # will break
+    out1 = pub5.msg_publish('msg', 'block-me')
+    time.sleep(2)
+
+    out2 = pub5.pycmd("events[-1].quota.rc") # last event
+    rc = int(out2)
+    test.assert_test(25, rc == 95, "")
+
+    all_cdata = get_all_cdata()
+    none = 5*[None]
+    edata = 8*[none]
+    test.assert_test(26, all_cdata == edata, "")
+
+    out3 = pub5.msg_publish('msg', 'block-me-again')
+    test.assert_test(27, 0 < out3.find("rc: 95"), "")
+    break
+
+# test.add_assertion(28, "pub-5-new (new connection) synchronously failed to publish")
+while test28: # will break
+    pub5new = py_pty(node5, "/tada-src/python/ldms_msg_publish.py")
+    out = pub5new.msg_publish('try', 'should-fail')
+    test.assert_test(28, 0 < out3.find("rc: 95"), "")
     break
 
 # see at_exit()
