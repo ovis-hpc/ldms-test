@@ -17,6 +17,8 @@ from collections import namedtuple
 from dataclasses import dataclass, field
 from types       import MethodType
 
+from typing import TypeVar
+
 import fcntl
 from array import array
 import struct
@@ -1722,6 +1724,7 @@ class LDMSDContainer(ABC):
 # ---------------------------------------------------------- LDMSDContainer -- #
 
 
+LDMSDCluster = TypeVar("LDMSDCluster")
 class LDMSDCluster(ABC):
     """LDMSD Cluster - a virtual cluster for LDMSD
 
@@ -1993,7 +1996,7 @@ class LDMSDCluster(ABC):
         raise NotImplementedError()
 
     @classmethod
-    def get(cls, name, create = False, spec = None):
+    def get(cls, name, create = False, spec = None) -> LDMSDCluster :
         """Obtain an existing ldmsd virtual cluster (or create if `create=True`)"""
         _cls = get_cluster_class()
         try:
@@ -2008,7 +2011,7 @@ class LDMSDCluster(ABC):
 
     @classmethod
     @abstractmethod
-    def _get(cls, name):
+    def _get(cls, name) -> LDMSDCluster :
         """[ABSTRACT] Obtain a handle to a running virtual cluster with `name`.
 
         Returns
@@ -2047,7 +2050,7 @@ class LDMSDCluster(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def get_container(self, name):
+    def get_container(self, name) -> LDMSDContainer :
         """[ABSTRACT] Returns the matching container in the cluster"""
         raise NotImplementedError()
 
