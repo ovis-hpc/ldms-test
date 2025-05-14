@@ -317,7 +317,14 @@ while ENABLE_LDMSD_CONTROLLER:
     out = ldmsd_controller.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
     lines = [ l for l in lines if l ]
-    elines = [cmd, "Error loading plugin bogus: Failed to load the plugin 'bogus'.", "sock:agg-11:10000>"]
+                #print(f'Error loading configuration named "{name}" '
+                #      f'with plugin "{plugin}"')
+    elines = [cmd,
+            "Error 2 plugin 'bogus': " \
+			"failed to load the plugin, dlerror: " \
+            "/opt/ovis/lib64/ovis-ldms/libbogus.so: " \
+		    "cannot open shared object file: No such file or directory",
+            "sock:agg-11:10000>"]
     if len(lines) != 3 or lines[0] != elines[0] \
                        or lines[2] != elines[2] \
                        or not lines[1].startswith(elines[1]):
@@ -334,7 +341,12 @@ while ENABLE_LDMSCTL:
     out = ldmsctl.read(idle_timeout = 0.1)
     lines = [cs_rm(l.strip()) for l in out.splitlines()]
     lines = [ l for l in lines if l ]
-    elines = [cmd, "Failed to load the plugin 'bogus'.", "ldmsctl>"]
+    elines = [cmd,
+            "Error 2 plugin 'bogus': " \
+			"failed to load the plugin, dlerror: " \
+            "/opt/ovis/lib64/ovis-ldms/libbogus.so: " \
+		    "cannot open shared object file: No such file or directory",
+			"ldmsctl>"]
     if len(lines) != 3 or lines[0] != elines[0] \
                        or lines[2] != elines[2] \
                        or not lines[1].startswith(elines[1]):
