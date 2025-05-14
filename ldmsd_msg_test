@@ -258,6 +258,11 @@ test.add_assertion(11, "Check msg_client_stats before stream data transfer")
 test.add_assertion(12, "Check msg_stats after stream data transfer")
 test.add_assertion(13, "Check msg_client_stats after stream data transfer")
 
+test.add_assertion(14, "Publishing completed with a status after msg_disable")
+test.add_assertion(15, "No data is propagated after msg_disable")
+test.add_assertion(16, "Publisher synchronously failed afterward")
+test.add_assertion(17, "New publisher synchronously failed")
+
 # ===== Helping functions =====
 def get_msg_stats(node):
     cmd = f"echo msg_stats json=1 | ldmsd_controller --xprt sock --port 10000 --host localhost"
@@ -518,5 +523,33 @@ while True: # will break
         break
     test.assert_test(13, True, "")
     break
+
+new.config_ldmsd("msg_disable")
+empty = pypub.cmd("r.msg_publish('new_string', 'block-me')")
+time.sleep(2)
+
+
+# test.add_assertion(14, "Publishing completed with a status after msg_disable")
+out = pypub.cmd("events[-1].quota.rc")
+qrc = int(out)
+test.assert_test(14, qrc == 95, "")
+
+# test.add_assertion(15, "No data is propagated after msg_disable")
+d_agg1_old_dump = open(f"{DB}/agg-1-old.txt").read()
+d_agg2_old_dump = open(f"{DB}/agg-2-old.txt").read()
+d_agg1_new_dump = open(f"{DB}/agg-1-new.txt").read()
+d_agg2_new_dump = open(f"{DB}/agg-2-new.txt").read()
+d = [ d_agg1_old_dump, d_agg2_old_dump, d_agg1_new_dump, d_agg2_new_dump ]
+e = [ agg1_old_dump, agg2_old_dump, agg1_new_dump, agg2_new_dump ]
+test.assert_test(15, d == e, "")
+
+# test.add_assertion(16, "Publisher synchronously failed afterward")
+out = pypub.cmd("r.msg_publish('new_string', 'block-me')")
+test.assert_test(16, 0 < out.find("rc: 95"), "")
+
+# test.add_assertion(17, "New publisher synchronously failed")
+newpub = PyPty(new, "/tada-src/python/pypubsub.py")
+out = newpub.cmd("r.msg_publish('new_string', 'block-me')")
+test.assert_test(17, 0 < out.find("rc: 95"), "")
 
 # see at_exit()
