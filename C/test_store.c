@@ -359,11 +359,9 @@ static int flush_store(ldmsd_plug_handle_t handle, ldmsd_store_handle_t sh)
 	return 0;
 }
 
-static struct ldmsd_store test_store = {
+struct ldmsd_store ldmsd_plugin_interface = {
 	.base = {
-		.name = STORE_NAME,
 		.type = LDMSD_PLUGIN_STORE,
-		.term = term,
 		.config = config,
 		.usage = usage,
 	},
@@ -373,16 +371,11 @@ static struct ldmsd_store test_store = {
 	.flush = flush_store,
 };
 
-struct ldmsd_plugin *get_plugin()
-{
-	mylog = ovis_log_register("store.test", "Messages for test_store");
-	assert(mylog);
-	return &test_store.base;
-}
-
 static void __attribute__ ((constructor)) test_store_init();
 static void test_store_init()
 {
+	mylog = ovis_log_register("store.test", "Messages for test_store");
+	assert(mylog);
 	pthread_mutex_init(&cfg_lock, NULL);
 	LIST_INIT(&test_store_handle_list);
 }

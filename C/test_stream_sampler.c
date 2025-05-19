@@ -160,26 +160,17 @@ static int test_stream_recv_cb(ldmsd_stream_client_t c, void *ctxt,
 	return rc;
 }
 
-static void term(ldmsd_plug_handle_t handle)
-{
-	if (out) {
-		fclose(out);
-		out = NULL;
-	}
-}
-
-static struct ldmsd_sampler test_stream_sampler = {
+struct ldmsd_sampler ldmsd_plugin_interface = {
 	.base = {
-		.name = "test_stream_sampler",
 		.type = LDMSD_PLUGIN_SAMPLER,
-		.term = term,
 		.config = config,
 		.usage = usage,
 	},
 	.sample = sample
 };
 
-struct ldmsd_plugin *get_plugin()
+__attribute__((constructor))
+void get_plugin()
 {
 	char *__user = getenv("TADA_USER");
 	if (__user)
@@ -190,5 +181,4 @@ struct ldmsd_plugin *get_plugin()
 		mylog = ovis_log_register("sampler.test_stream", "Messages for the test_stream_sampler");
 		assert(mylog);
 	}
-	return &test_stream_sampler.base;
 }
