@@ -138,7 +138,7 @@ def ldmsd_request_send(dcont, cmd):
     return (rc, out)
 
 def stream_status(dcont):
-    cmd = "stream_stats"
+    cmd = "stream_status"
     (rc, out) = ldmsd_request_send(dcont, cmd)
     if rc:
         return (rc, out.strip())
@@ -158,18 +158,29 @@ def prdcr_subscribe(dcont, regex, stream):
     (rc, out) = ldmsd_request_send(dcont, cmd)
     return (rc, out)
 
-def rx_get(count, _bytes, first_ts, last_ts):
-    return { "count": count, "bytes": _bytes,
-             "first_ts": first_ts, "last_ts": last_ts }
+def info_get(count, total_bytes, first_ts = None, last_ts = None):
+    d = {"count" : count,
+         "total_bytes" : total_bytes}
+    if first_ts:
+        d['first_ts'] = first_ts
+    if last_ts:
+        d['last_ts'] = last_ts
+    if first_ts != last_ts:
+        d['bytes/sec'] = float(f"{d['total_bytes']/(last_ts - first_ts):.6f}")
+        d['msg/sec'] = float(f"{d['count']/(last_ts - first_ts):.6f}")
+    return d
 
-def stream_get(name, rx, sources = dict(), clients = list()):
-    return { "name": name, "rx": rx, "sources": sources, "clients": clients }
+def stream_get(mode, recv = {}, pub = {}, publishers = None):
+    if publishers is not None:
+        return { "mode" : mode, "recv" : recv, "pub" : pub, "publishers" : publishers }
+    else:
+        return { "mode" : mode, "recv" : recv, "pub" : pub}
 
 def stream_first_ts_get(stream):
-    return stream['rx']['first_ts']
+    return stream['recv']['first_ts']
 
 def stream_last_ts_get(stream):
-    return stream['rx']['last_ts']
+    return stream['recv']['last_ts']
 
 def stream_count_get(stream):
     return stream['recv']['count']
@@ -235,7 +246,9 @@ id = assertion_id_get()
 NO_STREAM_DATA              = next(id)
 ONE_MSG                     = next(id)
 CHECK_RATE_FREQ             = next(id)
+PRDCR_STREAM_DIR_ONE_PRDCR  = next(id)
 STREAM_DIR_TWO_STREAM       = next(id)
+PRDCR_STREAM_DIR_TWO_PRDCR  = next(id)
 STREAM_DIR_AGG_ONE_PRODUCER = next(id)
 STREAM_DIR_AGG_TWO_PRODUCERS = next(id)
 
@@ -254,8 +267,12 @@ test.add_assertion(ONE_MSG,
                    "stream_status -- one stream message")
 test.add_assertion(CHECK_RATE_FREQ,
                    "stream_status --  multiple stream messages")
+test.add_assertion(PRDCR_STREAM_DIR_ONE_PRDCR,
+                   "prdcr_stream_status to agg -- one producer")
 test.add_assertion(STREAM_DIR_TWO_STREAM,
                    "stream_status -- mulitple streams")
+test.add_assertion(PRDCR_STREAM_DIR_TWO_PRDCR,
+                   "prdcr_stream_status to agg -- two producers")
 test.add_assertion(STREAM_DIR_AGG_ONE_PRODUCER,
                    "stream_status to agg after one producer republished stream")
 test.add_assertion(STREAM_DIR_AGG_TWO_PRODUCERS,
@@ -299,7 +316,7 @@ log.info("All LDMSDs are up.")
 
 # NO_STREAM_DATA
 (rc, result) = stream_status(smplr1)
-exp = []
+exp = {}
 test.assert_test(NO_STREAM_DATA, result == exp, f"{result} == {exp}")
 
 # ONE_MSG
@@ -307,13 +324,12 @@ test.assert_test(NO_STREAM_DATA, result == exp, f"{result} == {exp}")
 assert(rc == 0)
 (rc, result) = stream_status(smplr1)
 assert(rc == 0)
-rx = rx_get(1, FOO_SZ, stream_first_ts_get(result[0]),
-                       stream_last_ts_get(result[0]))
-exp = [ stream_get( "foo", rx,
-                    sources = {"0.0.0.0:0": rx} ,
-                    clients = []
-                  )
-      ]
+exp = { "foo" : stream_get("not subscribed",
+                           recv = info_get(1, FOO_SZ,
+                                    stream_first_ts_get(result['foo']),
+                                    stream_last_ts_get(result['foo'])),
+                           publishers = {}),
+        "_OVERALL_": overall_get(result)}
 test.assert_test(ONE_MSG, result == exp, f"{result} == {exp}")
 
 # CHECK_RATE_FREQ
@@ -323,16 +339,28 @@ sleep(1) # Send stream data 1 second apart so that the rate can be calculated.
 (rc, out) = stream_publish(smplr1, "foo", "string", FOO_FILE)
 assert(rc == 0)
 (rc, result) = stream_status(smplr1)
-assert(rc == 0)
-rx = rx_get(3, FOO_SZ * 3, stream_first_ts_get(result[0]),
-                           stream_last_ts_get(result[0]))
-exp = [ stream_get( "foo", rx,
-                    sources = {"0.0.0.0:0": rx} ,
-                    clients = []
-                  )
-      ]
+exp = { "foo" : stream_get("not subscribed",
+                           recv = info_get(3, FOO_SZ *3,
+                                stream_first_ts_get(result['foo']),
+                                stream_last_ts_get(result['foo'])),
+                           publishers = {}),
+        "_OVERALL_": overall_get(result)}
 samplerd1_exp = exp
 test.assert_test(CHECK_RATE_FREQ, result == exp, f"{result} == {exp}")
+
+# PRDCR_STREAM_DIR_ONE_PRDCR
+(rc, result) = prdcr_stream_status(agg, ".*")
+assert(rc == 0)
+exp = { "foo" : { "samplerd-1" : stream_get("not subscribed",
+                                            recv = info_get(3, FOO_SZ * 3,
+                                                     stream_first_ts_get(result['foo']['samplerd-1']),
+                                                     stream_last_ts_get(result['foo']['samplerd-1'])),
+                                            publishers = None)},
+        "_OVERALL_": { "samplerd-1" : {"recv": info_get(3, FOO_SZ * 3,
+                                                     stream_first_ts_get(result['foo']['samplerd-1']),
+                                                     stream_last_ts_get(result['foo']['samplerd-1'])),
+                                       "pub" : {}}}}
+test.assert_test(PRDCR_STREAM_DIR_ONE_PRDCR, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_TWO_STREAM
 (rc, out) = stream_publish(smplr2, "foo", "string", FOO_FILE)
@@ -349,21 +377,31 @@ sleep(1)
 assert(rc == 0)
 (rc, result) = stream_status(smplr2)
 assert(rc == 0)
-rx0 = rx_get(3, BAR_SZ * 3, stream_first_ts_get(result[0]),
-                            stream_last_ts_get(result[0]))
-rx1 = rx_get(2, FOO_SZ * 2, stream_first_ts_get(result[1]),
-                            stream_last_ts_get(result[1]))
-exp = [
-        stream_get( "bar", rx0,
-                    sources = {"0.0.0.0:0": rx0} ,
-                    clients = []
-                  ),
-        stream_get( "foo", rx1,
-                    sources = {"0.0.0.0:0": rx1} ,
-                  ),
-      ]
+exp = {"foo" : stream_get("not subscribed",
+                          recv = info_get(2, FOO_SZ * 2,
+                                   stream_first_ts_get(result['foo']),
+                                   stream_last_ts_get(result['foo'])),
+                          publishers = {}),
+       "bar" : stream_get("not subscribed",
+                          recv = info_get(3, BAR_SZ * 3,
+                                   stream_first_ts_get(result['bar']),
+                                   stream_last_ts_get(result['bar'])),
+                          publishers = {}),
+       "_OVERALL_": overall_get(result)}
 samplerd2_exp = exp
 test.assert_test(STREAM_DIR_TWO_STREAM, result == exp, f"{result} == {exp}")
+
+# PRDCR_STREAM_DIR_TWO_PRDCR
+(rc, result) = prdcr_stream_status(agg, ".*")
+assert(rc == 0)
+exp = {"foo" : { "samplerd-1" : stream_get("not subscribed", samplerd1_exp['foo']['recv']),
+                 "samplerd-2" : stream_get("not subscribed", samplerd2_exp['foo']['recv'])
+               },
+       "bar" : { "samplerd-2" : stream_get("not subscribed", samplerd2_exp['bar']['recv'])},
+       "_OVERALL_": { "samplerd-1": {"recv": samplerd1_exp['_OVERALL_']['recv'], "pub": {}},
+                      "samplerd-2": {"recv": samplerd2_exp['_OVERALL_']['recv'], "pub" : {}}
+           }}
+test.assert_test(PRDCR_STREAM_DIR_TWO_PRDCR, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_AGG_ONE_PRODUCER
 (rc, out) = prdcr_subscribe(agg, ".*", "foo")
@@ -375,14 +413,19 @@ sleep(1)
 assert(rc == 0)
 (rc, result) = stream_status(agg)
 assert(rc == 0)
-rx0 = rx_get(2, FOO_SZ * 2, stream_first_ts_get(result[0]),
-                            stream_last_ts_get(result[0]))
-exp = [
-        stream_get( "foo", rx0,
-                    sources = {f"{smplr1.ip_addr}:{LDMSD_PORT}": rx0} ,
-                    clients = []
-                  ),
-      ]
+publishers = { "samplerd-1" : { "recv" : info_get(2, FOO_SZ * 2,
+                                                  stream_first_ts_get(result['foo']),
+                                                  stream_last_ts_get(result['foo']))
+                              }}
+exp = {"foo" : stream_get("not subscribed",
+                          recv = info_get(2, FOO_SZ * 2,
+                                   stream_first_ts_get(result['foo']),
+                                   stream_last_ts_get(result['foo'])),
+                          publishers = publishers),
+       "_OVERALL_": {"recv": info_get(2, FOO_SZ * 2,
+                                      stream_first_ts_get(result['foo']),
+                                      stream_last_ts_get(result['foo'])),
+                     "pub" : {}}}
 test.assert_test(STREAM_DIR_AGG_ONE_PRODUCER, result == exp, f"{result} == {exp}")
 
 # STREAM_DIR_AGG_TWO_PRODUCERS
@@ -392,19 +435,13 @@ for i in range(count):
     assert(rc == 0)
 (rc, result) = stream_status(agg)
 assert(rc == 0)
-rx1 = rx_get(count, FOO_SZ * count,
-                    result[0]['sources'][f'{smplr2.ip_addr}:{LDMSD_PORT}']['first_ts'],
-                    result[0]['sources'][f'{smplr2.ip_addr}:{LDMSD_PORT}']['last_ts'])
-rx_all = rx_get(5, FOO_SZ*5,
-                    result[0]['sources'][f'{smplr1.ip_addr}:{LDMSD_PORT}']['first_ts'],
-                    result[0]['sources'][f'{smplr2.ip_addr}:{LDMSD_PORT}']['last_ts'])
-exp = [
-        stream_get( "foo", rx_all,
-                    sources = {
-                            f"{smplr1.ip_addr}:{LDMSD_PORT}": rx0 ,
-                            f"{smplr2.ip_addr}:{LDMSD_PORT}": rx1
-                        },
-                    clients = []
-                  ),
-      ]
+publishers['samplerd-2'] = {'recv' : info_get(count, FOO_SZ * count,
+                                     stream_first_ts_get(result['foo']['publishers']['samplerd-2']),
+                                     stream_last_ts_get(result['foo']['publishers']['samplerd-2']))}
+exp = { "foo" : stream_get("not subscribed",
+                           recv = info_get(5, FOO_SZ * 5,
+                                    stream_first_ts_get(result['foo']),
+                                    stream_last_ts_get(result['foo'])),
+                           publishers = publishers),
+        "_OVERALL_": overall_get(result)}
 test.assert_test(STREAM_DIR_AGG_TWO_PRODUCERS, result == exp, f"{result} == {exp}")
