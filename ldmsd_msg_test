@@ -154,7 +154,8 @@ spec = {
                         "config name=stream_dump op=stream_subscribe " \
                             "stream=old path=/db/%hostname%-old.txt",
 
-                        "prdcr_subscribe regex=agg-1 message_channel=.* stream=old",
+                        "prdcr_subscribe regex=agg-1 stream=old",
+                        "prdcr_subscribe regex=agg-1 message_channel=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
