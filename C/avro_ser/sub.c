@@ -5,19 +5,19 @@
 #include <unistd.h>
 #include "ldms/ldms.h"
 
-#include "ldms/ldms_stream_avro_ser.h"
-int stream_cb(ldms_stream_avro_ser_event_t aev, void *cb_arg)
+#include "ldms/ldms_msg_avro_ser.h"
+int msg_cb(ldms_msg_avro_ser_event_t aev, void *cb_arg)
 {
-	ldms_stream_event_t ev = &aev->ev;
-	printf("stream_event: %s(%d)\n", ldms_stream_event_type_sym(ev->type),
+	ldms_msg_event_t ev = &aev->ev;
+	printf("msg_event: %s(%d)\n", ldms_msg_event_type_sym(ev->type),
 					 ev->type);
-	if (ev->type != LDMS_STREAM_EVENT_RECV) {
+	if (ev->type != LDMS_MSG_EVENT_RECV) {
 		printf("  -- ignored --\n");
 		return 0;
 	}
-	printf("stream_type: %s(%d)\n", ldms_stream_type_sym(ev->recv.type),
+	printf("msg_type: %s(%d)\n", ldms_msg_type_sym(ev->recv.type),
 					ev->recv.type);
-	if (ev->recv.type != LDMS_STREAM_AVRO_SER) {
+	if (ev->recv.type != LDMS_MSG_AVRO_SER) {
 		printf("  -- ignored --\n");
 		return 0;
 	}
@@ -40,7 +40,7 @@ int main(int argc, char **argv)
 	char c;
 	serdes_t *sd;
 	serdes_conf_t *sd_conf;
-	ldms_stream_client_t cli;
+	ldms_msg_client_t cli;
 	rc = ldms_xprt_connect_by_name(x, "localhost", "411", NULL, NULL);
 	assert(rc == 0);
 	sd_conf = serdes_conf_new(ebuf, sizeof(ebuf),
@@ -49,10 +49,10 @@ int main(int argc, char **argv)
 	assert(sd_conf);
 	sd = serdes_new(sd_conf, ebuf, sizeof(ebuf));
 	assert(sd);
-	cli = ldms_stream_subscribe_avro_ser("avro", 0, stream_cb, NULL,
-					     "avro stream client", sd);
+	cli = ldms_msg_subscribe_avro_ser("avro", 0, msg_cb, NULL,
+					     "avro msg client", sd);
 	assert(cli);
-	rc = ldms_stream_remote_subscribe(x, "avro", 0, NULL, NULL, LDMS_UNLIMITED);
+	rc = ldms_msg_remote_subscribe(x, "avro", 0, NULL, NULL, LDMS_UNLIMITED);
 	assert(rc == 0);
 	scanf("%c", &c);
 	return 0;

@@ -35,5 +35,5 @@ sch_def = {
         ]
     }
 data = {"name": "job1", "cmd": "/bin/bash", "uid": 1001, "gid":2001, "pid": 111}
-x.stream_publish("avro", data, stream_type=ldms.LDMS_STREAM_AVRO_SER,
+x.msg_publish("avro", data, msg_type=ldms.LDMS_MSG_AVRO_SER,
                  sr_client = sr_cli, schema_def = sch_def)

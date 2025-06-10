@@ -2,7 +2,7 @@
 DESTDIR = .
 
 CFLAGS = -ggdb3 -O0 -I/opt/ovis/include -L/opt/ovis/lib -lldms \
-	 -lldms_stream_avro_ser -lserdes -lavro \
+	 -lldms_msg_avro_ser -lserdes -lavro \
 	 -D_REF_TRACK_
 
 all: $(DESTDIR)/pub $(DESTDIR)/sub

@@ -15,7 +15,7 @@ from ovis_ldms import ldms
 # connection
 x = ldms.Xprt("sock")
 x.connect("localhost", "411")
-x.stream_subscribe("avro", False)
+x.msg_subscribe("avro", False)
 
 sch_def = {
         "namespace": "us.ogc",
@@ -35,8 +35,8 @@ sr_conf = { "url": "http://schema-registry-1:8081", }
 
 sr_cli = SchemaRegistryClient(sr_conf)
 
-# stream client
-sc = ldms.StreamClient("avro", False, sr_client = sr_cli)
+# msg client
+sc = ldms.MsgClient("avro", False, sr_client = sr_cli)
 
 # Avro stuff
 def make_avro(obj: object, sch):

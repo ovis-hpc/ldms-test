@@ -2,7 +2,7 @@
 #include <avro.h>
 #include <libserdes/serdes.h>
 
-#include "ldms/ldms_stream_avro_ser.h"
+#include "ldms/ldms_msg_avro_ser.h"
 
 int main(int argc, char **argv)
 {
@@ -57,7 +57,7 @@ int main(int argc, char **argv)
 	assert(rc == 0);
 	printf("sending: %s\n", js);
 
-	rc = ldms_stream_publish_avro_ser(x, "avro", NULL, 0400, &av, sd, &sd_sch);
+	rc = ldms_msg_publish_avro_ser(x, "avro", NULL, 0400, &av, sd, &sd_sch);
 	assert(rc == 0);
 	printf("Press ENTER to terminate ...");
 	scanf("%c", &c);

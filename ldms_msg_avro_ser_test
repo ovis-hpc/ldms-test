@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 #
-# Test AVRO/Serdes support in LDMS stream
+# Test AVRO/Serdes support in LDMS Message
 #
 # Use Confluent Schema Registry server
 #
@@ -21,7 +21,7 @@ import datetime
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, \
-                      PyPty, StreamData, LdmsAddr
+                      PyPty, MsgData, LdmsAddr
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -143,8 +143,8 @@ spec = {
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "ldms_stream_avro_ser_test",
-                 test_desc = "Test AVRO/Serdes support in LDMS stream",
+                 test_name = "ldms_msg_avro_ser_test",
+                 test_desc = "Test AVRO/Serdes support in LDMS message",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
@@ -234,12 +234,12 @@ if rc:
     raise RuntimeError(f"sub/pub program build error, output: {out}")
 
 log.info("Starting subscriber ...")
-pysub = PyPty(node1, "/tada-src/python/ldms_stream_avro_ser_sub.py")
+pysub = PyPty(node1, "/tada-src/python/ldms_msg_avro_ser_sub.py")
 csub  = node1.exec_interact("/bin/sub")
 time.sleep(1)
 
 log.info("Starting publishers ...")
-pypub = PyPty(node1, "/tada-src/python/ldms_stream_avro_ser_pub.py")
+pypub = PyPty(node1, "/tada-src/python/ldms_msg_avro_ser_pub.py")
 time.sleep(1)
 cpub  = node1.exec_interact("/bin/pub")
 
@@ -264,9 +264,9 @@ def parse_cout(cout):
     itr = iter(lines)
     l = next(itr, None)
     while l:
-        EXPECT("stream_event: LDMS_STREAM_EVENT_RECV(0)", l)
+        EXPECT("msg_event: LDMS_MSG_EVENT_RECV(0)", l)
         l = next(itr, None)
-        EXPECT("stream_type: LDMS_STREAM_AVRO_SER(2)", l)
+        EXPECT("msg_type: LDMS_MSG_AVRO_SER(2)", l)
         l = next(itr, None)
         if not l.startswith("data: "):
             raise ValueError(f"Expecting 'data: ...' but got {l}")
