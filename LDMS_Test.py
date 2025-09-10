@@ -3018,6 +3018,10 @@ def get_ldmsd_config(_spec, ver=None):
     sio = StringIO()
     # process `default_quota`
     spec = Spec(_spec)
+    dname = spec.get("daemon_name", None)
+    if dname:
+        cfgcmd = f"daemon_name name={dname}\n"
+        sio.write(cfgcmd)
     q = spec.get("quota", None)
     if q:
         cfgcmd = f"default_quota quota={q}\n"
