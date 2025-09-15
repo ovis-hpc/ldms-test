@@ -3016,12 +3016,19 @@ def cond_timedwait(cond, timeout=10, interval=0.1):
 def get_ldmsd_config(_spec, ver=None):
     """Generate ldmsd config `str` from given spec"""
     sio = StringIO()
-    # process `default_quota`
     spec = Spec(_spec)
+
+    # msg_enable
+    m = bool(spec.get("msg_enable", True))
+    if m:
+        sio.write("msg_enable\n")
+
+    # daemon_name
     dname = spec.get("daemon_name", None)
     if dname:
         cfgcmd = f"daemon_name name={dname}\n"
         sio.write(cfgcmd)
+    # process `default_quota`
     q = spec.get("quota", None)
     if q:
         cfgcmd = f"default_quota quota={q}\n"
