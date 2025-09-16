@@ -363,16 +363,6 @@ class Network(object):
                 params = dict(name=name, driver=driver, scope=scope,
                               attachable=attachable, labels = labels,
                               enable_ipv6 = ipv6)
-                if ipv6:
-                    # needs IP pools for both ipv6 and ipv4
-                    net6 = next_ipv6_subnet()
-                    iprange6 = f"{net6.network_address}/120"
-                    net4 = next_ipv4_subnet()
-                    iprange4 = f"{net4.network_address}/24"
-                    ipam_pool6 = docker.types.IPAMPool(subnet=str(net6), iprange=iprange6)
-                    ipam_pool4 = docker.types.IPAMPool(subnet=str(net4), iprange=iprange4)
-                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool4, ipam_pool6])
-                    params['ipam'] = ipam_config
                 obj = client.networks.create(**params)
         except docker.errors.APIError as e:
             if e.status_code != 409: # other error, just raise it
