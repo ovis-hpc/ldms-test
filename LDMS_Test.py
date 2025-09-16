@@ -1473,6 +1473,7 @@ class LDMSDContainer(ABC):
         w = env_dict(dspec.get("env", []))
         v = env_dict(self.cluster.spec.get("env", []))
         v.update(w) # dspec precede svc_spec
+        v.setdefault("LDMSD_LOG_DATE_TIME", "1")
         dspec["env"] = v
         dspec.setdefault("log_file", "/var/log/ldmsd.log")
         dspec.setdefault("log_level", "INFO")
