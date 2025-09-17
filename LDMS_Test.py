@@ -352,6 +352,7 @@ def get_cluster_name(parsed_args):
     test = os.path.basename(sys.argv[0])
     if test.endswith('.py'):
         test = test[:-3]
+    parsed_args.test = test
     commit_id = get_ovis_commit_id(parsed_args)
     parsed_args.clustername = "{}-{}-{:.7}".format(uname, test, commit_id)
     return parsed_args.clustername
