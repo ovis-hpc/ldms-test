@@ -1723,6 +1723,10 @@ class LDMSDContainer(ABC):
             time.sleep(interval)
         return False
 
+    def __repr__(self):
+        t = type(self)
+        return f"<{t.__name__} {self.name}>"
+
 # ---------------------------------------------------------- LDMSDContainer -- #
 
 
