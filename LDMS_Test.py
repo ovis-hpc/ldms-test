@@ -3025,7 +3025,8 @@ def get_ldmsd_config(_spec, ver=None):
     spec = Spec(_spec)
 
     # msg_enable
-    m = bool(spec.get("msg_enable", True))
+    _m = spec.get("msg_enable", True)
+    m = bool(_m)
     if m:
         sio.write("msg_enable\n")
 
