@@ -167,7 +167,7 @@ def info_get(count, total_bytes, first_ts = None, last_ts = None):
         d['last_ts'] = last_ts
     if first_ts != last_ts:
         d['bytes/sec'] = float(f"{d['total_bytes']/(last_ts - first_ts):.6f}")
-        d['msg/sec'] = float(f"{d['count']/(last_ts - first_ts):.6f}")
+        d['count/sec'] = float(f"{d['count']/(last_ts - first_ts):.6f}")
     return d
 
 def stream_get(mode, recv = {}, pub = {}, publishers = None):
@@ -217,10 +217,10 @@ def verify_info(result, exp, check_rate):
         return False
     if check_rate:
         exp['bytes/sec'] = result['total_bytes']/(result['last_ts'] - result['first_ts'])
-        exp['msg/sec'] = result['count']/(result['last_ts'] - result['first_ts'])
+        exp['count/sec'] = result['count']/(result['last_ts'] - result['first_ts'])
         if result['bytes/sec'] != exp['bytes/sec']:
             return False
-        if result['msg/sec'] != exp['msg/sec']:
+        if result['count/sec'] != exp['count/sec']:
             return False
     return True
 

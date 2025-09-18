@@ -258,12 +258,13 @@ def ctrl(cmd):
     return out
 
 STATUS_RE = re.compile(r"""
-      .*\s+meminfo\s+sampler\s+(?P<interval>\d+)\s+(?P<offset>\d+)
+      start\sname=meminfo\sinterval=(?P<interval>\d+)\soffset=(?P<offset>\d+)
 """, re.X|re.S)
 
 def get_samp_interval():
-    global STATUS_RE
-    out = ctrl("status")
+    global STATUS_RE, samp
+    ctrl("dump_cfg path=/db/")
+    rc, out = samp.exec_run("grep '^start' /db/*.conf")
     m = STATUS_RE.match(out)
     if not m:
         raise RuntimeError("cannot get interval from output:\n{}".format(out))

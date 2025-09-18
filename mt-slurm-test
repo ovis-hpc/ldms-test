@@ -609,8 +609,8 @@ def deliver_events(events):
          cont = cluster.get_container("compute-{0}".format(int(node[0]['data']['nodeid'])+1))
          for event in node:
             update_expect_file(json_path+"/event-file.json", event)
-            rc, out = cont.exec_run("ldmsd_stream_publish -h compute-{node} -x sock -p 10000"
-                              " -a munge -s test-slurm-stream -t json -f {fname}"
+            rc, out = cont.exec_run("ldms_msg_publish -h compute-{node} -x sock -p 10000"
+                              " -a munge -m test-slurm-stream -t json -f {fname}"
                                 .format(fname="/db/event-file.json",
                                         node=int(node[0]['data']['nodeid'])+1))
 

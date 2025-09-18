@@ -14,8 +14,8 @@ class PrdcrState(object):
     CONNECTING = 1
     CONNECTED = 2
 
-def stream_sub_cb(ev:ldms.StreamStatusEvent, prdcr):
-    mlog.info(f"stream ('{ev.match}') subscribe status: {ev.status}")
+def msg_sub_cb(ev:ldms.MsgStatusEvent, prdcr):
+    mlog.info(f"msg ('{ev.match}') subscribe status: {ev.status}")
 
 class Prdcr(object):
     """Mimicking `prdcr` in ldmsd"""
@@ -57,12 +57,12 @@ class Prdcr(object):
         if e.type == ldms.EVENT_CONNECTED:
             assert(self.state == PrdcrState.CONNECTING)
             self.state = PrdcrState.CONNECTED
-            # subscribe all stream
-            self.x.stream_subscribe('.*', True, stream_sub_cb, self)
+            # subscribe all msg
+            self.x.msg_subscribe('.*', True, msg_sub_cb, self)
         # ignore SEND/RECV events
 
 
-class StreamTally(object):
+class MsgTally(object):
     def __init__(self, sec, next_tally = None):
         self.sec = sec
         self.dq = deque() # entry := (ts, load, src, data)
@@ -87,7 +87,7 @@ class StreamTally(object):
         if self.next_tally:
             self.next_tally.tally_prune(ts)
 
-    def add_data(self, data:ldms.StreamData):
+    def add_data(self, data:ldms.MsgData):
         # This should be called on the first tally
         ts = time.time()
         src = str(data.src)
@@ -105,18 +105,18 @@ class StreamTally(object):
         self.tally_prune(ts)
 
 
-class StreamThroughput(object):
-    """Simple stream throughput calculation"""
+class MsgThroughput(object):
+    """Simple msg throughput calculation"""
     def __init__(self, secs = [1, 5, 10, 30, 60]):
         self.secs = list(secs)
         self.secs.sort()
-        self.tallies = [ StreamTally(s) for s in self.secs ]
+        self.tallies = [ MsgTally(s) for s in self.secs ]
         t = self.tallies[0]
         for i in range(1, len(self.secs)):
             t.next_tally = self.tallies[i]
             t = self.tallies[i]
 
-    def add_data(self, data:ldms.StreamData):
+    def add_data(self, data:ldms.MsgData):
         self.tallies[0].add_data(data)
 
     def tally_prune(self, ts):
@@ -128,5 +128,5 @@ class StreamThroughput(object):
     def details(self):
         return { t.sec : [ t.total, t.tallies ] for t in self.tallies }
 
-def dummy_stream_data(name, data):
-    return ldms.StreamData(name, ldms.LdmsAddr(), 0, 0, 0, 0o777, False, data, data)
+def dummy_msg_data(name, data):
+    return ldms.MsgData(name, ldms.LdmsAddr(), 0, 0, 0, 0o777, False, data, data)

@@ -117,7 +117,7 @@ spec = {
             ],
             "config" : [
                 "load name=stream_dump",
-                "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
+                "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
                 "prdcr_start_regex regex=.*",
                 "updtr_add name=all interval=1000000 offset=0",
                 "updtr_prdcr_add name=all regex=.*",
@@ -190,12 +190,12 @@ test = TADA.Test(test_suite = "LDMSD",
                  tada_addr = args.tada_addr)
 test.add_assertion( 1, "agg2-srv xprt has correct number of rail endpoints (test prdcr_add 'rail' parameter")
 test.add_assertion( 2, "agg2-srv xprt has correct send quota (test prdcr_add 'quota' parameter)")
-test.add_assertion( 3, "srv-agg2 stream publish")
-test.add_assertion( 4, "srv-agg2 stream publish exceeding send quota")
+test.add_assertion( 3, "srv-agg2 msg publish")
+test.add_assertion( 4, "srv-agg2 msg publish exceeding send quota")
 test.add_assertion( 5, "srv-samp xprt has correct number of rail endpoints")
 test.add_assertion( 6, "srv-samp xprt has correct send quota (test ldmsd -C option)")
-test.add_assertion( 7, "srv-samp stream publish")
-test.add_assertion( 8, "srv-samp stream publish exceeding send quota")
+test.add_assertion( 7, "srv-samp msg publish")
+test.add_assertion( 8, "srv-samp msg publish exceeding send quota")
 
 cluster = None
 test.start()
@@ -243,10 +243,10 @@ if AGG2_OK:
     else:
         test.assert_test(2, False, "output: {out}")
 
-# test.add_assertion( 3, "srv-agg2 stream publish")
+# test.add_assertion( 3, "srv-agg2 msg publish")
 if AGG2_OK:
-    out = srv.cmd("agg2.stream_publish('agg2', 'data_for_agg2')")
-    time.sleep(1) # wait a bit for stream delivery
+    out = srv.cmd("agg2.msg_publish('agg2', 'data_for_agg2')")
+    time.sleep(1) # wait a bit for msg delivery
     txt = node1.read_file("/db/node-1.txt")
     lines = txt.strip().split('\x01')
     data = lines[-1].split(': ')[-1]
@@ -255,10 +255,10 @@ if AGG2_OK:
     else:
         test.assert_test(3, False, f"output: {out}")
 
-# test.add_assertion( 4, "srv-agg2 stream publish exceeding send quota")
+# test.add_assertion( 4, "srv-agg2 msg publish exceeding send quota")
 if AGG2_OK:
-    out = srv.cmd("agg2.stream_publish('agg2', '0'*1024)")
-    test.assert_test(4, out.find('ldms_stream_publish() failed, rc: 105') > 0, "checking...")
+    out = srv.cmd("agg2.msg_publish('agg2', '0'*1024)")
+    test.assert_test(4, out.find('ldms_msg_publish() failed, rc: 105') > 0, "checking...")
 
 # test.add_assertion( 5, "srv-samp xprt has correct number of rail endpoints")
 out0 = srv.cmd(f"samp = ldms.Xprt(rail_eps = {RAIL})")
@@ -281,10 +281,10 @@ if SAMP_OK:
     else:
         test.assert_test(6, False, "output: {out}")
 
-# test.add_assertion( 7, "srv-samp stream publish")
+# test.add_assertion( 7, "srv-samp msg publish")
 if SAMP_OK:
-    out = srv.cmd("samp.stream_publish('samp', 'data_for_samp')")
-    time.sleep(1) # wait a bit for stream delivery
+    out = srv.cmd("samp.msg_publish('samp', 'data_for_samp')")
+    time.sleep(1) # wait a bit for msg delivery
     txt = node3.read_file("/db/node-3.txt")
     lines = txt.strip().split('\x01')
     data = lines[-1].split(': ')[-1]
@@ -293,7 +293,7 @@ if SAMP_OK:
     else:
         test.assert_test(7, False, f"output: {out}")
 
-# test.add_assertion( 8, "srv-samp stream publish exceeding send quota")
+# test.add_assertion( 8, "srv-samp msg publish exceeding send quota")
 if SAMP_OK:
-    out = srv.cmd("samp.stream_publish('samp', '0'*1024)")
-    test.assert_test(8, out.find('ldms_stream_publish() failed, rc: 105') > 0, "checking...")
+    out = srv.cmd("samp.msg_publish('samp', '0'*1024)")
+    test.assert_test(8, out.find('ldms_msg_publish() failed, rc: 105') > 0, "checking...")

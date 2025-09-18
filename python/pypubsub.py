@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 #
-# pypubsub.py - LDMS stream publisher / subscriber interactive script for using
-#               in ldmsd_stream_test
+# pypubsub.py - LDMS msg publisher / subscriber interactive script for using
+#               in ldmsd_msg_test
 import os
 
 from ovis_ldms import ldms

@@ -95,12 +95,12 @@ def listen_cb(x, ev, arg):
         quota_list.append(ev.quota)
         quota_amount_list.append(ev.quota.quota)
 
-def stream_cb(sc, sdata, arg):
+def msg_cb(sc, sdata, arg):
     global blocker, recv_data
     recv_data.append(sdata.raw_data)
     blocker.block()
 
-sc = ldms.StreamClient('.*', True, stream_cb, None)
+sc = ldms.MsgClient('.*', True, msg_cb, None)
 
 # Listen with callback
 lx.listen(host="0.0.0.0", port=10000, cb=listen_cb, cb_arg=None)

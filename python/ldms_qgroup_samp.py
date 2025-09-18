@@ -21,7 +21,7 @@ logging.basicConfig(filename="/var/log/samp.log",
                     format=LOG_FMT)
 rlog = logging.getLogger() # root logger
 rlog.setLevel(logging.INFO)
-slog = logging.getLogger("stream")
+slog = logging.getLogger("msg")
 slog.setLevel(logging.INFO)
 
 def cbfn(x, ev, arg):
@@ -46,14 +46,14 @@ def cbfn(x, ev, arg):
 lx = ldms.Xprt(auth="munge", rail_eps=1, rail_recv_limit = 32)
 lx.listen(cb=cbfn) # default 0:411
 
-def stream_cb(cli, data: ldms.StreamData, cb_arg):
+def msg_cb(cli, data: ldms.MsgData, cb_arg):
     global xset
     t = time.clock_gettime(time.CLOCK_REALTIME)
     slog.info(f"{t:.6f} {data.src} {data.name}: {data.data}")
     for x in xset:
         rlog.info(f"send_quota {x}: {x.send_quota}")
 
-cli = ldms.StreamClient(".*", True, stream_cb, None)
+cli = ldms.MsgClient(".*", True, msg_cb, None)
 
 def probe_proc():
     while True:

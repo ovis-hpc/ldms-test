@@ -51,7 +51,7 @@ class ContainerTTY(LDMSDContainerTTY):
         self.sock = sockio._sock
         self.sock.setblocking(False) # use non-blocking io
 
-    def read(self, idle_timeout = 1):
+    def read(self, idle_timeout = 0.2):
         bio = BytesIO()
         active = 1
         while True:

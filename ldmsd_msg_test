@@ -202,8 +202,13 @@ spec = {
         },
         {
             "hostname" : f"old",
-            "!extends" : "compute_node",
             "image" : "ovishpc/ldms-samp:4.3.10",
+            "daemons" : base_daemons + [
+                {
+                    "!extends" : "ldmsd_daemon",
+                    "msg_enable" : False,
+                },
+            ],
             "mounts" : [
                 # mounts override. /opt/ovis won't be mounted.
                 # We want to use ldmsd v4.3.10 that comes with the image.

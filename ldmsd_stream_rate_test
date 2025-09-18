@@ -8,7 +8,7 @@
 #       pysub@agg-1
 #            ^
 #            |
-#       ldmsd@agg-1 ## limit stream rx rate here
+#       ldmsd@agg-1 ## limit msg rx rate here
 #            ^
 #            |
 #       ldmsd@samp ## limit recv rx rate here
@@ -32,7 +32,7 @@ import logging
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, PyPty, \
-                      StreamData, LdmsAddr
+                      MsgData, LdmsAddr
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -56,7 +56,7 @@ else:
     default_prefix = "/opt/ovis"
 
 #### argument parsing #### -------------------------------------------
-ap = argparse.ArgumentParser(description = "Test ldms_stream features with ldmsd")
+ap = argparse.ArgumentParser(description = "Test ldms_msg features with ldmsd")
 add_common_args(ap)
 args = ap.parse_args()
 process_args(args)
@@ -69,6 +69,7 @@ SRC = args.src
 CLUSTERNAME = args.clustername
 DB = args.data_root
 LDMSD_PORT = 10000
+TEST = args.test
 
 #### spec #### -------------------------------------------------------
 
@@ -89,7 +90,7 @@ base_daemons = [
     ]
 spec = {
     "name" : CLUSTERNAME,
-    "description" : "{}'s ldms_stream test cluster".format(USER),
+    "description" : f"{USER}'s {TEST} cluster",
     "type" : "NA",
     "templates" : { # generic template can apply to any object by "!extends"
         "ldmsd_daemon" : {
@@ -136,9 +137,9 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=samp stream=new.*",
-                        "prdcr_subscribe regex=samp stream=rate.* rx_rate=32",
+                        "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=samp message_channel=new.*",
+                        "prdcr_subscribe regex=samp message_channel=rate.* rx_rate=32",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -177,15 +178,15 @@ def EXPECT(val, expected):
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
-                 test_name = "ldmsd_stream_rate_test",
-                 test_desc = "Test ldms_stream rate (on rails) with ldmsd",
+                 test_name = args.test,
+                 test_desc = "Test ldms_msg rate (on rails) with ldmsd",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
 
 test.add_assertion( 1, "Sampler cannot publish all data (prdcr rate limit)")
 test.add_assertion( 2, "After the wait, the sampler can publish")
-test.add_assertion( 3, "Sampler cannot publish all data (stream rate limit)")
+test.add_assertion( 3, "Sampler cannot publish all data (msg rate limit)")
 test.add_assertion( 4, "After the wait, the sampler can publish")
 
 cluster = None
@@ -214,20 +215,20 @@ time.sleep(2)
 pypub = PyPty(samp, "/tada-src/python/pypubsub.py")
 pysub = PyPty(agg1, "/tada-src/python/pypubsub.py")
 
-# subscirbe all streams from agg-1
-pysub.cmd("r.stream_subscribe('.*', True)")
+# subscirbe all channels from agg-1
+pysub.cmd("r.msg_subscribe('.*', True)")
 
-# publish stream
-pypub.cmd("[ r.stream_publish('new_string', 16*f'{I:x}') for I in range(0, 16) ]")
+# publish msg
+pypub.cmd("[ r.msg_publish('new_string', 16*f'{I:x}') for I in range(0, 16) ]")
 time.sleep(2)
 
-pypub.cmd("r.stream_publish('new_string', 28*'x')")
+pypub.cmd("r.msg_publish('new_string', 28*'x')")
 time.sleep(2)
 
-pypub.cmd("[ r.stream_publish('rate', 16*f'{I:x}') for I in range(0, 16) ]")
+pypub.cmd("[ r.msg_publish('rate', 16*f'{I:x}') for I in range(0, 16) ]")
 time.sleep(2)
 
-pypub.cmd("r.stream_publish('rate', 28*'x')")
+pypub.cmd("r.msg_publish('rate', 28*'x')")
 time.sleep(2)
 
 agg1_dump = open(f"{DB}/agg-1.txt").read()
@@ -250,43 +251,43 @@ set_2 = set(recs2) - set([ x_28 ])
 # test.add_assertion( 1, "Sampler cannot publish all data (rate limit)")
 while True: # will break
     if not set_1:
-        test.assert_test(1, False, "empty stream data")
+        test.assert_test(1, False, "empty msg data")
         break
     if not set_1 < set_full:
         test.assert_test(1, False, f"Got extra data: {set_1}")
         break
     tot_len = sum( len(o) for o in set_1 )
     if tot_len > 2*64 : # allow 2 times as the publish may cross 'the second' boundary
-        test.assert_test(1, False, f"stream data received {tot_len} is greater than the prdcr rx_rate")
+        test.assert_test(1, False, f"msg data received {tot_len} is greater than the prdcr rx_rate")
         break
-    test.assert_test(1, True, f"received stream data {tot_len} is limited by prdcr rx_rate")
+    test.assert_test(1, True, f"received msg data {tot_len} is limited by prdcr rx_rate")
     break
 
 # test.add_assertion( 2, "After the wait, the sampler can publish")
 if x_28 in recs1:
-    test.assert_test(2, True, "stream data received")
+    test.assert_test(2, True, "msg data received")
 else:
-    test.assert_test(2, False, "stream data not received")
+    test.assert_test(2, False, "msg data not received")
 
-# test.add_assertion( 3, "Sampler cannot publish all data (stream rate limit)")
+# test.add_assertion( 3, "Sampler cannot publish all data (msg rate limit)")
 while True: # will break
     if not set_2:
-        test.assert_test(3, False, "empty stream data")
+        test.assert_test(3, False, "empty msg data")
         break
     if not set_2 < set_full:
         test.assert_test(3, False, f"Got extra data: {set_2}")
         break
     tot_len = sum( len(o) for o in set_2 )
     if tot_len > 2*32 : # allow 2 times as the publish may cross 'the second' boundary
-        test.assert_test(3, False, f"stream data received {tot_len} is greater than the stream rx_rate")
+        test.assert_test(3, False, f"msg data received {tot_len} is greater than the msg rx_rate")
         break
-    test.assert_test(3, True, f"received stream data {tot_len} is limited by stream rx_rate")
+    test.assert_test(3, True, f"received msg data {tot_len} is limited by msg rx_rate")
     break
 
 # test.add_assertion( 4, "After the wait, the sampler can publish")
 if x_28 in recs1:
-    test.assert_test(4, True, "stream data received")
+    test.assert_test(4, True, "msg data received")
 else:
-    test.assert_test(4, False, "stream data not received")
+    test.assert_test(4, False, "msg data not received")
 
 # see at_exit()

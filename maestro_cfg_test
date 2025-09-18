@@ -128,24 +128,28 @@ aggregators:
 
 samplers:
   - daemons : *sampler-daemons
-    plugins : &sampler-plugins
-      - name        : meminfo # Variables can be specific to plugin
-        interval    : "1s" # Used when starting the sampler plugin
-        offset      : "0s"
-        config : &simple_samp_config
-          - component_id : "${{COMPID}}"
-            perm : "0777"
+    plugins : [ "meminfo" ]
 
 stores:
-  - name      : sos-meminfo
+  sos-meminfo :
     daemons   : *l2-daemons
     container : ldms_data
     schema    : meminfo
     flush     : 10s
-    plugin :
-      name   : store_sos
-      config :
-        - path : {STORE_PATH}
+    plugin    : store_sos
+
+plugins:
+  meminfo:
+    name : meminfo
+    interval    : "1s" # Used when starting the sampler plugin
+    offset      : "0s"
+    config : &simple_samp_config
+      - component_id : "${{COMPID}}"
+        perm : "0777"
+  store_sos:
+    name : store_sos
+    config :
+      - path : {STORE_PATH}
 """
 
 #### spec #### -------------------------------------------------------

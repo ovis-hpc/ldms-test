@@ -8,22 +8,22 @@
 # - /etc/hosts only contains IPv6 entries
 # - connectivities:
 #
-#      ldmsd@agg-2 ---(stream subscribe)--> pysub@agg-2
+#      ldmsd@agg-2 ---(msg subscribe)--> pysub@agg-2
 #          ^
 #          |
 #      ldmsd@agg-1
 #          ^
 #          |
-#      ldmsd@samp <--(stream publish)--- pypub@samp
+#      ldmsd@samp <--(msg publish)--- pypub@samp
 #
 # - Test cases:
 #   - ldms_ls to samp using IPv6
 #   - ldms_ls to agg-2 using IPv6
 #   - ldms_ls to agg-2 contains 'samp/meminfo'
-#   - python stream publish using IPv6
-#   - python stream subscribe using IPv6
+#   - python msg publish using IPv6
+#   - python msg subscribe using IPv6
 #   - steam data contain IPv6 addressing
-#   - stream stats reported IPv6 addresses
+#   - msg stats reported IPv6 addresses
 
 import os
 import io
@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, PyPty, \
-                      StreamData, LdmsAddr
+                      MsgData, LdmsAddr
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -145,8 +145,8 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=agg-1 stream=.*",
+                        "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=agg-1 message_channel=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -173,8 +173,8 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=subscribe stream=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=samp stream=test.*",
+                        "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=samp message_channel=test.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -216,7 +216,7 @@ def EXPECT(val, expected):
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
                  test_name = "ldms_ipv6_test",
-                 test_desc = "Test LDMS Rail+Stream IPv6 ability",
+                 test_desc = "Test LDMS Rail+Msg IPv6 ability",
                  test_user = args.user,
                  commit_id = COMMIT_ID,
                  tada_addr = args.tada_addr)
@@ -225,10 +225,10 @@ test.add_assertion( 1, "ldms_ls to samp using IPv6")
 test.add_assertion( 2, "ldms_ls to agg-2 using IPv6")
 test.add_assertion( 3, "ldms_ls to agg-2 contains 'samp/meminfo'")
 
-test.add_assertion( 4, "python stream publish using IPv6")
-test.add_assertion( 5, "python stream subscribe using IPv6")
+test.add_assertion( 4, "python msg publish using IPv6")
+test.add_assertion( 5, "python msg subscribe using IPv6")
 test.add_assertion( 6, "steam data contain IPv6 addressing")
-test.add_assertion( 7, "stream stats reported IPv6 addresses")
+test.add_assertion( 7, "msg stats reported IPv6 addresses")
 
 cluster = None
 test.start()
@@ -294,10 +294,10 @@ if out2.find('samp/meminfo') > -1:
 else:
     test.assert_test(3, False, f"samp/meminfo not found, output: {out2}")
 
-# test.add_assertion( 4, "python stream publish using IPv6")
+# test.add_assertion( 4, "python msg publish using IPv6")
 out3_0 = pysub.cmd("r.get_addr()")
 addr3  = eval(out3_0)
-out3_1 = pysub.cmd("r.stream_subscribe('.*', True)")
+out3_1 = pysub.cmd("r.msg_subscribe('.*', True)")
 time.sleep(2)
 while True: # will break
     if type(addr3) != tuple or len(addr3) != 2:
@@ -314,10 +314,10 @@ while True: # will break
     test.assert_test(4, True, "verified")
     break
 
-# test.add_assertion( 5, "python stream subscribe using IPv6")
+# test.add_assertion( 5, "python msg subscribe using IPv6")
 out4_0 = pypub.cmd("r.get_addr()")
 addr4  = eval(out4_0)
-out4_1 = pypub.cmd("r.stream_publish('test', 'Test Message')")
+out4_1 = pypub.cmd("r.msg_publish('test', 'Test Message')")
 time.sleep(2)
 while True: # will break
     if type(addr4) != tuple or len(addr4) != 2:
@@ -342,8 +342,8 @@ addr_cmp = samp.ipv6_addr
 test.assert_test(6, addr == addr_cmp, f"expecting {addr_cmp}, got {addr}")
 
 
-# test.add_assertion( 7, "stream stats reported IPv6 addresses")
-rc5, out5 = samp.exec_run("echo stream_client_stats json=1 |"
+# test.add_assertion( 7, "msg stats reported IPv6 addresses")
+rc5, out5 = samp.exec_run("echo msg_client_stats json=1 |"
                           "  ldmsd_controller -x sock -p 411 -h agg-1")
 obj5 = json.loads(out5)
 obj5f = list(filter( lambda o: o["desc"] == "remote_client", obj5 ))

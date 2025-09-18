@@ -60,7 +60,8 @@ SAMP_INTRVL = "1s"
 AUTH = "munge"
 
 DEFAULT_UID = DEFAULT_GID = 0
-DEFAULT_PERM = "0440"
+DEFAULT_PERM = "0660"
+DEFAULT_S_PERM = "0777"
 UID_1 = 2000
 USERNAME_1 = "foo"
 UID_2 = 2001
@@ -106,7 +107,7 @@ INVAL_STREAM = {}
 INVAL_STREAM_PATH = {}
 INVAL_STREAM['no_schema'] = VALID_DATA # No schema attribute
 INVAL_STREAM_PATH['no_schema'] = f"{DATA_DIR}/inval_no_schema.json"
-INVAL_STREAM['not_dict'] = [VALID_DATA ] # Not a dictionary 
+INVAL_STREAM['not_dict'] = [VALID_DATA ] # Not a dictionary
 INVAL_STREAM_PATH['not_dict'] = f"{DATA_DIR}/inval_not_dict.json"
 
 for i in range(0, len(INVALID_DATA_COL)):
@@ -188,7 +189,9 @@ spec = {
                 }
             ],
             "config" : [
-                "load name=json_stream_sampler"
+                f"load name={inst} plugin=json_stream_sampler" for inst in \
+                        ["samp1", "samp2", "samp3", "no_schema", "not_dict",
+                         "array_array", "array_mix"]
             ]
         }
     }, # templates
@@ -208,7 +211,7 @@ spec = {
     ( [ f"{SRC}:{SRC}:ro" ] if SRC else [])
 }
 
-def send_request(cont, cmd, xprt = LDMS_XPRT, port = LDMS_PORT, 
+def send_request(cont, cmd, xprt = LDMS_XPRT, port = LDMS_PORT,
                  host = "localhost", auth = AUTH, auth_opt = []):
     s = f"/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H {host}" \
         f" -a {auth}"
@@ -221,8 +224,8 @@ def send_request(cont, cmd, xprt = LDMS_XPRT, port = LDMS_PORT,
 
 def stream_publish(cont, name, file, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost",
                    auth = AUTH, type = "json", uid = None, gid = None, perm = None, user = None):
-    x = f'ldmsd_stream_publish -x {xprt} -p {port} -h {host} -a {auth} ' \
-        f'-t {type} -s {name} -f {file}'
+    x = f'ldms_msg_publish -x {xprt} -p {port} -h {host} -a {auth} ' \
+        f'-t {type} -m {name} -f {file}'
     if uid is not None:
         x += f' -U {uid}'
     if gid is not None:
@@ -244,7 +247,7 @@ def ldms_ls(cont, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost", auth =
     return json.loads(out)
 
 def config_err_msg():
-    return "Plugin 'json_stream_sampler' configuration error."
+    return "Error 22 configuring plugin instance 'json_stream_sampler'."
 
 test = TADA.Test(test_suite = "LDMSD",
                  test_type = "FVT",
@@ -308,15 +311,17 @@ log.info("-- Begin the test --")
 
 # ------------------------------------------------------------------------------
 # config_0.1
-cfg = f"config name=json_stream_sampler stream=my_data"
+cfg = f"config name=samp1 stream=my_data"
 errcode, out = send_request(nodes[1], cfg)
-test.assert_test("config_0.1", config_err_msg() == out, "Plugin reports an error.")
+e_msg = "Error 22 configuring plugin instance 'samp1'."
+test.assert_test("config_0.1", e_msg == out, "Plugin reports an error.")
 
 # ------------------------------------------------------------------------------
 # config_0.2
-cfg = f"config name=json_stream_sampler producer=node-1"
+cfg = f"config name=samp1 producer=node-1"
 errcode, out = send_request(nodes[1], cfg)
-test.assert_test("config_0.2", config_err_msg() == out, "Plugin reports an error.")
+e_msg = "Error 22 configuring plugin instance 'samp1'."
+test.assert_test("config_0.2", e_msg == out, "Plugin reports an error.")
 
 # ------------------------------------------------------------------------------
 # config_2
@@ -328,8 +333,9 @@ for i in range(1, NUM_NODE + 1):
     nodes[i].write_file(STREAM_1_DATA_PATH, json.dumps(STREAM_1_DATA))
 
 SET_1_NAME = f"{STREAM_1}_set"
-cfg = f"config name=json_stream_sampler producer=node-1 instance={SET_1_NAME} " \
-      f"stream={STREAM_1} heap_sz=1MB"
+cfg = f"config name=samp1 producer=node-1"\
+      f" instance_fmt=%S_set" \
+      f" stream={STREAM_1} heap_sz=1MB"
 errcode, out = send_request(nodes[1], cfg)
 test.assert_test("config_1.0", errcode == 0, f"Successfully send the request: {cfg}")
 if errcode != 0:
@@ -337,7 +343,7 @@ if errcode != 0:
     raise RuntimeError(out)
 stream_publish(nodes[1], name = f"{STREAM_1}", file = STREAM_1_DATA_PATH)
 sets = ldms_ls(nodes[1])
-cond = len(sets) == 1 and list(sets.keys())[0] == SET_1_NAME 
+cond = len(sets) == 1 and list(sets.keys())[0] == SET_1_NAME
 test.assert_test("create_1", cond, f"Create a set")
 if cond is False:
     # Stop the test
@@ -350,12 +356,14 @@ test.assert_test("config_1.1", cond, f"Set's UID({S['uid']}) is {DEFAULT_UID}.")
 cond = S['gid'] == DEFAULT_GID
 test.assert_test("config_1.2", cond, f"Set's GID({S['gid']}) is {DEFAULT_GID}.")
 
-cond = S['perm'] = DEFAULT_PERM
+s_perm = S['perm']
+s_perm = oct(int(s_perm)).replace('o', '')
+cond = s_perm == DEFAULT_PERM
 test.assert_test("config_1.3", cond, f"Set's Perm({S['perm']}) is {DEFAULT_PERM}.")
 
 # ------------------------------------------------------------------------------
 # encode_1
-exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : "0440", 'schema' : STREAM_1 }
+exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_S_PERM, 'schema' : STREAM_1 }
 exp_v.update(EXP_S_VALUE)
 set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
 S['data']['S_perm'] = set_S_perm
@@ -387,15 +395,16 @@ STREAM_2_DATA_PATH = f'{DATA_DIR}/{STREAM_2}.json'
 for i in range(1, NUM_NODE + 1):
     nodes[i].write_file(STREAM_2_DATA_PATH, json.dumps(STREAM_2_DATA))
 
-cfg = f"config name=json_stream_sampler stream={STREAM_2} " \
-      f"producer=node-1 instance={SET_2_NAME} heap_sz=1MB " \
+cfg = f"config name=samp2 stream={STREAM_2} " \
+      f"producer=node-1 instance_fmt=%S_set heap_sz=1MB " \
       f"uid={SET_2_UID} gid={SET_2_GID} perm={SET_2_PERM}"
 errcode, out = send_request(nodes[1], cfg)
 test.assert_test("config_2.0", errcode == 0, f"Successfully subscribe to the second stream")
 if errcode != 0:
     # We cannot continue the test, so exit the test script
     at_exit()
-stream_publish(nodes[1], name= STREAM_2, file = STREAM_2_DATA_PATH, perm = PERM)
+stream_publish(nodes[1], name= STREAM_2, file = STREAM_2_DATA_PATH, perm = PERM,
+               uid = STREAM_2_UID, gid = STREAM_2_GID)
 sets = ldms_ls(nodes[1])
 cond = len(sets) == 2 and set(sets.keys()) == set([SET_1_NAME, SET_2_NAME])
 test.assert_test("create_2", cond, f"Create the set of the second stream")
@@ -443,7 +452,7 @@ for key in INVAL_STREAM.keys():
     for i in range(1, NUM_NODE + 1):
         nodes[i].write_file(INVAL_STREAM_PATH[key], json.dumps(INVAL_STREAM[key]))
 
-    cfg = f"config name=json_stream_sampler producer=node-1 stream=invalid_{key} instance=inval_{key}"
+    cfg = f"config name={key} producer=node-1 stream=invalid_{key} instance_fmt=inval_{key}"
     errcode, out = send_request(nodes[1], cfg)
     if errcode != 0:
         raise RuntimeError(f"Failed to send '{cfg}'. Error {errcode}: {out}")
@@ -467,12 +476,12 @@ for i in range(1, NUM_NODE + 1):
     nodes[i].write_file(STREAM_3_DATA_PATH, json.dumps(STREAM_3_DATA))
 
 SET_3_NAME = f"{STREAM_3}_set"
-cfg = f"config name=json_stream_sampler producer=node-1 instance={SET_3_NAME} " \
+cfg = f"config name=samp3 producer=node-1 instance_fmt=%S_set " \
       f"stream={STREAM_3} heap_sz=1MB"
 errcode, out = send_request(nodes[1], cfg)
 stream_publish(nodes[1], name = f"{STREAM_3}", file = STREAM_3_DATA_PATH)
 sets = ldms_ls(nodes[1])
-cond = len(sets) == 3 and SET_3_NAME in set(sets.keys()) 
+cond = len(sets) == 3 and SET_3_NAME in set(sets.keys())
 test.assert_test("create_3", cond, f"Create a set with specified #_max_len")
 if cond is False:
     # Stop the test
@@ -481,7 +490,7 @@ S = sets[SET_3_NAME]
 
 set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
 S['data']['S_perm'] = set_S_perm
-exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_PERM, 'schema' : STREAM_3 }
+exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_S_PERM, 'schema' : STREAM_3 }
 exp_v.update(EXP_S_VALUE)
 exp_v['array_int_max_len'] = 5
 cond = S['data'] == exp_v

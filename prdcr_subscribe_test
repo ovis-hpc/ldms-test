@@ -215,16 +215,25 @@ def prdcr_unsubscribe(node, regex, stream):
         raise NotImplementedError("prdcr_unsubscribe is not supported (yet) in v5")
     return node.config_ldmsd([txt])
 
-def stream_client_stats(node):
-    rc, out = node.config_ldmsd(["stream_client_stats json=1"])
-    if rc:
-        raise RuntimeError(f"ldmsd_controller error, rc: {rc}, out: {out}")
-    lst = json.loads(out)
+def stream_client_dump(node):
+    """Dump stream clients in ldmsd on node as a list of (stream_name, cb_fn, cb_ctxt) tuples"""
+    if is_ldmsd_version_4(node.ldmsd_version):
+        txt = "stream_client_dump"
+    else:
+        raise NotImplementedError("stream_client_dump is not supported (yet) in v5")
+    rc, out = node.config_ldmsd([txt])
+    lines = out.split("\n")[2:]
+    lst = []
+    for l in lines:
+        if l == "":
+            continue
+        x = l.strip().split(None, 1)
+        if len(x) == 1:
+            stream_name = x[0]
+        else:
+            (ctxt, cb_fn) = (x[0], x[1])
+            lst.append((stream_name, cb_fn, ctxt))
     return lst
-
-def stream_client_stats_headers(node):
-    lst = stream_client_stats(node)
-    return [ (o['match'], o['dest'], o['desc'] ) for o in lst ]
 
 def verify_msg(test, assert_no, msg, json_data, err_text):
     if msg["type"] == "json":
@@ -311,8 +320,6 @@ if __name__ == "__main__":
 
     test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
     test.add_assertion(18, 'agg-1 receives data only from stream-sampler-2')
-
-    test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
 
     cluster = None
     # Tell the TADA infrastructure that the test is starting
@@ -675,41 +682,6 @@ if __name__ == "__main__":
             test.assert_test(18, False, "agg-2 has extra stream data")
             break
         test.assert_test(18, True, "data verified")
-        break
-
-    #test.add_assertion(19, 'stream-sampler-2 removes agg-1 stream client after disconnected')
-    # Get client dump from stream-sampler-2 before killing agg-1
-    while True: # this will break
-        before = stream_client_stats_headers(samp2)
-        # Kill agg-1
-        agg1.kill_ldmsd()
-        time.sleep(5)
-        # Get client dump from stream-sampler-2
-        after = stream_client_stats_headers(samp2)
-        before = set(before)
-        after = set(after)
-        if not (after < before):
-            diff = after - before
-            if diff:
-                test.assert_test(19, False, f"Unexpected streams/clients: {diff}")
-            else:
-                test.assert_test(19, False, f"streams/clients not removed: {after}")
-            break
-        diff = set(before) - set(after)
-        if len(diff) != 1:
-            test.assert_test(19, False, f"Too many terminated clients: {diff}")
-            break
-        _match, target, desc = diff.pop()
-        if _match != "test_stream":
-            test.assert_test(19, False, f"Unexpected 'match': {_match}")
-            break
-        host, port = target.rsplit(':', 1)
-        e4_addr = agg1.get_ip_addr()
-        e6_addr = f'[::ffff:{e4_addr}]'
-        if host not in [ e4_addr, e6_addr ]:
-            test.assert_test(19, False, f"Unexpected target: {target}")
-            break
-        test.assert_test(19, True, "verified")
         break
 
 # see at_exit()

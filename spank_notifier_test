@@ -389,7 +389,7 @@ if __name__ == "__main__":
 
     # Test Strategy:
     #
-    # 1. Run the test tool ldmsd_stream_subscriber to listen to stream
+    # 1. Run the test tool ldms_msg_subscriber to listen to stream
     #    data on the stream named "slurm" and writes the events to a
     #    file called 'spank_stream.out'
     #
@@ -435,9 +435,9 @@ if __name__ == "__main__":
 
     # start a stream subscriber
     for cont in slurmd_containers:
-        rc, out = cont.exec_run("ldmsd_stream_subscribe -p 20000 "\
-                                "-s slurm -f /db/spank_stream_{node}.out "\
-                                "-D".format(node=cont.hostname))
+        rc, out = cont.exec_run("stdbuf -o0 ldms_msg_subscribe -p 20000 "\
+                                "-m slurm > /db/spank_stream_{node}.out "\
+                                "&".format(node=cont.hostname))
         if rc != 0:
             log.info(out)
             cluster.remove()
@@ -469,16 +469,16 @@ if __name__ == "__main__":
             log.info("File checking timed out")
     for cont in slurmd_containers:
         f = '/db/spank_stream_{node}.out'.format(node=cont.hostname)
-        cmd = 'grep -v \'^ERROR\' {}'.format(f)
+        cmd = 'grep \'^data: \' {}'.format(f)
         rc, data = cont.exec_run(cmd)
-        events = data.split('EVENT:')
+        events = data.split('data:')
         event_list = []
         for event in events:
             if len(event) == 0:
                 continue
             decoder = json.JSONDecoder()
-            d, pos = decoder.raw_decode(event)
-            e = d['event']
+            d, pos = decoder.raw_decode(event.strip())
+            e = d
             e['hostname'] = cont.hostname # also tag hostname in the event
             event_list.append(e)
             all_events.append(e)
@@ -516,7 +516,7 @@ if __name__ == "__main__":
     # Run a job that crashes the stream listener while the job is running
     headnode.write_file('/db/crash_stream_listener.sh',
                     '#!/bin/bash\n'\
-                    'pkill ldmsd_stream_subscriber\n'\
+                    'pkill ldms_msg_subscriber\n'\
                     'env | grep SLURM > /db/crash_env_${SLURM_JOBID}.${SLURM_PROCID}.out\n')
     headnode.write_file('/db/spank_job_2.sh',
                     '#!/bin/bash\n'\

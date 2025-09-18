@@ -279,7 +279,9 @@ def verify_prdcr(cont, exp):
     for p in prdcrs:
         del p['port']
         del p['reconnect_us']
-    return prdcrs == exp
+    ret = prdcrs == exp
+    assert(ret)
+    return ret
 
 def verify_sets(cont, exp, exist):
     set_names = ldms_ls(cont)
@@ -311,6 +313,9 @@ def get_exp_prdcr(name, host, state, sets, type=PRDCR_TYPE_ADVERTISED|PRDCR_TYPE
         'state' : state,
         'transport' : transport,
         'auth' : 'DEFAULT',
+        'rail' : '1',
+        'quota' : '-1',
+        'rx_rate' : '-1',
         'sets' : [{ 'inst_name'   : f"{host}/{s['schema']}",
                     'schema_name' : s['schema'],
                     'state'       : s['state']
@@ -466,6 +471,9 @@ exp_adv_node_1 = [{ "name" : "node-1",
                    "type" : "advertiser",
                    "state" : "CONNECTED",
                    "auth" : "DEFAULT",
+                   "rail" : "1",
+                   "quota" : "-1",
+                   "rx_rate" : "-1",
                    "sets" : []
                  }]
 test.assert_test("advertiser_status", adv == exp_adv_node_1, f"{adv} == {exp_adv_node_1}")

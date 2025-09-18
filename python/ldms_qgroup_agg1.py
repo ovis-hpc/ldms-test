@@ -23,7 +23,7 @@ logging.basicConfig(filename="/var/log/agg.log",
                     format=LOG_FMT)
 rlog = logging.getLogger() # root logger
 rlog.setLevel(logging.INFO)
-slog = logging.getLogger("stream")
+slog = logging.getLogger("msg")
 slog.setLevel(logging.INFO)
 
 xset = list()
@@ -87,12 +87,12 @@ for m in qgroup_members:
 
 # ldms.qgroup.start()
 
-# stream logging
-def stream_cb(cli, data: ldms.StreamData, cb_arg):
+# msg logging
+def msg_cb(cli, data: ldms.MsgData, cb_arg):
     t = time.clock_gettime(time.CLOCK_REALTIME)
     slog.info(f"{t:.6f} {data.src} {data.name}: {data.data}")
 
-cli = ldms.StreamClient(".*", True, stream_cb, None)
+cli = ldms.MsgClient(".*", True, msg_cb, None)
 
 # prdcrs
 samps = get_samps(hostname)

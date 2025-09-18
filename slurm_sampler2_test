@@ -420,11 +420,11 @@ def make_event_data(cont, event, job, task_idx = None):
 def publish_slurm_event(cont, data):
     fpath = f"/db/{cont.hostname}-{STREAM_DATA_FILE}-{data['data']['job_id']}-{data['event']}"
     cont.write_file(fpath, json.dumps(data))
-    cmd = f"ldmsd_stream_publish -h localhost -x {LDMSD_XPRT} -p {LDMSD_PORT} " \
-          f"-s slurm -t json -f {fpath}"
+    cmd = f"ldms_msg_publish -h localhost -x {LDMSD_XPRT} -p {LDMSD_PORT} " \
+          f"-m slurm -t json -f {fpath}"
     rc, out = cont.exec_run(cmd)
     if rc:
-        raise RuntimeError(f"Failed to run ldmsd_stream_publish. Error {rc}: {out}")
+        raise RuntimeError(f"Failed to run ldms_msg_publish. Error {rc}: {out}")
 
 class Task(object):
     def __init__(self, node, job, task_rank, task_pid, task_exit_status = 0,

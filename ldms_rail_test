@@ -476,9 +476,9 @@ while True: # will break
     test.assert_test(38, True, "verified on both cli and srv")
 
     # test.add_assertion(19, "server -> client overspending send")
-    srv_out1 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
-    srv_out2 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
-    srv_out3 = pycmd(srv, "r.stream_publish('', b'a'*15)").strip()
+    srv_out1 = pycmd(srv, "r.msg_publish('', b'a'*15)").strip()
+    srv_out2 = pycmd(srv, "r.msg_publish('', b'a'*15)").strip()
+    srv_out3 = pycmd(srv, "r.msg_publish('', b'a'*15)").strip()
     if srv_out1 != "" or srv_out2 != "" or srv_out3.find("rc: 105") == -1:
         test.assert_test(19, False, f"Unexpected output:\n"
                                     f"srv_out1: {srv_out1}\n"
@@ -489,9 +489,9 @@ while True: # will break
         test.assert_test(19, True, "error message verified")
 
     # test.add_assertion(20, "client -> server overspending send")
-    cli_out1 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
-    cli_out2 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
-    cli_out3 = pycmd(cli, "r.stream_publish('', b'a'*15)").strip()
+    cli_out1 = pycmd(cli, "r.msg_publish('', b'a'*15)").strip()
+    cli_out2 = pycmd(cli, "r.msg_publish('', b'a'*15)").strip()
+    cli_out3 = pycmd(cli, "r.msg_publish('', b'a'*15)").strip()
     if cli_out1 != "" or cli_out2 != "" or cli_out3.find("rc: 105") == -1:
         test.assert_test(20, False, f"Unexpected output:\n"
                                     f"cli_out1: {cli_out1}\n"
@@ -542,14 +542,14 @@ while True: # will break
         break
 
     # test.add_assertion(27, "server -> client send after get quota back")
-    srv_out = pycmd(srv, "r.stream_publish('', b'b'*15)").strip()
+    srv_out = pycmd(srv, "r.msg_publish('', b'b'*15)").strip()
     if srv_out != "":
         test.assert_test(27, False, f"Unexpected output: {srv_out}")
         break
     test.assert_test(27, True, f"OK")
 
     # test.add_assertion(28, "client -> server send after get quota back")
-    cli_out = pycmd(cli, "r.stream_publish('', b'b'*15)").strip()
+    cli_out = pycmd(cli, "r.msg_publish('', b'b'*15)").strip()
     if cli_out != "":
         test.assert_test(28, False, f"Unexpected output: {cli_out}")
         break

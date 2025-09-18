@@ -109,7 +109,7 @@ spec = {
                     "name" : "samp",
                     "!extends" : "ldmsd",
                     "quota" :  str(QUOTA_SAMP),
-                    # no sampler, only serve stream from app data
+                    # no sampler, only serve message from app data
                 },
             ],
         } for i in range(1, 7)
@@ -144,7 +144,7 @@ spec = {
                         } for j in [1, 2]
                     ],
                     "config" : [
-                        "prdcr_subscribe regex=.* stream=.*",
+                        "prdcr_subscribe regex=.* message_channel=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -188,15 +188,15 @@ spec = {
                             "interval" : 1000000,
                             "offset" : 0,
                             "config" : [
-                                "op=subscribe",
-                                "stream=.*",
+                                "op=msg_subscribe",
+                                "message_channel=.*",
                                 "path=/var/log/stream.dump",
                             ],
                             "start" : False,
                         }
                     ],
                     "config" : [
-                        "prdcr_subscribe regex=.* stream=.*",
+                        "prdcr_subscribe regex=.* message_channel=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",

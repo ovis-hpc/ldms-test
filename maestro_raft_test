@@ -156,26 +156,30 @@ aggregators:
         type      : active
         updaters  : *updtr
 
+plugins:
+  meminfo :
+    name : meminfo
+    interval    : "1s" # Used when starting the sampler plugin
+    offset      : "0s"
+    config : &simple_samp_config
+      - component_id : "${{COMPID}}"
+        perm : "0777"
+  store_sos :
+    name : store_sos
+    config :
+      - path : {STORE_PATH}
+
 samplers:
   - daemons : *sampler-daemons
-    plugins : &sampler-plugins
-      - name        : meminfo # Variables can be specific to plugin
-        interval    : "1s" # Used when starting the sampler plugin
-        offset      : "0s"
-        config : &simple_samp_config
-          - component_id : "${{COMPID}}"
-            perm : "0777"
+    plugins : [ "meminfo" ]
 
 stores:
-  - name      : sos-meminfo
+  sos-meminfo:
     daemons   : *l2-daemons
     container : ldms_data
     schema    : meminfo
     flush     : 10s
-    plugin :
-      name   : store_sos
-      config :
-        - path : {STORE_PATH}
+    plugin : store_sos
 """
 
 #### spec #### -------------------------------------------------------
@@ -308,7 +312,7 @@ def get_maestro_state_tbl():
 
 def start_maestro(cont):
     """Start a maestro daemon on the container `cont`"""
-    maestro_cmd = f"bash -c 'maestro --cluster {ETCD_FILE} --prefix {CFG_PREFIX} " \
+    maestro_cmd = f"bash -c 'maestro --debug --cluster {ETCD_FILE} --prefix {CFG_PREFIX} " \
                   f" >/var/log/maestro.log 2>&1 &'"
     rc, out = cont.exec_run(maestro_cmd)
     assert(rc == 0)

@@ -26,7 +26,7 @@ import logging
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, PyPty, \
-                      StreamData, LdmsAddr
+                      MsgData, LdmsAddr
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -50,7 +50,7 @@ else:
     default_prefix = "/opt/ovis"
 
 #### argument parsing #### -------------------------------------------
-ap = argparse.ArgumentParser(description = "Test ldms_stream features with ldmsd")
+ap = argparse.ArgumentParser(description = "Test ldms_msg features with ldmsd")
 add_common_args(ap)
 args = ap.parse_args()
 process_args(args)
@@ -83,7 +83,7 @@ base_daemons = [
     ]
 spec = {
     "name" : CLUSTERNAME,
-    "description" : "{}'s ldms_stream test cluster".format(USER),
+    "description" : "{}'s ldms_msg test cluster".format(USER),
     "type" : "NA",
     "templates" : { # generic template can apply to any object by "!extends"
         "compute_node" : {
@@ -127,9 +127,9 @@ test = TADA.Test(test_suite = "LDMSD",
 test.add_assertion( 1, "Publisher cannot publish all data (rail rate limit)")
 test.add_assertion( 2, "Publisher get a rate limit error")
 test.add_assertion( 3, "After the wait, the publisher can publish")
-test.add_assertion( 4, "Publisher cannot publish all data (stream rate limit)")
-test.add_assertion( 5, "Publisher get a rate limit error (by stream)")
-test.add_assertion( 6, "After the wait, the publisher can publish (by stream)")
+test.add_assertion( 4, "Publisher cannot publish all data (msg rate limit)")
+test.add_assertion( 5, "Publisher get a rate limit error (by channel)")
+test.add_assertion( 6, "After the wait, the publisher can publish (by channel)")
 
 cluster = None
 test.start()
@@ -184,16 +184,16 @@ set_1 = set(recs1) - set([ x_28 ])
 # test.add_assertion( 1, "Sampler cannot publish all data (rate limit)")
 while True: # will break
     if not set_0:
-        test.assert_test(1, False, "empty stream data")
+        test.assert_test(1, False, "empty msg data")
         break
     if set_0 - set_full:
         test.assert_test(1, False, "Got extra data: {set_0 - set_full}")
         break
     _len = sum( len(o) for o in set_0 )
     if _len > 2*RAIL_RATE:
-        test.assert_test(1, False, "stream data received is greater than the recv limit")
+        test.assert_test(1, False, "msg data received is greater than the recv limit")
         break
-    test.assert_test(1, True, "received stream data is limited")
+    test.assert_test(1, True, "received msg data is limited")
     break
 
 # test.add_assertion( 2, "Publisher get a rate limit error")
@@ -211,26 +211,26 @@ while True: # will break
 
 # test.add_assertion( 3, "After the wait, the sampler can publish")
 if x_28 in recs0:
-    test.assert_test(3, True, "stream data received")
+    test.assert_test(3, True, "msg data received")
 else:
-    test.assert_test(3, False, "stream data not received")
+    test.assert_test(3, False, "msg data not received")
 
-# test.add_assertion( 4, "Publisher cannot publish all data (stream rate limit)")
+# test.add_assertion( 4, "Publisher cannot publish all data (msg rate limit)")
 while True: # will break
     if not set_1:
-        test.assert_test(4, False, "empty stream data")
+        test.assert_test(4, False, "empty msg data")
         break
     if set_1 - set_full:
         test.assert_test(4, False, "Got extra data: {set_1 - set_full}")
         break
     _len = sum( len(o) for o in set_1 )
     if _len > 2*STREAM_RATE:
-        test.assert_test(4, False, "stream data received is greater than the recv limit")
+        test.assert_test(4, False, "msg data received is greater than the recv limit")
         break
-    test.assert_test(4, True, "received stream data is limited")
+    test.assert_test(4, True, "received msg data is limited")
     break
 
-# test.add_assertion( 5, "Publisher get a rate limit error (by stream)")
+# test.add_assertion( 5, "Publisher get a rate limit error (by channel)")
 while True: # will break
     out = pypub.cmd('err1')
     err = eval(out)
@@ -243,10 +243,10 @@ while True: # will break
     test.assert_test(5, True, "publisher got rate limit errors")
     break
 
-# test.add_assertion( 6, "After the wait, the publisher can publish (by stream)")
+# test.add_assertion( 6, "After the wait, the publisher can publish (by channel)")
 if x_28 in recs1:
-    test.assert_test(6, True, "stream data received")
+    test.assert_test(6, True, "msg data received")
 else:
-    test.assert_test(6, False, "stream data not received")
+    test.assert_test(6, False, "msg data not received")
 
 # see at_exit()

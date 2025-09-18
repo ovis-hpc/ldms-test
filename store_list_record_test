@@ -386,9 +386,11 @@ def find_log_msg(cont, msg, begin = {'offset': None, 'whence': 0}, is_loop = Tru
 
 def multilist_err_msg(schema, plugin):
     if plugin == "store.sos":
-        msg = f"{plugin}: 'sampler/{schema}' contains multiple lists"
+        #msg = f"{plugin}: 'sampler/{schema}' contains multiple lists"
+        msg = f"'sampler/{schema}' contains multiple lists"
     elif plugin == "store.store_csv":
-        msg = f"{plugin}: Set 'sampler/{schema}' contains multiple lists"
+        #msg = f"{plugin}: Set 'sampler/{schema}' contains multiple lists"
+        msg = f"Set 'sampler/{schema}' contains multiple lists"
     else:
         raise RuntimeError(f"Unknown plugin '{plugin}'")
     return msg

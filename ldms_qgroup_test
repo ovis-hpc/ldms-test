@@ -350,7 +350,7 @@ while True:
 while True:
     p = py_app1
     log.info("-- ramp up app1 for saturation test --")
-    p.cmd('p.interval = 0.025')
+    p.cmd('p.interval = 0.05')
     log.info("-- starting app1 publisher again (for saturation test) --")
     p.cmd('p.start()')
     log.info("-- Wait a minute to get data flow (with limit) --")

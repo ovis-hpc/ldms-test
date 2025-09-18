@@ -20,7 +20,7 @@ logging.basicConfig(filename="/var/log/app.log",
                     format=LOG_FMT)
 rlog = logging.getLogger() # root logger
 rlog.setLevel(logging.INFO)
-slog = logging.getLogger("stream")
+slog = logging.getLogger("msg")
 slog.setLevel(logging.INFO)
 
 xset = list()
@@ -68,8 +68,8 @@ class Publisher(object):
         while self.is_running:
             data = self.msg_gen()
             try:
-                self.x.stream_publish(self.name, data,
-                                      stream_type = ldms.LDMS_STREAM_STRING)
+                self.x.msg_publish(self.name, data,
+                                      msg_type = ldms.LDMS_MSG_STRING)
                 slog.info(f"published: [{self.name}]: {data}")
                 self.count += 1
             except Exception as e:

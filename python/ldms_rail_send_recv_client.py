@@ -51,12 +51,12 @@ recv_data = list()
 quota_list = []
 quota_amount_list = []
 
-def stream_cb(sc, sdata, arg):
+def msg_cb(sc, sdata, arg):
     global blocker, recv_data
     recv_data.append(sdata.raw_data)
     blocker.block()
 
-sc = ldms.StreamClient('.*', True, stream_cb, None)
+sc = ldms.MsgClient('.*', True, msg_cb, None)
 
 def xprt_cb(x, ev, arg):
     global blocker, recv_data

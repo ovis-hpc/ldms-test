@@ -12,7 +12,7 @@ import logging
 
 from ovis_ldms import ldms
 from threading import Thread
-from ldms_qgroup_common import Prdcr, PrdcrState, StreamThroughput
+from ldms_qgroup_common import Prdcr, PrdcrState, MsgThroughput
 
 LOG_FMT = "%(asctime)s.%(msecs)03d %(name)s %(levelname)s %(message)s"
 DATE_FMT = "%F %T"
@@ -22,7 +22,7 @@ logging.basicConfig(filename="/var/log/agg.log",
                     datefmt=DATE_FMT,
                     format=LOG_FMT)
 rlog = logging.getLogger() # root logger
-slog = logging.getLogger("stream")
+slog = logging.getLogger("msg")
 slog.setLevel(logging.INFO)
 
 xset = list()
@@ -68,13 +68,13 @@ thr = Thread(target = prdcr_thread)
 thr.start()
 sdata = list()
 
-st = StreamThroughput()
+st = MsgThroughput()
 
-def stream_cb(cli:ldms.StreamClient, data:ldms.StreamData, arg):
+def msg_cb(cli:ldms.MsgClient, data:ldms.MsgData, arg):
     global sdata
     slog.info(f"recv: {data.src} [{data.name}]: {data.data}")
     ts = time.time()
     sdata.append( (ts, data.name, data.data, data) )
     st.add_data(data)
 
-cli = ldms.StreamClient('.*', True, stream_cb, None)
+cli = ldms.MsgClient('.*', True, msg_cb, None)
