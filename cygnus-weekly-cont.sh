@@ -84,7 +84,7 @@ assert() {
 }
 export -f assert
 
-if [[ -d "/sys/class/infiniband" ]]; then
+if [[ -d "/sys/class/infiniband" ]] && (( $(ls /sys/class/infiniband | wc -l)  > 0 )); then
 	HAVE_RDMA=y
 else
 	HAVE_RDMA=
