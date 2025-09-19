@@ -206,7 +206,10 @@ spec = {
             "daemons" : base_daemons + [
                 {
                     "!extends" : "ldmsd_daemon",
+                    # This is a hack to supress `stream_enable` and `msg_enable`
+                    # commands in old ldmsd.
                     "msg_enable" : False,
+                    "stream_enable" : False,
                 },
             ],
             "mounts" : [
