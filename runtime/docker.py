@@ -363,6 +363,20 @@ class Network(object):
                 params = dict(name=name, driver=driver, scope=scope,
                               attachable=attachable, labels = labels,
                               enable_ipv6 = ipv6)
+                cv = client.version()
+                ver_str = cv['Version']
+                maj_ver = int(ver_str.split('.')[0])
+                if ipv6 and maj_ver < 24:
+                    # needs IP pools for both ipv6 and ipv4
+                    # only for docker ver < 24
+                    net6 = next_ipv6_subnet()
+                    iprange6 = f"{net6.network_address}/120"
+                    net4 = next_ipv4_subnet()
+                    iprange4 = f"{net4.network_address}/24"
+                    ipam_pool6 = docker.types.IPAMPool(subnet=str(net6), iprange=iprange6)
+                    ipam_pool4 = docker.types.IPAMPool(subnet=str(net4), iprange=iprange4)
+                    ipam_config = docker.types.IPAMConfig(pool_configs=[ipam_pool4, ipam_pool6])
+                    params['ipam'] = ipam_config
                 obj = client.networks.create(**params)
         except docker.errors.APIError as e:
             if e.status_code != 409: # other error, just raise it
@@ -680,6 +694,12 @@ class DockerCluster(LDMSDCluster):
         if subnet:
             ip_net = ip.ip_network(subnet)
             ip_itr = ip_net.hosts()
+            # skip a few first addresses. docker may use some for DHCP server
+            # and DNS server.
+            next(ip_itr)
+            next(ip_itr)
+            next(ip_itr)
+            next(ip_itr)
         # then, create the actual containers
         first = True
         for cl, params in cont_build:
