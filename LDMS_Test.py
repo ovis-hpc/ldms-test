@@ -3030,6 +3030,12 @@ def get_ldmsd_config(_spec, ver=None):
     if m:
         sio.write("msg_enable\n")
 
+    # stream_enable
+    _m = spec.get("stream_enable", True)
+    m = bool(_m)
+    if m:
+        sio.write("stream_enable\n")
+
     # daemon_name
     dname = spec.get("daemon_name", None)
     if dname:
