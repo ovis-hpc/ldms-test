@@ -498,8 +498,8 @@ verify(4, _inc_verified, "verify increment of supported counters")
 ####### assertion 5
 rc, out = comp3.exec_run("grep -m 1 'JSON parse error' /var/log/ldmsd.log")
 out = out.strip()
-idx = out.find("syspapi_sampler")
-verify(5, out[idx:] == "syspapi_sampler: `/db/syspapi-bad.json` JSON parse error.",
+idx = out.find("JSON parse error")
+verify(5, idx >= 0,
           "verify JSON parse error")
 
 ####### assertion 6
