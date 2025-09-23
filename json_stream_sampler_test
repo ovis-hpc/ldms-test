@@ -61,7 +61,7 @@ AUTH = "munge"
 
 DEFAULT_UID = DEFAULT_GID = 0
 DEFAULT_PERM = "0660"
-DEFAULT_S_PERM = "0777"
+DEFAULT_S_PERM = 0o440
 UID_1 = 2000
 USERNAME_1 = "foo"
 UID_2 = 2001
@@ -95,6 +95,9 @@ VALID_DATA = { 'string'   : 'abc',
                                          'sqrt(3)' : 1.732
                                        }
                             },
+               'S_uid': 0,
+               'S_gid': 0,
+               'S_perm' : DEFAULT_S_PERM,
              }
 
 INVALID_DATA_COL = [
@@ -223,15 +226,9 @@ def send_request(cont, cmd, xprt = LDMS_XPRT, port = LDMS_PORT,
     return errcode, out.strip()
 
 def stream_publish(cont, name, file, xprt = LDMS_XPRT, port = LDMS_PORT, host = "localhost",
-                   auth = AUTH, type = "json", uid = None, gid = None, perm = None, user = None):
-    x = f'ldms_msg_publish -x {xprt} -p {port} -h {host} -a {auth} ' \
-        f'-t {type} -m {name} -f {file}'
-    if uid is not None:
-        x += f' -U {uid}'
-    if gid is not None:
-        x += f' -G {gid}'
-    if perm is not None:
-        x += f' -P {perm}'
+                   auth = AUTH, type = "json", user = None):
+    x = f'ldmsd_stream_publish -x {xprt} -p {port} -h {host} -a {auth} ' \
+        f'-t {type} -s {name} -f {file}'
     rc, out = cont.exec_run(x, user = user)
     if rc:
         raise RuntimeError(f"ldmsd_stream_publish failed. Error {rc}. {out}")
@@ -280,6 +277,9 @@ test.add_assertion("sec_2", "User can access the set if the UID/GID matches the 
 test.add_assertion("sec_3", "Root can access the set regardless.")
 for key in INVAL_STREAM.keys():
     test.add_assertion(f"invalid_{key}", f"Plugin properly handles invalid stream data, {key}.")
+
+def OCT(v):
+    return oct(v).replace('o', '')
 
 ### Start ###
 cluster = None
@@ -365,8 +365,8 @@ test.assert_test("config_1.3", cond, f"Set's Perm({S['perm']}) is {DEFAULT_PERM}
 # encode_1
 exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_S_PERM, 'schema' : STREAM_1 }
 exp_v.update(EXP_S_VALUE)
-set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
-S['data']['S_perm'] = set_S_perm
+#set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
+#S['data']['S_perm'] = set_S_perm
 cond = S['data'] == exp_v
 test.assert_test("encode_1.1", cond, f"Encode the metric values correctly")
 
@@ -389,8 +389,12 @@ STREAM_2_GID = 0
 SET_2_UID = UID_1
 SET_2_GID = GID
 SET_2_PERM = "0400"
+STREAM_2_PERM = int(PERM)
 STREAM_2_DATA = { 'schema' : STREAM_2 }
 STREAM_2_DATA.update(VALID_DATA)
+STREAM_2_DATA['S_uid'] = STREAM_2_UID
+STREAM_2_DATA['S_gid'] = STREAM_2_GID
+STREAM_2_DATA['S_perm'] = STREAM_2_PERM
 STREAM_2_DATA_PATH = f'{DATA_DIR}/{STREAM_2}.json'
 for i in range(1, NUM_NODE + 1):
     nodes[i].write_file(STREAM_2_DATA_PATH, json.dumps(STREAM_2_DATA))
@@ -403,8 +407,7 @@ test.assert_test("config_2.0", errcode == 0, f"Successfully subscribe to the sec
 if errcode != 0:
     # We cannot continue the test, so exit the test script
     at_exit()
-stream_publish(nodes[1], name= STREAM_2, file = STREAM_2_DATA_PATH, perm = PERM,
-               uid = STREAM_2_UID, gid = STREAM_2_GID)
+stream_publish(nodes[1], name= STREAM_2, file = STREAM_2_DATA_PATH)
 sets = ldms_ls(nodes[1])
 cond = len(sets) == 2 and set(sets.keys()) == set([SET_1_NAME, SET_2_NAME])
 test.assert_test("create_2", cond, f"Create the set of the second stream")
@@ -429,9 +432,8 @@ test.assert_test("encode_2.1", cond, f"S_uid({S_2['data']['S_uid']}) is {STREAM_
 cond = S_2['data']['S_gid'] == STREAM_2_GID
 test.assert_test("encode_2.2", cond, f"S_gid({S_2['data']['S_gid']}) is {STREAM_2_GID}.")
 
-set_S_perm = oct(S_2['data']['S_perm']).replace("0o", "0")
-cond = set_S_perm == PERM
-test.assert_test("encode_2.3", cond, f"S_perm({set_S_perm}) is {PERM}.")
+cond = S_2['data']['S_perm'] == STREAM_2_PERM
+test.assert_test("encode_2.3", cond, f"S_perm({S_2['data']['S_perm']}) is {STREAM_2_PERM}.")
 # ------------------------------------------------------------------------------
 # security
 sets = ldms_ls(nodes[1], user = USERNAME_1) # ldms_ls as a user
@@ -459,12 +461,22 @@ for key in INVAL_STREAM.keys():
     stream_publish(nodes[1], name = f"invalid_{key}", file = INVAL_STREAM_PATH[key])
 
 lines = nodes[1].read_file(nodes[1].ldmsd_spec['log_file'])
+lines_bak = lines
+
+E_MSG = {
+    "no_schema": "Ignoring message with 'schema' attribute that is missing or not a string." ,
+    "not_dict": "Ignoring JSON object that is not a dictionary.",
+    "array_array": "Error 22 creating an LDMS schema",
+    "array_mix": "Error 22 creating an LDMS schema",
+}
 
 for key in INVAL_STREAM.keys():
-    if key in [ 'no_schema', 'not_dict' ]:
-        cond = f"invalid_{key}: Ignoring message" in lines
+    e_msg = E_MSG[key]
+    if e_msg in lines:
+        cond = True
+        lines.replace(e_msg, '', 1)
     else:
-        cond = f"invalid_{key}: Error 22 creating an LDMS schema" in lines
+        cond = False
     test.assert_test(f"invalid_{key}", cond, f"Plugin properly reported an error message.")
 
 STREAM_3 = "stream_3"
@@ -488,8 +500,8 @@ if cond is False:
     at_exit()
 S = sets[SET_3_NAME]
 
-set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
-S['data']['S_perm'] = set_S_perm
+#set_S_perm = oct(S['data']['S_perm']).replace("0o", "0")
+#S['data']['S_perm'] = set_S_perm
 exp_v = { 'S_uid': 0, 'S_gid' : 0, 'S_perm' : DEFAULT_S_PERM, 'schema' : STREAM_3 }
 exp_v.update(EXP_S_VALUE)
 exp_v['array_int_max_len'] = 5
