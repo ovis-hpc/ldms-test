@@ -269,7 +269,8 @@ def attr_grep(d, attr, lst = list()):
         return lst
     for k, v in d.items():
         if k.lower().find(attr.lower()) > -1:
-            lst.append(v)
+            if isinstance(v, str):  # only append string values
+                lst.append(v)
             continue
         if type(v) in [ dict, list ]:
             attr_grep(v, attr, lst)
