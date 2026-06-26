@@ -66,9 +66,12 @@ spec = {
         },
         "ldmsd-base" : {
             "type" : "ldmsd",
-            "listen_port" : 10000,
-            "listen_xprt" : "sock",
-            "listen_auth" : "munge",
+            "auth" : [
+                { "name": "munge", "plugin": "munge" }
+            ],
+            "listen" : [
+                { "port": 10000, "xprt": "sock", "auth": "munge" }
+            ],
         },
         "prdcr" : {
             "host" : "%name%",
@@ -76,6 +79,7 @@ spec = {
             "xprt" : "sock",
             "type" : "active",
             "interval" : 1000000,
+            "auth" : "munge"
         },
     },
     "nodes" : [
@@ -103,8 +107,13 @@ spec = {
                 },
                 {
                     "name" : "aggregator",
-                    "!extends" : "ldmsd-base",
-                    "listen_port" : 20000, # override
+                    "type" : "ldmsd",
+                    "auth" : [
+                        { "name": "munge", "plugin": "munge" }
+                    ],
+                    "listen"  : [
+                        { "port": 20000, "xprt": "sock", "auth": "munge" }
+                    ],
                     "prdcrs" : [ # these producers will turn into `prdcr_add`
                         {
                             "name" : "stream-sampler-1",
@@ -116,8 +125,8 @@ spec = {
                         },
                     ],
                     "config" : [ # additional config applied after prdcrs
-                        "prdcr_subscribe regex=.* stream=test_stream",
                         "prdcr_start_regex regex=.*",
+                        "prdcr_subscribe regex=.* stream=test_stream",
                     ],
                 },
             ]
@@ -136,8 +145,13 @@ spec = {
                 },
                 {
                     "name" : "aggregator",
-                    "!extends" : "ldmsd-base",
-                    "listen_port" : 20000, # override
+                    "type" : "ldmsd",
+                    "auth" : [
+                        { "name": "munge", "plugin": "munge" }
+                    ],
+                    "listen"  : [
+                        { "port": 20000, "xprt": "sock", "auth": "munge" }
+                    ],
                     "samplers" : [
                         {
                             "plugin" : "test_stream_sampler",
@@ -160,8 +174,8 @@ spec = {
                         },
                     ],
                     "config" : [ # additional config applied after prdcrs
-                        "prdcr_subscribe regex=.* stream=test_stream",
                         "prdcr_start_regex regex=.*",
+                        "prdcr_subscribe regex=.* stream=test_stream",
                     ],
                 },
             ]
@@ -183,8 +197,16 @@ def rm(path):
     if os.path.exists(path):
         os.remove(path)
 
-def prdcr_start_regex(agg, regex_str):
-    if is_ldmsd_version_4(agg.ldmsd_version):
+def send_request(cont, cmd, xprt = "sock", port = None, host = "localhost", auth = "munge"):
+    if port is None:
+        port = cont.ldmsd_spec["listen"][0]["port"]
+    s = f"/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H {host} -a {auth}"
+    s += f" --cmd '{cmd}'"
+    errcode, out = cont.exec_run(s)
+    return errcode, out.strip()
+
+def prdcr_start_regex(cont, regex_str):
+    if is_ldmsd_version_4(cont.ldmsd_version):
         txt = "prdcr_start_regex regex={}".format(regex_str)
     else:
         obj = { "request": "update",
@@ -193,10 +215,11 @@ def prdcr_start_regex(agg, regex_str):
                 "enabled": True,
                 "re": [regex_str]}
         txt = "json " + json.dumps(obj)
-    return agg.config_ldmsd([txt])
+    rc, out = send_request(cont, cmd = txt)
+    return (rc, out)
 
-def prdcr_stop_regex(agg, regex_str):
-    if is_ldmsd_version_4(agg.ldmsd_version):
+def prdcr_stop_regex(cont, regex_str):
+    if is_ldmsd_version_4(cont.ldmsd_version):
         txt = "prdcr_stop_regex regex={}".format(regex_str)
     else:
         obj = { "request": "update",
@@ -205,23 +228,25 @@ def prdcr_stop_regex(agg, regex_str):
                 "enabled": False,
                 "re": [regex_str]}
         txt = "json " + json.dumps(obj)
-    return agg.config_ldmsd([txt])
+    rc, out = send_request(cont, cmd = txt)
+    return (rc, out)
 
-def prdcr_unsubscribe(node, regex, stream):
-    """Tells ldmsd on `node` to prdcr_unsubscribe regex=`regex` stream=`stream`"""
-    if is_ldmsd_version_4(node.ldmsd_version):
+def prdcr_unsubscribe(cont, regex, stream):
+    """Tells ldmsd on `cont` to prdcr_unsubscribe regex=`regex` stream=`stream`"""
+    if is_ldmsd_version_4(cont.ldmsd_version):
         txt = "prdcr_unsubscribe regex={} stream={}".format(regex, stream)
     else:
         raise NotImplementedError("prdcr_unsubscribe is not supported (yet) in v5")
-    return node.config_ldmsd([txt])
+    rc, out = send_request(cont, cmd = txt)
+    return (rc, out)
 
-def stream_client_dump(node):
+def stream_client_dump(cont):
     """Dump stream clients in ldmsd on node as a list of (stream_name, cb_fn, cb_ctxt) tuples"""
-    if is_ldmsd_version_4(node.ldmsd_version):
+    if is_ldmsd_version_4(cont.ldmsd_version):
         txt = "stream_client_dump"
     else:
         raise NotImplementedError("stream_client_dump is not supported (yet) in v5")
-    rc, out = node.config_ldmsd([txt])
+    rc, out = send_request(cont, cmd = txt)
     lines = out.split("\n")[2:]
     lst = []
     for l in lines:
@@ -372,8 +397,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "string", data_file)
 
     time.sleep(2)
 
@@ -435,14 +460,14 @@ if __name__ == "__main__":
     agg_h = cluster.get_container('agg-1')
     rc, out = prdcr_stop_regex(agg_h, ".*")
     if is_ldmsd_version_4(agg_h.ldmsd_version):
-        test.assert_test(5, (len(out) == 0), out)
+        test.assert_test(5, (rc == 0), "rc == 0")
     else:
         rsp = json.loads(out)
         test.assert_test(5, rsp["status"] == 0, rsp)
 
     rc, out = prdcr_start_regex(agg_h, ".*")
     if is_ldmsd_version_4(agg_h.ldmsd_version):
-        test.assert_test(6, (len(out) == 0), out)
+        test.assert_test(6, rc == 0, "rc == 0")
     else:
         rsp = json.loads(out)
         test.assert_test(6, rsp["status"] == 0, rsp)
@@ -464,8 +489,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1', 'stream-sampler-2' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "string", data_file)
 
     time.sleep(2)
 
@@ -549,8 +574,8 @@ if __name__ == "__main__":
     for host in [ 'stream-sampler-1' ]:
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "string", data_file)
 
     time.sleep(2)
 
@@ -595,7 +620,7 @@ if __name__ == "__main__":
     #test.add_assertion(17, 'agg-1 unsubscribes stream-sampler-1')
     rc, out = prdcr_unsubscribe(agg1, regex='stream-sampler-1', stream='test_stream')
     if is_ldmsd_version_4(agg_h.ldmsd_version):
-        test.assert_test(17, (len(out) == 0), out)
+        test.assert_test(17, (rc == 0), "rc == 0")
     else:
         rsp = json.loads(out)
         test.assert_test(17, rsp["status"] == 0, rsp)
@@ -630,8 +655,8 @@ if __name__ == "__main__":
         text_data = json.dumps(_data)
         cont = cluster.get_container(host)
         cont.write_file(data_file, text_data)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "json", data_file)
-        start_publisher(cont, host, cont.ldmsd_spec["listen_port"], "string", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "json", data_file)
+        start_publisher(cont, host, cont.ldmsd_spec["listen"][0]["port"], "string", data_file)
 
     time.sleep(2)
 
