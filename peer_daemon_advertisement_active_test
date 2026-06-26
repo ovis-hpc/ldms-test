@@ -475,24 +475,25 @@ def get_prdcr_type_str(prdcr_type):
     return s
 
 def get_exp_prdcr(name, host, state, sets, type=PRDCR_TYPE_ADVERTISED|PRDCR_TYPE_PASSIVE,
-                  transport="sock", port = None, auth = 'DEFAULT', reconnect = RECONNECT_US):
+                  transport="sock", port=None, auth='DEFAULT', reconnect=RECONNECT_US,
+                  rail=1, quota=-1, rx_rate=-1):
     e = {
-        'name' : name,
-        'type' : get_prdcr_type_str(type),
-        'host' : host,
-        'state' : state,
+        'name'      : name,
+        'type'      : get_prdcr_type_str(type),
+        'host'      : host,
+        'state'     : state,
         'transport' : transport,
-        'auth' : auth,
-        'sets' : [{ 'inst_name'   : f"{host}/{s['schema']}",
-                    'schema_name' : s['schema'],
-                    'state'       : s['state']
-                    } for s in sets]
+        'auth'      : auth,
+        'rail'      : str(rail),
+        'quota'     : str(quota),
+        'rx_rate'   : str(rx_rate),
+        'sets'      : [{'inst_name'   : f"{host}/{s['schema']}",
+                        'schema_name' : s['schema'],
+                        'state'       : s['state']} for s in sets]
     }
-
     if type & (PRDCR_TYPE_ACTIVE | PRDCR_TYPE_ADVERTISED):
-        e['port'] =  port
+        e['port'] = port
         e['reconnect_us'] = f'{reconnect}'
-
     return e
 
 def get_prdcr_name(host, port = LDMSD_PORT):
