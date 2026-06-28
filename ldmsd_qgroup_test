@@ -144,7 +144,7 @@ spec = {
                         } for j in [1, 2]
                     ],
                     "config" : [
-                        "prdcr_subscribe regex=.* message_channel=.*",
+                        "prdcr_subscribe regex=.* message_tag=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -189,14 +189,14 @@ spec = {
                             "offset" : 0,
                             "config" : [
                                 "op=msg_subscribe",
-                                "message_channel=.*",
+                                "message_tag=.*",
                                 "path=/var/log/stream.dump",
                             ],
                             "start" : False,
                         }
                     ],
                     "config" : [
-                        "prdcr_subscribe regex=.* message_channel=.*",
+                        "prdcr_subscribe regex=.* message_tag=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",

@@ -150,12 +150,12 @@ spec = {
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
                         "config name=stream_dump op=msg_subscribe " \
-                            "message_channel=.* path=/db/%hostname%-new.txt",
+                            "message_tag=.* path=/db/%hostname%-new.txt",
                         "config name=stream_dump op=stream_subscribe " \
                             "stream=old path=/db/%hostname%-old.txt",
 
                         "prdcr_subscribe regex=agg-1 stream=old",
-                        "prdcr_subscribe regex=agg-1 message_channel=.*",
+                        "prdcr_subscribe regex=agg-1 message_tag=.*",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
@@ -183,10 +183,10 @@ spec = {
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
                         "config name=stream_dump op=msg_subscribe " \
-                            "message_channel=.* path=/db/%hostname%-new.txt",
+                            "message_tag=.* path=/db/%hostname%-new.txt",
                         "config name=stream_dump op=stream_subscribe " \
                             "stream=old path=/db/%hostname%-old.txt",
-                        "prdcr_subscribe regex=new message_channel=new.*",
+                        "prdcr_subscribe regex=new message_tag=new.*",
                         "prdcr_subscribe regex=old stream=old",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",

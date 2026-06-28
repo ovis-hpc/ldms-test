@@ -117,7 +117,7 @@ spec = {
             ],
             "config" : [
                 "load name=stream_dump",
-                "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
+                "config name=stream_dump op=msg_subscribe message_tag=.* path=/db/%hostname%.txt",
                 "prdcr_start_regex regex=.*",
                 "updtr_add name=all interval=1000000 offset=0",
                 "updtr_prdcr_add name=all regex=.*",
