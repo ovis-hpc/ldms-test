@@ -98,14 +98,23 @@ class PluginConfigCMDTst(ContainerTest):
         ("term-6", "Check the status of the plugins")
     ]
 
-def exp_status(name, type, interval = None, offset = None):
+PLUGIN_MODE = {
+    "array_example" : "S",
+    "procstat"      : "S",
+    "vmstat"        : "S",
+    "meminfo"       : "S",
+    "store_csv"     : "M",
+    "store_sos"     : "M",
+    "test_sampler"  : "M",
+}
+
+def exp_status(name, type, interval=None, offset=None):
     return {
-            "name" : name if type == "sampler" else name.replace("store_", ""),
-            "type" : type,
-            "sample_interval_us" : 1000000 if interval is None else interval,
-            "sample_offset_us" : 0 if offset is None else offset,
-            "libpath" : f"/opt/ovis/lib/ovis-ldms/lib{name}.so"
-           }
+                "name"    : name,
+                "plugin"  : name,
+                "type"    : f"{'sampler' if 'sampler' in type else 'store'}[{PLUGIN_MODE[name]}]",
+                "libpath" : f"/opt/ovis/lib/ovis-ldms/lib{name}.so"
+            }
 
 def errcode_cond(resp, exp_errcode, op = "=="):
     if op == "==":
@@ -220,7 +229,7 @@ def plugin_start_test(suite):
     suite.save_assertion("start-1", **errcode_cond(resp, errno.ENOENT))
     # Start a store plugin
     resp = plugn_start(comm, name = "store_csv", interval = 1000000)
-    suite.save_assertion("start-2", **errcode_cond(resp, errno.EINVAL))
+    suite.save_assertion("start-2", **errcode_cond(resp, errno.ENOENT))
     # Start a sampler plugin with a negative interval
     resp = plugn_start(comm, name = "vmstat", interval = -1000)
     suite.save_assertion("start-4", **errcode_cond(resp, errno.EINVAL))
