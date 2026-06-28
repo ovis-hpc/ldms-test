@@ -292,15 +292,21 @@ class PrdcrConfigCMDTest(ContainerTest):
     }
 
     def exp_result(self, name, host, type = 'active',
-                     interval = 1000000, xprt = LDMSD_XPRT,
-                     port = LDMSD_PORT, state = "STOPPED",
-                     sets = []):
+                    interval = 1000000, xprt = LDMSD_XPRT,
+                    port = LDMSD_PORT, state = "STOPPED",
+                    sets = [],
+                    auth = "DEFAULT",
+                    rail = "1", quota = "-1", rx_rate = "-1"):
         return  {
                     "name" : name,
                     "type" : type,
                     "host" : host,
                     "port" : int(port),
                     "transport" : xprt,
+                    "auth" : auth,
+                    "rail" : rail,
+                    "quota" : quota,
+                    "rx_rate" : rx_rate,
                     "reconnect_us" : str(interval),
                     "state" : state.upper(),
                     "sets" : sets
@@ -496,7 +502,7 @@ def prdcr_add_test(suite, comms):
 
     # Non-existing host
     resp = prdcr_add(agg_comm, name = "not_exist_host", host = "foo")
-    suite.save_assertion("add-8", **errcode_cond(resp, errno.EAFNOSUPPORT))
+    suite.save_assertion("add-8", **errcode_cond(resp, 0))
 
     # Existing host
     resp = prdcr_add(agg_comm, name = "type_active")

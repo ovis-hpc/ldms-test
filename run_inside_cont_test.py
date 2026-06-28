@@ -59,7 +59,10 @@ def __debug(cont):
 def get_ovis_pythonpath_cont(host_prefix):
     for root, dirs, files in os.walk(f"{host_prefix}/lib/"):
         for d in dirs:
-            if "python" in d:
+            if "python" not in d:
+                continue
+            path = f"{host_prefix}/lib/{d}/site-packages"
+            if os.path.exists(f"{path}/ldmsd"):
                 return f"/opt/ovis/lib/{d}/site-packages"
 
 def run_suite(suite):
