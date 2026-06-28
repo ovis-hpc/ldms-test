@@ -137,9 +137,9 @@ spec = {
                     ],
                     "config" : [ # additional config applied after prdcrs
                         "load name=stream_dump",
-                        "config name=stream_dump op=msg_subscribe message_channel=.* path=/db/%hostname%.txt",
-                        "prdcr_subscribe regex=samp message_channel=new.*",
-                        "prdcr_subscribe regex=samp message_channel=rate.* rx_rate=32",
+                        "config name=stream_dump op=msg_subscribe message_tag=.* path=/db/%hostname%.txt",
+                        "prdcr_subscribe regex=samp message_tag=new.*",
+                        "prdcr_subscribe regex=samp message_tag=rate.* rx_rate=32",
                         "prdcr_start_regex regex=.*",
                         "updtr_add name=all interval=1000000 offset=%offset%",
                         "updtr_prdcr_add name=all regex=.*",
