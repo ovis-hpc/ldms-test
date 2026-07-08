@@ -272,9 +272,13 @@ verify_data(5, ["node-1/set0"])
 time.sleep(5)
 #test.add_assertion(6, "agg-1 log stays empty")
 out = agg1.read_file('/var/log/ldmsd.log')
-if len(out):
-    test.assert_test(6, False, "log not empty (len:{})".format(len(out)))
-else:
+
+if len(out) == 0:
+    # Read the log before the log message has been printed
     test.assert_test(6, True, "verified")
+elif out == "prdcr : The set 'node-1/set2' no longer exists on the server.":
+    test.assert_test(6, True, "verified")
+else:
+    test.assert_test(6, False, f"Unexpected log message ({out})")
 
 # see at_exit()
