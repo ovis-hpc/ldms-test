@@ -217,7 +217,7 @@ while True: # will break
                 f"vmstat not sampling? ts ({vmstat_ts}) < expect ts ({ts1})")
         break
     xt = st1['xthreads']
-    if len(xt) != 1 or xt[0]['name'] != 'xthread_meminfo':
+    if len(xt) != 1 or xt[0]['name'] != 'x:meminfo':
         test.assert_test(1, False, f"Unexpected xthreads data: {xt}")
         break;
     test.assert_test(1, True, f"verified")
@@ -296,7 +296,7 @@ while True:
                 f"vmstat not sampling? ts ({vmstat_ts}) < expect ts ({ts4})")
         break
     xt = st4['xthreads']
-    if len(xt) != 1 or xt[0]['name'] != 'xthread_meminfo':
+    if len(xt) != 1 or xt[0]['name'] != 'x:meminfo':
         test.assert_test(4, False, f"Unexpected xthreads data: {xt}")
         break;
     test.assert_test(4, True, f"verified")
