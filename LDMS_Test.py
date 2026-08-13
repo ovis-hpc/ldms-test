@@ -187,7 +187,10 @@ def parse_ldms_ls(txt):
             section = 1
             continue
         elif m["meta_schema"]: # meta data
-            if section != 1:
+            # Set-group queries print each member's meta row twice:
+            # once in section 0 (early, via add_group_members), once
+            # in section 1 (the normal verbose table). Accept both.
+            if section not in (0, 1):
                 raise RuntimeError("Unexpected meta info: {}".format(l))
             meta = dict( schema_digest = m.get("meta_schema_digest", ""),
                          schema = m["meta_schema"],
