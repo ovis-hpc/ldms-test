@@ -1553,7 +1553,7 @@ class LDMSDContainer(ABC):
 
     def prep_slurm_conf(self):
         """Prepare slurm configurations"""
-        self.write_file("/etc/slurm/cgroup.conf", "CgroupAutomount=yes")
+        self.write_file("/etc/slurm/cgroup.conf", "CgroupPlugin=disabled")
         self.write_file("/etc/slurm/slurm.conf", self.cluster.slurm_conf)
 
     def start_slurm(self):
@@ -2190,7 +2190,7 @@ class LDMSDCluster(ABC):
             "Waittime=0\n"\
             "#FastSchedule=1\n"\
             "SchedulerType=sched/builtin\n"\
-            "SelectType=select/cons_res\n"\
+            "SelectType=select/cons_tres\n"\
             "SelectTypeParameters=CR_CPU\n"\
             "AccountingStorageType=accounting_storage/none\n"\
             "#AccountingStoreJobComment=YES\n"\
@@ -2485,6 +2485,24 @@ def read_msg(_file):
     if _type == "json":
         obj = json.loads(text)
     return { "type": _type, "text": text, "obj": obj }
+
+
+def find_slurm_notifier():
+    if not hasattr(G, "args"):
+        raise RuntimeError(f"Must call process_args() before calling this function")
+    if G.args.slurm_notifier not in [ None, "__find_from_prefix__" ] :
+        return G.args.slurm_notifier
+    _LIB = "libslurm_notifier.so"
+    _VOL = f"-v ${G.args.prefix}:/opt/ovis:ro" if G.args.prefix is not None else ""
+    cmd = f"docker run --rm {_VOL} {G.args.image} find /opt/ovis -name {_LIB}"
+    rc, out = sp.getstatusoutput(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to find {_LIB} from the image {G.args.image}: {out}")
+    items = out.splitlines()
+    if not items:
+        raise RuntimeError(f"Failed to find {_LIB} from the image {G.args.image}: {out}")
+    return items[0]
+
 
 LDMSD_EXE_VER_RE = re.compile(r'LDMSD Version: (\d+).(\d+).(\d+)')
 def ldmsd_version(prefix=None):
