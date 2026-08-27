@@ -20,6 +20,8 @@ from distutils.version import LooseVersion
 from LDMS_Test import cached_property, LDMSDContainerTTY, LDMSDContainer, \
                       LDMSDCluster, Spec, env_dict, cs_rm, G
 
+DEFAULT_IMAGE = "ovishpc/ldms-build"
+
 # `D` Debug object to store values for debugging
 class Debug(object): pass
 D = Debug()
@@ -760,6 +762,7 @@ class DockerCluster(LDMSDCluster):
         nodes = spec["nodes"]
         mounts = []
         prefix = spec.get("ovis_prefix")
+        image = spec.get("image", DEFAULT_IMAGE)
         _PYTHONPATH = None
         if prefix:
             mounts += ["{}:/opt/ovis:ro".format(prefix)]
@@ -768,8 +771,22 @@ class DockerCluster(LDMSDCluster):
             pp = [ p.replace(prefix, '/opt/ovis', 1) for p in pp ]
             _PYTHONPATH = ':'.join(pp)
         if not _PYTHONPATH:
-            _PYTHONPATH = "/opt/ovis/lib/python3.6/site-packages:" \
-                          "/opt/ovis/lib64/python3.6/site-packages"
+            # Try looking into the image
+            dc = docker.from_env()
+            try:
+                out = dc.containers.run(image, command="/bin/bash -c 'ls -d /opt/ovis/lib*/python3.*/site-packages'", remove=True)
+                _PYTHONPATH = ':'.join(out.decode().splitlines())
+            except:
+                pass
+        if not _PYTHONPATH:
+            # Fallback to use python version
+            dc = docker.from_env()
+            out = dc.containers.run(image, command="python3 -V", remove=True)
+            out = out.decode()
+            py, ver = out.split()
+            pv = '.'.join( ver.split('.')[:2] )
+            _PYTHONPATH = f"/opt/ovis/lib/python{pv}/site-packages:" \
+                          f"/opt/ovis/lib64/python{pv}/site-packages"
         mounts += spec.get("mounts", [])
         cap_add = spec.get("cap_add", [])
         cap_drop = spec.get("cap_drop", [])
@@ -802,7 +819,7 @@ class DockerCluster(LDMSDCluster):
         env.update(env_dict(spec.get("env", {})))
         kwargs = dict(
                     name = name,
-                    image = spec.get("image", "ovis-centos-build"),
+                    image = image,
                     mounts = mounts,
                     nodes = hostnames,
                     env = env,
