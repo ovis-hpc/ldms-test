@@ -2483,27 +2483,21 @@ def read_msg(_file):
         obj = json.loads(text)
     return { "type": _type, "text": text, "obj": obj }
 
-LDMSD_STR_VER_RE = re.compile(r'LDMSD_VERSION (\d+).(\d+).(\d+)')
 LDMSD_EXE_VER_RE = re.compile(r'LDMSD Version: (\d+).(\d+).(\d+)')
-def ldmsd_version(prefix):
-    """Get LDMSD version from the installation prefix"""
-    try:
-        _cmd = "strings {}/sbin/ldmsd | grep 'LDMSD_VERSION '".format(prefix)
-        out = sp.check_output(_cmd, shell = True, executable="/bin/bash").decode()
-    except:
-        out = ""
-    m = LDMSD_STR_VER_RE.match(out)
-    if not m:
-        # try `ldmsd -V`
-        try:
-            _cmd = "{}/sbin/ldmsd -V | grep 'LDMSD Version: '".format(prefix)
-            out = sp.check_output(_cmd, shell = True, executable="/bin/bash").decode()
-        except:
-            out = ""
-        m = LDMSD_EXE_VER_RE.match(out)
-        if not m:
-            raise ValueError("Cannot determine ldmsd version")
-    return tuple(map(int, m.groups()))
+def ldmsd_version(prefix=None):
+    # G.args contains CLI arguments
+    if not hasattr(G, "args"):
+        raise RuntimeError(f"Must call process_args() before calling this function")
+    _VOL = f"-v ${prefix}:/opt/ovis:ro" if prefix is not None else ""
+    cmd = f"docker run --rm {_VOL} {G.args.image} /opt/ovis/sbin/ldmsd -V"
+    rc, out = sp.getstatusoutput(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to get ldmsd version from the image: {out}")
+    arr = re.findall('LDMSD Version: (\d+)\.(\d+)\.(\d+)', out)
+    if not arr:
+        raise RuntimeError(f"Failed to get ldmsd version from the image: {out}")
+    return tuple(map(int, arr[0]))
+
 
 def is_ldmsd_version_4(ver):
     return ver < (4, 100, 0)
