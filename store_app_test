@@ -16,7 +16,7 @@ from threading import Thread, Event
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, jprint, parse_ldms_ls, \
-                      ldmsd_version
+                      ldmsd_version, find_slurm_notifier
 
 if __name__ != "__main__":
     raise RuntimeError("This should not be impoarted as a module.")
@@ -56,22 +56,11 @@ DB = args.data_root
 NUM_COMPUTE = args.num_compute
 LDMSD_VERSION = ldmsd_version(PREFIX)
 SCRIPT_DIR = os.path.realpath(sys.path[0])
+SLURM_NOTIFIER = find_slurm_notifier()
 
 CONT_PYTHON = "/usr/bin/python3" if LDMSD_VERSION >= (4, 100, 0) else "/usr/bin/python2"
 
 STORE_ROOT = "/store" # path inside container (agg-2)
-
-SLURM_NOTIFIER = args.slurm_notifier
-if SLURM_NOTIFIER == "__find_from_prefix__":
-    paths = map(lambda x: "{}/{}/ovis-ldms/libslurm_notifier.so"\
-                          .format(PREFIX, x),
-                ["lib", "lib64"])
-    for p in paths:
-        if os.path.exists(p):
-            SLURM_NOTIFIER = p.replace(PREFIX, '/opt/ovis', 1)
-            break
-    else:
-        raise RuntimeError("libslurm_notifier.so not found")
 
 #### spec #### -------------------------------------------------------
 common_plugin_config = [
@@ -456,6 +445,7 @@ while time.time() < timeout and cluster.squeue():
 
 time.sleep(2)
 thr.stop()
+time.sleep(2)
 
 dprompt("Press ENTER to kill ldmsd")
 cluster.all_exec_run("pkill ldmsd")
