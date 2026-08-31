@@ -2501,6 +2501,20 @@ def find_slurm_notifier():
     return items[0]
 
 
+def cont_find_file(dirpath, filename):
+    if not hasattr(G, "args"):
+        raise RuntimeError(f"Must call process_args() before calling this function")
+    _VOL = f"-v ${G.args.prefix}:/opt/ovis:ro" if G.args.prefix is not None else ""
+    cmd = f"docker run --rm {_VOL} {G.args.image} find {dirpath} -name {filename}"
+    rc, out = sp.getstatusoutput(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to find {filename} from the image {G.args.image}: {out}")
+    items = out.splitlines()
+    if not items:
+        raise RuntimeError(f"Failed to find {filename} from the image {G.args.image}: {out}")
+    return items[0]
+
+
 LDMSD_EXE_VER_RE = re.compile(r'LDMSD Version: (\d+).(\d+).(\d+)')
 def ldmsd_version(prefix=None):
     # G.args contains CLI arguments
