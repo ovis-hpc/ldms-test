@@ -19,7 +19,12 @@
 SCRIPT_DIR=$( dirname $0 )
 LOG=${LOG:-${SCRIPT_DIR}/test-all.log}
 
+SUMMARY_DIR=${SUMMARY_DIR:-${SCRIPT_DIR}/summary}
+
 echo "LOG: ${LOG}"
+
+[[ -d ${SUMMARY_DIR} ]] && rm -rf ${SUMMARY_DIR}
+mkdir -p ${SUMMARY_DIR} || exit -1
 
 source ${SCRIPT_DIR}/test-list.sh
 # This defines DIRECT_TEST_LIST, CONT_TEST_LIST, PAPI_CONT_TEST_LIST
@@ -32,16 +37,31 @@ source ${SCRIPT_DIR}/test-list.sh
 
 [[ -z "${FAIL_FAST}" ]] || set -e
 
+cat_summary() {
+	local NAME=$1
+	local RC=$2
+	if [[ "${RC}" == "-" ]]; then
+		S="TESTING"
+	elif (( RC == 0 )); then
+		S="${GREEN}PASSED${RESET}"
+	else
+		S="${RED}FAILED${RESET}"
+	fi
+	echo -e "${NAME}: ${S}" > ${SUMMARY_DIR}/${NAME}
+}
+
 { # printing in this subshell will be logged
 declare -A RCS
 for T in ${LIST[*]}; do
 	echo "======== ${T} ========"
 	CMD="./${T} $@"
 	echo ${CMD}
+	cat_summary ${T} -
 	${CMD}
 	RC=$?
 	RCS["$T"]=${RC}
 	echo "EXIT_CODE: ${RC}"
+	cat_summary ${T} ${RC}
 	sleep 10 # allow some clean-up break between tests
 	echo "----------------------------------------------"
 done
@@ -50,10 +70,12 @@ for T in ${INSIDE_CONT_TEST_LIST[*]}; do
 	echo "======== ${T} ========"
 	CMD="./run_inside_cont_test.py --suite ${T} $@"
 	echo ${CMD}
+	cat_summary ${T} -
 	${CMD}
 	RC=$?
 	RCS["$T"]=${RC}
 	echo "EXIT_CODE: ${RC}"
+	cat_summary ${T} ${RC}
 	sleep 10 # allow some clean-up break between tests
 	echo "----------------------------------------------"
 done
