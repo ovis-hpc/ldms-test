@@ -351,6 +351,7 @@ def __report_int_result_code():
 
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -367,7 +368,7 @@ int main(int argc, char **argv)
     char *name = NULL;
     int level = -1;
     int mode = -1;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'n':
@@ -431,6 +432,7 @@ test.assert_test(INIT_INVALID_MODE, f"return_code={errno.EINVAL}" in out,
 
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -447,7 +449,7 @@ int main(int argc, char **argv)
     char *path;
     char *new;
     path = new = NULL;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'p':
@@ -537,6 +539,7 @@ else:
 # Convert log level mask integer to a string and vice versa
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -554,7 +557,7 @@ int main(int argc, char **argv)
     int op, rc;
     int masks = -1;
     char *s = NULL;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'm':
@@ -625,6 +628,7 @@ test.assert_test(STR2LOGLEVEL_INVALID, int(s) == -22, f"{s} == -22 (expected)")
 # Test the log level threshold
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -642,7 +646,7 @@ int main(int argc, char **argv)
     int op, rc;
     char *masks_s = NULL;
     char *path = NULL;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'm':
@@ -738,7 +742,7 @@ for k in BACK_COMP_VALUES.keys():
     out = cont.read_file(cont_path)
     failed = None
     for l in OLEVEL_NAMES:
-        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k): 
+        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k):
             if l not in out:
                 failed = (l in out, f"'{l}' in '{out}'")
         else:
@@ -752,6 +756,7 @@ for k in BACK_COMP_VALUES.keys():
 # close the log file
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -768,7 +773,7 @@ int main(int argc, char **argv)
 {{
     int op, rc;
     char *path = NULL;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'p':
@@ -834,6 +839,7 @@ else:
 # logrotate
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -852,7 +858,7 @@ int main(int argc, char **argv)
     char *path = NULL;
     char *new_name = NULL;
     char *msg = NULL;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'p':
@@ -935,9 +941,9 @@ def __define_subsys_struct():
 typedef struct subsys_s {
     int return_code;
     ovis_log_t subsys;
-    TAILQ_ENTRY(__subsys) entry;
+    TAILQ_ENTRY(subsys_s) entry;
 } *subsys_t;
-TAILQ_HEAD(subsys_list, subsys);
+TAILQ_HEAD(subsys_list, subsys_s);
 """
     return code
 
@@ -967,7 +973,7 @@ void report_subsys_list(struct subsys_list *list)
 }
 """
     return code
-    
+
 # Test ovis_log_register()
 def __subsys_register_code(subsys_list_var, subsys_var, name, desc):
 
@@ -998,6 +1004,7 @@ def __subsys_register_code(subsys_list_var, subsys_var, name, desc):
 # ovis_log_register_prog.c
 code = f"""\
 #include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/queue.h>
@@ -1102,6 +1109,7 @@ test.assert_test(SUBSYS_REGISTER_EXIST, subsys_list == exp,
 # Test the log level threshold for a subsystem
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -1126,7 +1134,7 @@ int main(int argc, char **argv)
     ovis_log_t subsys = NULL;
     char *path = NULL;
     int mode = SUBSYS_NAME;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'm':
@@ -1228,7 +1236,7 @@ for k in BACK_COMP_VALUES.keys():
     out = cont.read_file(cont_path)
     failed = None
     for l in OLEVEL_NAMES:
-        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k): 
+        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k):
             if l not in out:
                 failed = (l in out, f"'{l}' in '{out}'")
         else:
@@ -1268,7 +1276,7 @@ for k in BACK_COMP_VALUES.keys():
     out = cont.read_file(cont_path)
     failed = None
     for l in OLEVEL_NAMES:
-        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k): 
+        if OLEVEL_NAMES.index(l) >= OLEVEL_NAMES.index(k):
             if l not in out:
                 failed = (l in out, f"'{l}' in '{out}'")
         else:
@@ -1282,6 +1290,7 @@ for k in BACK_COMP_VALUES.keys():
 # Test the log level threshold for a subsystem
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -1304,7 +1313,7 @@ int main(int argc, char **argv)
     const char *subsys_name[10] = {{0}};
     ovis_log_t subsys[10] = {{0}};
     int cnt = 0;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'm':
@@ -1347,7 +1356,7 @@ int main(int argc, char **argv)
         ovis_log(NULL, OVIS_LALWAYS, "result=%d\\n", rc);
         goto out;
     }}
-        
+
 
     for (i = 0; subsys_name[i]; i++) {{
         ovis_log(subsys[i], OVIS_LDEBUG, "DEBUG\\n");
@@ -1407,7 +1416,7 @@ matched = ["xprt", "xprt.zap", "xprt.ldms"]
 not_matched = ["config"]
 cont_path = log_path_get(SET_LOG_LEVEL_BY_REGEX)
 rc, out = ovis_log_set_level_regex_prog(cont, masks = "ERROR", path = cont_path,
-                                        names = matched + not_matched, 
+                                        names = matched + not_matched,
                                         regex_s = "xprt.*")
 if (rc):
     raise Exception(f"Failed to run {prog}")
@@ -1439,6 +1448,7 @@ else:
 # Test ovis_log_list()
 code = f"""\
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
@@ -1462,7 +1472,7 @@ int main(int argc, char **argv)
     int cnt = 0;
     char *name;
     char *level_s;
-    
+
     while ((op = getopt(argc, argv, FMT)) != -1) {{
         switch (op) {{
         case 'n':
@@ -1501,7 +1511,7 @@ int main(int argc, char **argv)
     }} else {{
         FILE *fout = fopen(path, "w");
         fprintf(fout, "%s\\n", s);
-        close(fout);
+        fclose(fout);
     }}
     free(s);
 out:
