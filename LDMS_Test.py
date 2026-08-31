@@ -1287,7 +1287,7 @@ class LDMSDContainer(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def exec_interact(self, cmd):
+    def exec_interact(self, cmd, env=None):
         """[ABSTRACT] Execute `cmd` in the container interactively
 
         Returns

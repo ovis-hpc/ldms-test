@@ -152,14 +152,14 @@ class Container(LDMSDContainer):
             return (rc, out.decode())
         return (rc, out)
 
-    def exec_interact(self, cmd):
+    def exec_interact(self, cmd, env=None):
         """Execute `cmd` in the container with an interactive TTY
 
         Returns a ContainerTTY for communicating to the process spawned from
         `cmd` inside the container.
         """
         (rc, out) = self._exec_run(cmd, stdout=True, stderr=True, stdin=True,
-                                  tty=True, socket=True)
+                                  tty=True, socket=True, environment=env)
         return ContainerTTY(out)
 
     def remove(self, **kwargs):
