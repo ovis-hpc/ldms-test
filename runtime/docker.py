@@ -657,6 +657,7 @@ class DockerCluster(LDMSDCluster):
                             break
                 except:
                     pass
+                cont_env.setdefault("PYTHON_BASIC_REPL", "1")
                 cont_param = dict(
                         image = cont_image,
                         name = cont_name,
