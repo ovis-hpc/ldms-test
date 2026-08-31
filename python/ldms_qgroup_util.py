@@ -12,7 +12,7 @@ class QGROUP(object): # a place to statically hold config params
     CFG_ASK_USEC = 100000 # 0.1 SEC
     CFG_RESET_USEC = 1000000 # 1 SEC
 
-RE = re.compile("""
+RE = re.compile(r"""
         (?P<ts>[^ ]+\ [^ ]+) # timestamp
         \ (?P<logger>\w+)
         \ (?P<level>\w+)
