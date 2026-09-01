@@ -559,17 +559,17 @@ static void test_json_entity_dump(test_t suite)
 
 static void test_json_parse_buffer(test_t suite)
 {
-	json_entity_t d, o, *exp;
+	json_entity_t d, o, *exp, v;
 	json_parser_t p;
 	int rc, type, assert_no;
 	int cnt = ASSERT_NO_PARSE_BUFFER_NULL - ASSERT_NO_PARSE_BUFFER_INT + 1;
 
 	char *txt[] = {
-		[INT_VALUE]		= "1",
-		[BOOL_FALSE_VALUE]	= "false",
-		[BOOL_TRUE_VALUE]	= "true",
-		[FLOAT_VALUE]		= "1.100000",
-		[STRING_VALUE]		= "\"foo\"",
+		[INT_VALUE]		= "[1]",
+		[BOOL_FALSE_VALUE]	= "[false]",
+		[BOOL_TRUE_VALUE]	= "[true]",
+		[FLOAT_VALUE]		= "[1.100000]",
+		[STRING_VALUE]		= "[\"foo\"]",
 		[ATTR_VALUE]		= NULL,
 		[LIST_VALUE]		= "[1,false,	1.100000,   \"foo\",[],\n{},null]",
 		[DICT_VALUE]		= "{\"int\":1,\n" \
@@ -580,7 +580,7 @@ static void test_json_parse_buffer(test_t suite)
 					   "\"dict\"	:	{\"attr_1\":\"value_1\"}," \
 					   "\"null\":	null" \
 					   "}",
-		[NULL_VALUE]		= "null",
+		[NULL_VALUE]		= "[null]",
 	};
 
 	exp = CREATE_EXPECTED_ENTITY(-1);
@@ -593,8 +593,20 @@ static void test_json_parse_buffer(test_t suite)
 		p = json_parser_new(0);
 		assert(p);
 		rc = json_parse_buffer(p, txt[type], strlen(txt[type]), &o);
+		if (o) {
+			switch (type) {
+			case LIST_VALUE:
+			case DICT_VALUE:
+				/* no-op */
+				v = o;
+				break;
+			default:
+				/* de-list */
+				v = json_item_first(o);
+			}
+		}
 		tada_assert(suite, assert_no,
-				(0 == rc) && is_same_entity(exp[type], o),
+				(0 == rc) && is_same_entity(exp[type], v),
 				"(0 == json_parse_buffer()) && "
 				"is_same_entity(expected, o)");
 
@@ -766,7 +778,7 @@ static void test_dict_build(test_t suite)
 static void test_dict_merge(test_t suite)
 {
 	int rc;
-	json_entity_t *exp, d1, d2, a;
+	json_entity_t *exp, d1, d2, a, v;
 
 	exp = CREATE_EXPECTED_ENTITY(DICT_VALUE);
 	assert(exp);
@@ -797,9 +809,11 @@ static void test_dict_merge(test_t suite)
 	assert(d2);
 
 	for (a = json_attr_first(d2); a; a = json_attr_next(a)) {
+		v = json_entity_copy(json_attr_value(a));
+		assert(v);
 		rc = json_attr_add(exp[DICT_VALUE],
 				json_attr_name(a)->str,
-				json_attr_value(a));
+				v);
 		assert(0 == rc);
 	}
 
