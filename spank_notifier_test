@@ -14,7 +14,7 @@ import TADA
 
 from LDMS_Test import LDMSDCluster, LDMSDContainer, \
                       add_common_args, process_args, cond_timedwait, \
-                      debug_prompt
+                      debug_prompt, find_slurm_notifier
 
 logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
                     level = logging.INFO)
@@ -27,7 +27,8 @@ CPU_PER_NODE = 4
 NUM_NODES = 8
 OVERSUBSCRIBE = "FORCE" # NO, YES, or FORCE -- see slurm cons_res_share
 
-spec = {
+def get_spec():
+    return {
     "name" : "TO-BE-REPLACED",
     "description" : "spank_notifier_test cluster",
     "type" : "NA",
@@ -49,7 +50,7 @@ spec = {
             "plugstack" : [
                 {
                     "required" : True,
-                    "path" : "%libdir%/ovis-ldms/libslurm_notifier.so",
+                    "path" : f"{SLURM_NOTIFIER}",
                     "args" : [
                         "auth=none",
                         "port=20000",
@@ -86,8 +87,7 @@ spec = {
     "oversubscribe" : OVERSUBSCRIBE,
     "cap_add": [ "SYS_PTRACE" ],
     "image": "ovis-centos-build",
-    "libdir": "/opt/ovis/lib64",
-}
+    }
 
 def make_dict_from_out(out):
     env = out.split('\n')
@@ -103,11 +103,6 @@ def remove_job_out(cluster):
     rc, out = cont.exec_run("bash -c 'rm -f /db/slurm*.out'")
     rc, out = cont.exec_run("bash -c 'rm -f /db/spank*.out'")
     rc, out = cont.exec_run("bash -c 'rm -f /db/crash*.out'")
-
-def get_mount_libdir(prefix, mount_prefix):
-    if os.path.exists(prefix + "/lib64"):
-        return mount_prefix + "/lib64"
-    return mount_prefix + "/lib"
 
 def submit_job(cluster, num_tasks):
     cont = cluster.get_container("headnode")
@@ -213,13 +208,15 @@ if __name__ == "__main__":
         exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
     parser = argparse.ArgumentParser(description="Run an FVT test")
     add_common_args(parser)
-    parser.add_argument("--libdir",
-                        help="The directory where the test target is installed.",
-                        default="__find_from_prefix__")
+    parser.add_argument("--slurm-notifier", type = str,
+                default = "__find_from_prefix__",
+                help = "The path (in container) to slurm_notifier library." )
     args = parser.parse_args()
     process_args(args)
+    SLURM_NOTIFIER = find_slurm_notifier()
 
     COMMIT_ID = args.commit_id
+    spec = get_spec()
     spec["name"] = args.clustername
     spec["image"] = args.image
 
@@ -290,9 +287,6 @@ if __name__ == "__main__":
     if args.src:
         spec['mounts'].append("{src}:{src}:rw".format(src=args.src))
     # modify slurm_notifier path in spec
-    if args.libdir == "__find_from_prefix__":
-        args.libdir = get_mount_libdir(args.prefix, "/opt/ovis")
-    spec["libdir"] = args.libdir
     try:
         cluster = LDMSDCluster.get(spec["name"], create=False, spec = spec)
         cluster.remove()
@@ -336,9 +330,7 @@ if __name__ == "__main__":
         cont = cluster.get_container(name)
         cont.start_munged()
         cont.prep_slurm_conf()
-        cont.write_file("/etc/slurm/plugstack.conf",
-                "required {libdir}/ovis-ldms/libslurm_notifier.so foo=bar" \
-                .format(libdir=args.libdir))
+        cont.write_file("/etc/slurm/plugstack.conf", f"required {SLURM_NOTIFIER} foo=bar" )
         cont.exec_run("slurmd")
     if not cond_timedwait(_slurm_running, timeout=20):
         log.info("Starting slurm ... timed out")
@@ -468,17 +460,15 @@ if __name__ == "__main__":
         if rc == False:
             log.info("File checking timed out")
     for cont in slurmd_containers:
-        f = '/db/spank_stream_{node}.out'.format(node=cont.hostname)
-        cmd = 'grep \'^data: \' {}'.format(f)
-        rc, data = cont.exec_run(cmd)
-        events = data.split('data:')
+        path = f"{args.data_root}/spank_stream_{cont.hostname}.out"
+        f = open(path)
+        buf = f.read()
         event_list = []
-        for event in events:
-            if len(event) == 0:
-                continue
-            decoder = json.JSONDecoder()
-            d, pos = decoder.raw_decode(event.strip())
-            e = d
+        pos = 0
+        decoder = json.JSONDecoder()
+        while pos < len(buf):
+            e, pp = decoder.raw_decode(buf[pos:])
+            pos += pp
             e['hostname'] = cont.hostname # also tag hostname in the event
             event_list.append(e)
             all_events.append(e)
