@@ -387,7 +387,7 @@ send_request(node_1, cmd = "advertiser_start name=node-1")
 time.sleep(0.5) # Make sure that the advertiser was started before the prdcr_listen
 # Start prdcr_listen on agg11
 send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
-time.sleep(RECONNECT_US/1000000.0*2) # Give agg11 to start prdcr_listen
+time.sleep(2+RECONNECT_US/1000000.0*2) # Give agg11 to start prdcr_listen
 
 exp_prdcr_node_1 = [get_exp_prdcr(name = get_prdcr_name("node-1"), host = 'node-1', state = "CONNECTED",
                                  sets = [{'schema' : s, 'state' : 'READY'} for s in SAMPLER_PI])
@@ -401,7 +401,7 @@ send_request(node_2, cmd = "advertiser_start name=node-2")
 exp_prdcr_node_2 = [get_exp_prdcr(name=get_prdcr_name("node-2"), host='node-2', state="CONNECTED",
                                  sets=[{'schema':s, 'state':'READY'} for s in SAMPLER_PI])
                    ]
-time.sleep(RECONNECT_US/1000000.0*2 + UPDATE_US/1000000.0)
+time.sleep(2+RECONNECT_US/1000000.0*2 + UPDATE_US/1000000.0)
 test.assert_test("start_2", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Advertised producer 'node-2' exists on agg11 and is in the correct state.")
 node_2_set_names = [f'node-1/{p}' for p in SAMPLER_PI] + [f'node-2/{p}' for p in SAMPLER_PI]
 test.assert_test("agg21-aggregation-2", verify_sets(agg21, node_2_set_names, exist = True), f'{node_2_set_names} exist on agg21')
@@ -424,10 +424,10 @@ test.assert_test("sampler-revive-2", verify_sets(agg21, node_1_set_names, exist 
 agg11.kill_ldmsd()
 time.sleep(0.2)
 test.assert_test("agg21-remove-sets-2", verify_sets(agg21, node_1_set_names, exist=False), f"agg21 doesn't have {node_1_set_names}.")
-time.sleep(RECONNECT_US/1000000 + 1)
+time.sleep(2+RECONNECT_US/1000000 + 1)
 agg11.start_ldmsd()
 send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
-time.sleep(RECONNECT_US/1000000 + 1)
+time.sleep(2+RECONNECT_US/1000000 + 1)
 test.assert_test("agg11-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 connected to ldmsd on node-1.")
 time.sleep(0.5)
 test.assert_test("agg11-revive-2", verify_sets(agg21, node_1_set_names + node_2_set_names, exist = True), f"agg21 collects the sets from agg11.")
@@ -447,7 +447,7 @@ test.assert_test("prdcr_listen_not_start",
                                      node_3_set_names + node_4_set_names, exist = False),
                   "Agg12 doesn't collect any sets.")
 send_request(agg12, cmd = "prdcr_listen_start name=limit_hostname")
-time.sleep(RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
+time.sleep(2+RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
 exp_prdcr_node_3 = [get_exp_prdcr(name=get_prdcr_name("node-3"), host='node-3', state="CONNECTED",
                                   sets=[{'schema': s, 'state':'READY'}
                     for s in SAMPLER_PI])
@@ -458,7 +458,7 @@ exp_prdcr_node_4 = [get_exp_prdcr(name=get_prdcr_name("node-4"), host='node-4', 
                    ]
 test.assert_test("prdcr_listen_limit_hostname", verify_prdcr(agg12, exp_prdcr_node_3), "Agg12 collects sets from node-3.")
 send_request(agg12, cmd = "prdcr_listen_start name=limit_ip")
-time.sleep(RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
+time.sleep(2+RECONNECT_US/1000000 * 2 + UPDATE_US/1000000)
 test.assert_test("prdcr_listen_limit_ip", verify_prdcr(agg12, exp_prdcr_node_3 + exp_prdcr_node_4), "Agg12 collects sets from node-4.")
 
 # Check advertiser status
@@ -513,6 +513,7 @@ test.assert_test("prdcr_listen_status-2", pl_agg12 == exp_pl_agg12, f"{pl_agg12}
 
 # Restarting advertised producer
 send_request(agg12, cmd = f"prdcr_stop name={get_prdcr_name('node-3')}")
+time.sleep(2)
 exp_prdcr_node_3_standby = [get_exp_prdcr(name=get_prdcr_name("node-3"), host='node-3', state="STANDBY",
                                   sets=[])
                    ]
@@ -521,7 +522,7 @@ test.assert_test("restart_advertised_prdcr-1",
                   "Advertised producer is in STANDBY as expected.")
 
 send_request(agg12, cmd = f"prdcr_start name={get_prdcr_name('node-3')}")
-time.sleep(UPDATE_US/1000000)
+time.sleep(2+UPDATE_US/1000000)
 test.assert_test("restart_advertised_prdcr-2",
                   verify_prdcr(agg12, exp_prdcr_node_3 + exp_prdcr_node_4),
                   "Advertised producer is in CONNECTED as expected")
