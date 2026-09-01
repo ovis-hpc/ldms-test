@@ -415,6 +415,7 @@ rc, out = set_sec_mod(cont_smplr, regex = f"^{SNAME}$", perm = PERM)
 test.assert_test(INVALID_PERM_NO, rc == errno.EINVAL, f"errcode ({rc}) == expected ({errno.EINVAL})")
 
 # Verify the agg got sets' new security parameters
+sleep(2) # give some time for agg to update
 cont_agg = cluster.get_container("agg")
 result = sec_param_get(ldms_ls_none(cont_agg), None)
 exp = {}
@@ -442,7 +443,7 @@ exp.update(exp_new('set_3', uid = "2222"))
 exp.update(exp_new('set_4'))
 exp.update(exp_new('set_6'))
 exp.update(exp_new('set_8'))
-exp.update(exp_new('set_10')) 
+exp.update(exp_new('set_10'))
 test.assert_test(CLIENT_ACCESS_NO_1, result == exp, f"{result} == {exp}")
 
 # Different UID, Different group
