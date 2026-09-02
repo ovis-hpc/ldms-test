@@ -775,7 +775,7 @@ class DockerCluster(LDMSDCluster):
             # Try looking into the image
             dc = docker.from_env()
             try:
-                out = dc.containers.run(image, command="/bin/bash -c 'ls -d /opt/ovis/lib*/python3.*/site-packages'", remove=True)
+                out = dc.containers.run(image, command="/bin/bash -c 'ls -d /opt/ovis/lib*/python3.*/*-packages'", remove=True)
                 _PYTHONPATH = ':'.join(out.decode().splitlines())
             except:
                 pass
