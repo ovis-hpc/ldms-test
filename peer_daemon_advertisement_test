@@ -384,7 +384,7 @@ time.sleep(1)
 
 # Start advertiser on node-1
 send_request(node_1, cmd = "advertiser_start name=node-1")
-time.sleep(0.5) # Make sure that the advertiser was started before the prdcr_listen
+time.sleep(1) # Make sure that the advertiser was started before the prdcr_listen
 # Start prdcr_listen on agg11
 send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
 time.sleep(2+RECONNECT_US/1000000.0*2) # Give agg11 to start prdcr_listen
@@ -408,28 +408,29 @@ test.assert_test("agg21-aggregation-2", verify_sets(agg21, node_2_set_names, exi
 
 # Kill ldmsd on node-1
 nodes[0].kill_ldmsd()
-time.sleep(0.2)
+time.sleep(1)
 test.assert_test("agg11-remove-sets-1", verify_sets(agg11, node_1_set_names, exist = False), f"agg11 doesn't have {node_1_set_names}.")
 test.assert_test("agg21-remove-sets-1", verify_sets(agg21, node_1_set_names, exist = False), f"agg21 doesn't have {node_1_set_names}.")
 
 # Revive ldmsd on node-1 and start the advertisement
-time.sleep(0.5)
 nodes[0].start_ldmsd()
+time.sleep(2)
 send_request(nodes[0], cmd = "advertiser_start name=node-1")
-time.sleep(1)
+time.sleep(2)
 test.assert_test("sampler-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 starts updating node-1's sets after node-1's ldmsd gets revived.")
 test.assert_test("sampler-revive-2", verify_sets(agg21, node_1_set_names, exist = True), "Agg21 starts updating node-1's sets after node-1's ldmsd gets revived.")
 
 # kill L1
 agg11.kill_ldmsd()
-time.sleep(0.2)
+time.sleep(1)
 test.assert_test("agg21-remove-sets-2", verify_sets(agg21, node_1_set_names, exist=False), f"agg21 doesn't have {node_1_set_names}.")
 time.sleep(2+RECONNECT_US/1000000 + 1)
 agg11.start_ldmsd()
+time.sleep(2)
 send_request(agg11, cmd = "prdcr_listen_start name=wildcard")
 time.sleep(2+RECONNECT_US/1000000 + 1)
 test.assert_test("agg11-revive-1", verify_prdcr(agg11, exp_prdcr_node_1 + exp_prdcr_node_2), "Agg11 connected to ldmsd on node-1.")
-time.sleep(0.5)
+time.sleep(1)
 test.assert_test("agg11-revive-2", verify_sets(agg21, node_1_set_names + node_2_set_names, exist = True), f"agg21 collects the sets from agg11.")
 
 # Multiple prdcr_listen on agg12
@@ -439,7 +440,7 @@ CIDR = node_4_cidr = node_4.ip_addr.rsplit('.', 1)[0] + '.0' + '/8'
 send_request(agg12, cmd = f"prdcr_listen_add name=limit_ip ip={node_4_cidr}")
 send_request(node_3, cmd = "advertiser_start name=node-3")
 send_request(node_4, cmd = "advertiser_start name=node-4")
-time.sleep(0.5)
+time.sleep(1)
 node_3_set_names = [f"node-3/{s}" for s in SAMPLER_PI]
 node_4_set_names = [f"node-4/{s}" for s in SAMPLER_PI]
 test.assert_test("prdcr_listen_not_start",
