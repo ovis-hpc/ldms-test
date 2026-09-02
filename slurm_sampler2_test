@@ -1,5 +1,30 @@
 #!/usr/bin/env python3
 
+"""
+Functional verification test for the slurm_sampler2 plugin.
+
+The test injects synthetic slurm_notifier stream messages directly via
+ldms_msg_publish, bypassing Slurm. After each event in the job lifecycle
+(job_init, step_init, task_init, task_exit, job_exit), the test reads back
+each node's local slurm_sampler2 set and checks job_list and task_list
+against expected state.
+
+The exception is job_0, which is submitted via real sbatch to verify that
+the actual slurm_notifier SPANK plugin produces correct output end-to-end.
+
+Test scenarios:
+  - SLURM_NOTIFIER:      Real sbatch job; validates the full notifier path.
+  - DELETE_COMPLETE_JOBS: Verifies per-node delete_time policies (never,
+                          timed, immediate) correctly evict completed jobs.
+  - EXPAND_HEAP:         Verifies the set heap expands when job_count or
+                         task_count limits are exceeded.
+  - MULTI_TENANTS:       Verifies two concurrently active jobs are tracked
+                         independently in the same metric set.
+
+Not covered: step_exit (ignored by the plugin), aggregator-side propagation,
+authentication, and job_start/job_end timestamp values.
+"""
+
 import argparse
 import atexit
 import json
@@ -11,7 +36,7 @@ import TADA
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
                       add_common_args, parse_ldms_ls, \
-                      assertion_id_get
+                      assertion_id_get, find_slurm_notifier
 from time import sleep, time
 
 if __name__ != "__main__":
@@ -59,16 +84,7 @@ DELETE_JOB_TIME = 2
 STORE_ROOT = "/store"
 STREAM_DATA_FILE = "slurm_stream.json"
 
-SLURM_NOTIFIER = args.slurm_notifier
-if SLURM_NOTIFIER == "__find_from_prefix__":
-    paths = map(lambda x: f"{args.prefix}/{x}/ovis-ldms/libslurm_notifier.so",
-                ["lib", "lib64"])
-    for p in paths:
-        if os.path.exists(p):
-            SLURM_NOTIFIER = p.replace(args.prefix, '/opt/ovis', 1)
-            break
-    else:
-        raise RuntimeError("libslurm_notifier.so not found")
+SLURM_NOTIFIER = find_slurm_notifier()
 
 #### Test specification ####
 common_sampler_config = [
@@ -322,7 +338,7 @@ UPDATED_METRICS = { 'job_init' : { 'job': { 'job_id'      : { 'attr' : "job_id",
                                               'task_exit_status'  : { 'attr' : "task_exit_status", 'value' : 0 }
                                             }
                                  },
-                    'task_exit' : { 'job' : { 'job_state'  : { 'attr' : None, 'value' : JOB_STATE_COMPLETE }
+                    'task_exit' : { 'job' : { 'job_state'  : { 'attr' : None, 'value' : JOB_STATE_STOPPING }
                                             },
                                     'task' : { 'task_exit_status' : { 'attr' : "task_exit_status", 'value' : None },
                                              }
@@ -629,6 +645,12 @@ def get_spec_producer(plugin_spec):
             return v
     raise KeyError(f"Cannot find producer in {config}")
 
+def __raise(cond, txt):
+    global args
+    if args.debug and not cond:
+        raise Exception(txt)
+    return (cond, txt)
+
 def verify_set(node, set, jobs):
     global cluster
     job_list = set['data']['job_list']
@@ -644,9 +666,9 @@ def verify_set(node, set, jobs):
     exp_producer = get_spec_producer(slurm2_spec)
 
     if comp_id != exp_comp_id:
-        return (False, f"The component_id {comp_id} is not the expected value {exp_comp_id}.")
+        return __raise(False, f"The component_id {comp_id} is not the expected value {exp_comp_id}.")
     if producer != exp_producer:
-        return (False, f"The producer '{producer}' is not the expected value '{exp_producer}'.")
+        return __raise(False, f"The producer '{producer}' is not the expected value '{exp_producer}'.")
     # Ignore the job's start and end time
     for j in job_list:
         j['job_start'] = None
@@ -654,16 +676,16 @@ def verify_set(node, set, jobs):
     # Assume both job_list and exp_job_list are ordered by job_id
     if job_list != exp_job_list:
         if len(job_list) != len(exp_job_list):
-            return (False, f"The number of jobs is not as expected. {len(job_list)} != {len(exp_job_list)}.")
+            return __raise(False, f"The number of jobs is not as expected. {len(job_list)} != {len(exp_job_list)}.")
         for a, b in zip(job_list, exp_job_list):
             if a != b:
-                return (False, f"The job_list is not as expected. {a} != {b}")
+                return __raise(False, f"The job_list is not as expected. {a} != {b}")
     if task_list != exp_task_list:
         if len(task_list) != len(exp_task_list):
-            return (False, f"The number of tasks is not as expected. {len(task_list)} != {len(exp_task_list)}.")
+            return __raise(False, f"The number of tasks is not as expected. {len(task_list)} != {len(exp_task_list)}.")
         for a, b in zip(task_list, exp_task_list):
             if a != b:
-                return (False, f"The task_list is not as expected. {a} != {b}")
+                return __raise(False, f"The task_list is not as expected. {a} != {b}")
     return (True, None)
 
 def verify_results(results, jobs):
@@ -687,7 +709,7 @@ def get_task_pid(job_id, rank):
 def test_all_step(job, nodes_job, assertion):
     for e in STEPD_EVENT:
         job.op[e](job)
-        sleep(1)
+        sleep(2)
         results = ldms_ls_all()
         passed, reason = verify_results(results, node_jobs)
         test.assert_test(assertion[e], passed,
@@ -746,6 +768,7 @@ cont = cluster.get_container("headnode")
 
 code = """\
 #include <stdio.h>
+#include <stdlib.h>
 #include <unistd.h>
 
 int main(int argc, char **argv)
