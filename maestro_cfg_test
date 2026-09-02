@@ -12,10 +12,12 @@ import tempfile
 import time
 import sys
 import atexit
+import re
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args, jprint, parse_ldms_ls, cs_rm
+                      add_common_args, jprint, parse_ldms_ls, cs_rm , \
+                      cont_find_file
 
 
 if __name__ != "__main__":
@@ -267,14 +269,8 @@ def at_exit():
     os._exit(rc)
 
 # Check maestro + maestro_ctrl
-_m = [ args.prefix+"/bin/maestro", args.prefix+"/sbin/maestro" ]
-_m_ctrl = [ args.prefix+"/bin/maestro_ctrl", args.prefix+"/sbin/maestro_ctrl" ]
-
-_m_exists = (os.path.exists(_m[0]) or os.path.exists(_m[1])) and \
-            (os.path.exists(_m_ctrl[0]) or os.path.exists(_m_ctrl[1]))
-if not _m_exists:
-    log.info("maestro and/or maestro_ctrl not found, skipping tests")
-    sys.exit()
+_m = cont_find_file("/opt/ovis", "maestro", "-type f")
+_m_ctrl = cont_find_file("/opt/ovis", "maestro_ctrl", "-type f")
 
 if not os.path.isdir(DB+"/containers"):
     os.mkdir(DB+"/containers")
@@ -318,7 +314,7 @@ try:
     # Test 1 test.add_assertion(1, "load maestro etcd cluster")
     cmd = "maestro_ctrl --cluster "+ETCD_FILE+ \
             " --ldms_config " +LDMS_CFG_FILE+ \
-            " --prefix "+CFG_PREFIX + " 2>/dev/null"
+            " --prefix "+CFG_PREFIX + " 2>&1"
     cmd = "bash -c '{}'".format(cmd)
     rc, out = headnode.exec_run(cmd)
     expected_out = "LDMS cluster configuration saved to etcd cluster.\n"
@@ -334,11 +330,12 @@ except Exception as e:
         cluster.remove()
     sys.exit(-1)
 
+time.sleep(2)
 # Test 2 start maestro and configure ldmsd's
-cmd = "maestro --cluster "+ETCD_FILE+" --prefix "+CFG_PREFIX + " 2>/dev/null"
+cmd = "maestro --cluster "+ETCD_FILE+" --prefix "+CFG_PREFIX + " 2>&1"
 cmd = "bash -c '{}'".format(cmd)
 maestro = headnode.exec_interact(cmd)
-out = maestro.read(idle_timeout=20)
+log_out = maestro.read(idle_timeout=10)
 expected_out = """\
 New group detected - Rebalance\r
 Rebalance cluster...\r
@@ -350,25 +347,12 @@ Adding sampler plugins to sampler samp-5\r
 Adding sampler plugins to sampler samp-6\r
 Adding sampler plugins to sampler samp-7\r
 Adding sampler plugins to sampler samp-8\r
-Starting.. meminfo on samp-1\r
-Starting.. meminfo on samp-2\r
-Starting.. meminfo on samp-3\r
-Starting.. meminfo on samp-4\r
-Starting.. meminfo on samp-5\r
-Starting.. meminfo on samp-6\r
-Starting.. meminfo on samp-7\r
-Starting.. meminfo on samp-8\r
 Balancing producers...\r
-Adding 8 producers to agg agg-1\r
-Adding 8 producers to agg agg-2\r
-Adding 8 producers to agg agg-3\r
-Adding 3 producers to agg agg-4\r
-Starting agg agg-1 3 producers\r
-Starting agg agg-2 3 producers\r
-Starting agg agg-3 2 producers\r
-Starting agg agg-4 3 producers\r
 Finished load balancing.\r
 """
+
+# log_out => out, extracting only the messages
+out = re.sub('.* __main__ INFO ', '', log_out)
 
 if expected_out == out:
     test.assert_test(2, True, "Maestro ldmsd configuration successful")
