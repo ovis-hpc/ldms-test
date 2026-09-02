@@ -35,7 +35,7 @@ import tempfile
 
 from distutils.spawn import find_executable
 from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
-                      add_common_args
+                      add_common_args, cont_find_file
 
 
 if __name__ != "__main__":
@@ -313,7 +313,7 @@ def get_maestro_state_tbl():
 def start_maestro(cont):
     """Start a maestro daemon on the container `cont`"""
     maestro_cmd = f"bash -c 'maestro --debug --cluster {ETCD_FILE} --prefix {CFG_PREFIX} " \
-                  f" >/var/log/maestro.log 2>&1 &'"
+                  f"--log-level debug >/var/log/maestro.log 2>&1 &'"
     rc, out = cont.exec_run(maestro_cmd)
     assert(rc == 0)
 
@@ -336,14 +336,8 @@ def at_exit():
     os._exit(rc)
 
 # Check maestro + maestro_ctrl
-_m = [ args.prefix+"/bin/maestro", args.prefix+"/sbin/maestro" ]
-_m_ctrl = [ args.prefix+"/bin/maestro_ctrl", args.prefix+"/sbin/maestro_ctrl" ]
-
-_m_exists = (os.path.exists(_m[0]) or os.path.exists(_m[1])) and \
-            (os.path.exists(_m_ctrl[0]) or os.path.exists(_m_ctrl[1]))
-if not _m_exists:
-    log.info("maestro and/or maestro_ctrl not found, skipping tests")
-    sys.exit()
+_m = cont_find_file("/opt/ovis", "maestro", "-type f")
+_m_ctrl = cont_find_file("/opt/ovis", "maestro_ctrl", "-type f")
 
 if not os.path.isdir(DB+"/containers"):
     os.mkdir(DB+"/containers")
