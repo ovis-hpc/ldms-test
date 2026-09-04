@@ -2515,6 +2515,22 @@ def cont_find_file(dirpath, filename, find_options=""):
     return items[0]
 
 
+def cont_find(dirpath:str, find_options:str):
+    if not hasattr(G, "args"):
+        raise RuntimeError(f"Must call process_args() before calling this function")
+    if not dirpath:
+        raise ValueError("dirpath is required")
+    if not find_options:
+        raise ValueError("find_options is required")
+    _VOL = f"-v ${G.args.prefix}:/opt/ovis:ro" if G.args.prefix is not None else ""
+    cmd = f"docker run --rm {_VOL} {G.args.image} find {dirpath} {find_options}"
+    rc, out = sp.getstatusoutput(cmd)
+    if rc:
+        raise RuntimeError(f"Failed to find {filename} from the image {G.args.image}: {out}")
+    items = out.splitlines()
+    return items
+
+
 LDMSD_EXE_VER_RE = re.compile(r'LDMSD Version: (\d+).(\d+).(\d+)')
 def ldmsd_version(prefix=None):
     # G.args contains CLI arguments
