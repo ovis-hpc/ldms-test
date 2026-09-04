@@ -11,7 +11,7 @@ from time import sleep
 
 import TADA
 from LDMS_Test import process_args, add_common_args, \
-                      LDMSDCluster, ContainerTest
+                      LDMSDCluster, ContainerTest, cont_find
 
 LDMS_TEST_SRC = "/tada-src"
 CONTAINER_DATA_ROOT_PATH = "/db"
@@ -56,14 +56,9 @@ def __debug(cont):
     sleep(1.0)
     out = pyt.read(idle_timeout = 0.1)
 
-def get_ovis_pythonpath_cont(host_prefix):
-    for root, dirs, files in os.walk(f"{host_prefix}/lib/"):
-        for d in dirs:
-            if "python" not in d:
-                continue
-            path = f"{host_prefix}/lib/{d}/site-packages"
-            if os.path.exists(f"{path}/ldmsd"):
-                return f"/opt/ovis/lib/{d}/site-packages"
+def get_ovis_pythonpath_cont():
+    dirs = cont_find("/opt/ovis", "-type d -name '*-packages'")
+    return ':'.join(dirs)
 
 def run_suite(suite):
     global args
@@ -82,7 +77,7 @@ def run_suite(suite):
     if "env" not in spec.keys():
         spec["env"] = {}
     spec["env"]["TADA_ADDR"] = args.tada_addr
-    spec["env"]["PYTHONPATH"] = f"{LDMS_TEST_SRC}:{get_ovis_pythonpath_cont(spec['ovis_prefix'])}"
+    spec["env"]["PYTHONPATH"] = f"{LDMS_TEST_SRC}:{get_ovis_pythonpath_cont()}"
     if "mounts" not in spec.keys():
         spec["mounts"] = []
     spec["mounts"] += args.mount + ([f"{args.src}:{args.src}:ro"] if args.src else []) + \
