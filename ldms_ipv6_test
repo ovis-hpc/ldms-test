@@ -274,7 +274,7 @@ time.sleep(2)
 
 LOCAL = LdmsAddr()
 
-ADDR_RE = re.compile("Address\s+:\s+([^\n]+)\n")
+ADDR_RE = re.compile(r"Address\s+:\s+([^\n]+)\n")
 
 # test.add_assertion( 1, "ldms_ls to samp using IPv6")
 rc1, out1 = agg2.exec_run("ldms_ls -h samp -vv")
