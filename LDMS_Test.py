@@ -956,8 +956,8 @@ class ControllerPty(object):
 class MsgData(object):
     """MsgData representation"""
 
-    __slots__ = ('name', 'src', 'tid', 'uid', 'gid', 'perm', 'is_json', 'data')
-    __cmp_fields__ = ('name', 'src', 'uid', 'gid', 'perm', 'is_json', 'data')
+    __slots__ = ('msg_tag', 'src', 'tid', 'uid', 'gid', 'perm', 'is_json', 'data', 'raw_data', 'type')
+    __cmp_fields__ = ('msg_tag', 'src', 'uid', 'gid', 'perm', 'is_json', 'data', 'type')
     # cmp_fields omitted 'tid'
 
     def __init__(self, *args, **kwargs):

@@ -345,8 +345,8 @@ subdata = [ pysub.cmd("scli.get_data()") for i in range(0, 5) ]
 subobjs = [ eval(o) if o else None for o in subdata ]
 
 EXPECTED_OBJS = [
-        MsgData(name='new_string', is_json=0, data='some string'),
-        MsgData(name='new_json', is_json=1, data={'new': 'json'}),
+        MsgData(msg_tag='new_string', is_json=0, data='some string'),
+        MsgData(msg_tag='new_json', is_json=1, data={'new': 'json'}),
         None,
         None,
         None
@@ -384,7 +384,7 @@ test.assert_test(2, a2_recs == ERECS, "")
 
 # The old stream shall not reach the new subscriber
 for o in subobjs:
-    if o and 'old' in o.name:
+    if o and 'old' in o.msg_tag:
         # found old stream ...
         test.assert_test(3, False, "Found 'old' stream in the new subscriber, obj: {o}")
         break
@@ -440,7 +440,7 @@ while True: # will break
 # test.add_assertion(12, "Check msg_stats after stream data transfer")
 while True: # will break
     EXPECTED_NAMES = set(["new_json", "new_string"])
-    names = set([ o["name"] for o in ss1])
+    names = set([ o["msg_tag"] for o in ss1])
     if names != EXPECTED_NAMES:
         test.assert_test(12, False, f"bad msg_stats data: {ss1}")
         break
@@ -470,7 +470,7 @@ while True: # will break
     if break0:
         break
     # check stream stats
-    data = set( (o['name'], o['rx']['bytes'], o['rx']['count']) for o in ss1 )
+    data = set( (o['msg_tag'], o['rx']['bytes'], o['rx']['count']) for o in ss1 )
     EXPECTED = set([
                 ("new_json",   15, 1),
                 ("new_string", 11, 1),
@@ -488,15 +488,15 @@ def client_xtract(c):
     obj = dict()
     obj['tx'] = dict_filter(c['tx'], ['bytes', 'count'])
     obj['drops'] = dict_filter(c['drops'], ['bytes', 'count'])
-    channels = list()
-    for s in c['channels']:
+    tags = list()
+    for s in c['tags']:
         _s = dict()
-        _s['name'] = s['name']
+        _s['msg_tag'] = s['msg_tag']
         _s['tx'] = dict_filter(s['tx'], ['bytes', 'count'])
         _s['drops'] = dict_filter(s['drops'], ['bytes', 'count'])
-        channels.append(_s)
-    channels.sort(key = lambda o: o['name'])
-    obj['channels'] = channels
+        tags.append(_s)
+    tags.sort(key = lambda o: o['msg_tag'])
+    obj['tags'] = tags
     return obj
 
 # test.add_assertion(13, "Check msg_client_stats after stream data transfer")
@@ -511,14 +511,14 @@ while True: # will break
     EXPECTED = {
             'tx': {'bytes': 26, 'count': 2},
             'drops': {'bytes': 0, 'count': 0},
-            'channels': [
+            'tags': [
                 {
-                    'name': 'new_json',
+                    'msg_tag': 'new_json',
                     'tx': {'bytes': 15, 'count': 1},
                     'drops': {'bytes': 0, 'count': 0},
                 },
                 {
-                    'name': 'new_string',
+                    'msg_tag': 'new_string',
                     'tx': {'bytes': 11, 'count': 1},
                     'drops': {'bytes': 0, 'count': 0},
                 },
