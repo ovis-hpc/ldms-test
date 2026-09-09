@@ -153,8 +153,7 @@ static json_entity_t *CREATE_EXPECTED_ENTITY(enum value_e type)
 			exp[i] = json_entity_new(doc, JSON_STRING_VALUE, "foo", 3);
 			break;
 		case ATTR_VALUE:
-			v = json_entity_new(doc, JSON_STRING_VALUE, "foo", 3);
-			exp[i] = json_entity_new(doc, JSON_ATTR_VALUE, "name", v);
+			exp[i] = NULL;
 			break;
 		case LIST_VALUE:
 			exp[i] = json_entity_new(doc, JSON_LIST_VALUE);
@@ -420,9 +419,11 @@ static int is_same_entity(json_entity_t l, json_entity_t r)
 
 static void test_json_entity_new(test_t suite)
 {
-	json_entity_t e, attr_value;
+	json_entity_t e, v, _v;
+	const char *s, *_s;
 	enum json_value_e type;
 	json_doc_t tdoc;
+	int rc;
 
 	tdoc = json_doc_new();
 	assert(tdoc);
@@ -458,15 +459,7 @@ static void test_json_entity_new(test_t suite)
 				"(type is JSON_STRING_VALUE) && (foo == json_value_cstr(e))");
 			break;
 		case JSON_ATTR_VALUE:
-			attr_value = json_entity_new(tdoc, JSON_STRING_VALUE, "value", strlen("value"));
-			e = json_entity_new(tdoc, JSON_ATTR_VALUE, "name", attr_value);
-			tada_assert(suite, ASSERT_NO_ENTITY_NEW_ATTR,
-				((JSON_ATTR_VALUE == json_entity_type(e)) &&
-				 (0 == strcmp("name", json_attr_name(e))) &&
-				 (0 == strcmp("value", json_value_cstr(json_attr_value(e))))),
-				"(type is JSON_ATTR_VALUE) && " \
-					"(name == <attr name>) && " \
-					"(value == <attr value>)");
+			/* attr is a part of dict */
 			break;
 		case JSON_LIST_VALUE:
 			e = json_entity_new(tdoc, JSON_LIST_VALUE);
@@ -476,11 +469,28 @@ static void test_json_entity_new(test_t suite)
 				"(type is JSON_LIST_VALUE) && (0 == json_list_len(e))");
 			break;
 		case JSON_DICT_VALUE:
+			/* dict */
 			e = json_entity_new(tdoc, JSON_DICT_VALUE);
 			tada_assert(suite, ASSERT_NO_ENTITY_NEW_DICT,
 				((JSON_DICT_VALUE == json_entity_type(e)) &&
 				 (0 == json_attr_count(e))),
 				"(type is JSON_DICT_VALUE) && (0 == json_attr_count(e))");
+
+			/* attr */
+			v = json_entity_new(tdoc, JSON_STRING_VALUE, "value", strlen("value"));
+			rc = json_attr_add(e, "name", v);
+			_v = json_value_find(e, "name");
+
+			tada_assert(suite, ASSERT_NO_ENTITY_NEW_ATTR,
+				(
+					(rc == 0) && (v) && (_v) &&
+					(JSON_STRING_VALUE == json_entity_type(_v)) &&
+					(JSON_STRING_VALUE == json_entity_type(v)) &&
+					(0 == strcmp(json_value_cstr(v), json_value_cstr(_v))) &&
+					(0 == strcmp("value", json_value_cstr(_v)))
+				),
+				"attribute is set and get correctly"
+			);
 			break;
 		case JSON_NULL_VALUE:
 			e = json_entity_new(tdoc, JSON_NULL_VALUE);
@@ -514,6 +524,8 @@ static void test_json_entity_dump(test_t suite)
 
 	for (type = FIRST_VALUE; type <= LAST_VALUE; type++) {
 		assert_no = ASSERT_NO_ENTITY_DUMP_INT + type;
+		if (!exp[type])
+			continue;
 		jb = json_entity_dump(NULL, exp[type]);
 
 		if (type == ATTR_VALUE) {
@@ -621,6 +633,8 @@ static void test_json_entity_copy(test_t suite)
 	int type, assert_no;
 	exp = CREATE_EXPECTED_ENTITY(-1);
 	for (type = FIRST_VALUE; type <= LAST_VALUE; type++) {
+		if (!exp[type])
+			continue;
 		assert_no = ASSERT_NO_ENTITY_COPY_INT + type;
 		cdoc = json_doc_new();
 		assert(cdoc);
@@ -715,12 +729,6 @@ static void test_dict_build(test_t suite)
 	assert(wdoc);
 	exp = CREATE_EXPECTED_ENTITY(DICT_VALUE);
 	assert(exp);
-	json_attr_add(exp[DICT_VALUE], "attr",
-			json_entity_new(wdoc, JSON_STRING_VALUE, "value", strlen("value")));
-
-	a = json_entity_new(wdoc, JSON_ATTR_VALUE, "attr",
-			json_entity_new(wdoc, JSON_STRING_VALUE, "value", strlen("value")));
-	assert(a);
 
 	d = json_dict_build(wdoc,
 			"int",    JSON_INT_VALUE,   (int64_t)1,
@@ -740,7 +748,6 @@ static void test_dict_build(test_t suite)
 				"attr_1", JSON_STRING_VALUE, "value_1", strlen("value_1"),
 				NULL,
 			"null",   JSON_NULL_VALUE,
-			"",       JSON_ATTR_VALUE, a,
 			NULL);
 	assert(d);
 
