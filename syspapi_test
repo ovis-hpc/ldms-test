@@ -496,11 +496,10 @@ else: # the `for` loop finished without `break`
 verify(4, _inc_verified, "verify increment of supported counters")
 
 ####### assertion 5
-rc, out = comp3.exec_run("grep -m 1 'JSON parse error' /var/log/ldmsd.log")
+rc, out = comp3.exec_run("grep -m1 'Error:.*Line.*in file.*syspapi-bad.json' /var/log/ldmsd.log")
 out = out.strip()
-idx = out.find("JSON parse error")
-verify(5, idx >= 0,
-          "verify JSON parse error")
+idx = out.find("syspapi-bad")
+verify(5, idx >= 0, "verify JSON parse error")
 
 ####### assertion 6
 rc, out = comp1.exec_run("grep PAPI_L1_DCH /var/log/ldmsd.log")
@@ -522,7 +521,7 @@ for k, v in _set4["data"].items():
     if k in ["component_id", "job_id", "app_id"]:
         continue
     # all events should either reported as success or error
-    rc, out = comp4.exec_run("grep 'syspapi_sampler.* \<{}\>' /var/log/ldmsd.log".format(k))
+    rc, out = comp4.exec_run(r"grep 'syspapi_sampler.* \<{}\>' /var/log/ldmsd.log".format(k))
     if rc:
         break # event not found
     if reduce(lambda x,y: bool(x) or bool(y), v):
