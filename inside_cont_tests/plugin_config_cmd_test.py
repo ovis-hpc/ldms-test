@@ -220,6 +220,9 @@ def plugin_config_test(suite):
     # Configure a loaded plugin
     resp = plugn_config(comm, name = "meminfo", producer = "node-1", instance = "node-1/meminfo")
     suite.save_assertion("config-3", **errcode_cond(resp, 0))
+
+    # Configure vmstat, preparing it for 'start' test
+    resp = plugn_config(comm, name = "vmstat", producer = "node-1", instance = "node-1/vmstat")
     comm.close()
 
 def plugin_start_test(suite):
