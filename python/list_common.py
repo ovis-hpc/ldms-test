@@ -25,8 +25,30 @@ SCHEMA = ldms.Schema("test", array_card=ARRAY_CARD, metric_list = [
         ("x", ldms.V_S64),
         ("y", ldms.V_S64),
         ("z", ldms.V_S64),
-        ("list", ldms.V_LIST, 2048),
-        ("dir",  ldms.V_LIST, 4096),
+
+        ("list_char", ldms.V_LIST, 256),
+        ("list_u8", ldms.V_LIST, 256),
+        ("list_s8", ldms.V_LIST, 256),
+        ("list_u16", ldms.V_LIST, 256),
+        ("list_s16", ldms.V_LIST, 256),
+        ("list_u32", ldms.V_LIST, 256),
+        ("list_s32", ldms.V_LIST, 256),
+        ("list_u64", ldms.V_LIST, 256),
+        ("list_s64", ldms.V_LIST, 256),
+        ("list_f32", ldms.V_LIST, 256),
+        ("list_d64", ldms.V_LIST, 256),
+
+        ("list_char_array", ldms.V_LIST, 256),
+        ("list_u8_array", ldms.V_LIST, 256),
+        ("list_s8_array", ldms.V_LIST, 256),
+        ("list_u16_array", ldms.V_LIST, 256),
+        ("list_s16_array", ldms.V_LIST, 256),
+        ("list_u32_array", ldms.V_LIST, 256),
+        ("list_s32_array", ldms.V_LIST, 256),
+        ("list_u64_array", ldms.V_LIST, 256),
+        ("list_s64_array", ldms.V_LIST, 256),
+        ("list_f32_array", ldms.V_LIST, 256),
+        ("list_d64_array", ldms.V_LIST, 256),
     ])
 
 def char(i):
@@ -45,55 +67,42 @@ def gen_data(seed):
         (ldms.V_S64, seq.next()), # x
         (ldms.V_S64, seq.next()), # y
         (ldms.V_S64, seq.next()), # z
-        (ldms.V_LIST, [ # list
-            (ldms.V_CHAR, [ 'a', 'b' ][seq.next()%2]), # char, 'a' or 'b'
-            (ldms.V_U8, seq.next()), # u8
-            (ldms.V_S8, seq.next()), # s8
-            (ldms.V_U16, seq.next()), # u16
-            (ldms.V_S16, seq.next()), # s16
-            (ldms.V_U32, seq.next()), # u32
-            (ldms.V_S32, seq.next()), # s32
-            (ldms.V_U64, seq.next()), # u64
-            (ldms.V_S64, seq.next()), # s64
-            (ldms.V_F32, seq.next()), # float
-            (ldms.V_D64, seq.next()), # double
-            (ldms.V_CHAR_ARRAY, str(seq.next())), # str
-            (ldms.V_U8_ARRAY,  tuple(seq.next() for i in range(3)) ), # u8
-            (ldms.V_S8_ARRAY,  tuple(seq.next() for i in range(3)) ), # s8
-            (ldms.V_U16_ARRAY, tuple(seq.next() for i in range(3)) ), # u16
-            (ldms.V_S16_ARRAY, tuple(seq.next() for i in range(3)) ), # s16
-            (ldms.V_U32_ARRAY, tuple(seq.next() for i in range(3)) ), # u32
-            (ldms.V_S32_ARRAY, tuple(seq.next() for i in range(3)) ), # s32
-            (ldms.V_U64_ARRAY, tuple(seq.next() for i in range(3)) ), # u64
-            (ldms.V_S64_ARRAY, tuple(seq.next() for i in range(3)) ), # s64
-            (ldms.V_F32_ARRAY, tuple(seq.next() for i in range(3)) ), # float
-            (ldms.V_D64_ARRAY, tuple(seq.next() for i in range(3)) ), # double
-        ]),
-        (ldms.V_LIST, [ # dir
-            (ldms.V_CHAR_ARRAY, "/"),
-            (ldms.V_LIST, [
-                (ldms.V_CHAR_ARRAY, "bin/"), # dir name
-                (ldms.V_LIST, [   # dir content
-                    (ldms.V_CHAR_ARRAY, "bash"), # file
-                    (ldms.V_CHAR_ARRAY, "ls"),   # file
-                ]),
-                (ldms.V_CHAR_ARRAY, "var/"), # dir name
-                (ldms.V_LIST, [
-                    (ldms.V_CHAR_ARRAY, "run/"), # dir name
-                    (ldms.V_LIST, [
-                        (ldms.V_CHAR_ARRAY, "sshd.pid"),
-                        (ldms.V_CHAR_ARRAY, "lock/"),
-                        (ldms.V_LIST, [
-                            (ldms.V_CHAR_ARRAY, "file")
-                        ]),
-                    ]),
-                    (ldms.V_CHAR_ARRAY, "log/"), # dir name
-                    (ldms.V_LIST, [
-                        (ldms.V_CHAR_ARRAY, "sshd.log"),
-                    ]),
-                ]),
-            ]),
-        ]),
+
+        # [a, b, a] or [b, a, b]
+        (ldms.V_LIST, [  (ldms.V_CHAR, 'ab'[seq.next()%2]) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U8, seq.next() % (1<<8)) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S8, (seq.next() % (1<<8)) - (1<<7)) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U16, seq.next() % (1<<16)) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S16, (seq.next() % (1<<16)) - (1<<15)) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U32, seq.next() % (1<<32)) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S32, (seq.next() % (1<<32)) - (1<<31)) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U64, seq.next() % (1<<64)) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S64, (seq.next() % (1<<64)) - (1<<63)) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_F32, seq.next()) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_D64, seq.next()) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_CHAR_ARRAY, 'str'+('ab'[seq.next()%2])) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U8_ARRAY, tuple(seq.next() % (1<<8) for j in range(3) )) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S8_ARRAY, tuple((seq.next() % (1<<8)) - (1<<7) for j in range(3) )) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U16_ARRAY, tuple(seq.next() % (1<<16) for j in range(3) )) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S16_ARRAY, tuple((seq.next() % (1<<16)) - (1<<15) for j in range(3) )) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U32_ARRAY, tuple(seq.next() % (1<<32) for j in range(3) )) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S32_ARRAY, tuple((seq.next() % (1<<32)) - (1<<31) for j in range(3) )) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_U64_ARRAY, tuple(seq.next() % (1<<64) for j in range(3) )) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_S64_ARRAY, tuple((seq.next() % (1<<64)) - (1<<63) for j in range(3) )) for i in range(3) ]),
+
+        (ldms.V_LIST, [  (ldms.V_F32_ARRAY, tuple((seq.next() for j in range(3)))) for i in range(3) ]),
+        (ldms.V_LIST, [  (ldms.V_D64_ARRAY, tuple((seq.next() for j in range(3)))) for i in range(3) ]),
+
     ]
 
 
@@ -110,20 +119,22 @@ def list_update(mlst, data):
         m.set(v)
 
 def update_set(_set, i):
-    x, y, z, lst, dr = gen_data(i)
+    data = gen_data(i)
+    x, y, z = data[:3]
+
     _set.transaction_begin()
     _set['x'] = x[1]
     _set['y'] = y[1]
     _set['z'] = z[1]
-    mlst = _set['list']
-    mdr  = _set['dir']
-    if len(mlst): # only update the values if list has been populated
-        list_update(mlst, lst[1])
-    else:
-        list_append(mlst, lst[1])
-    # append `dir` values
-    if len(mdr) == 0:
-        list_append(mdr, dr[1])
+
+    for md, dd in zip( SCHEMA[3:], data[3:] ):
+        mlst = _set[ md.name ]
+        if mlst:
+            # mlist has been populated, just update the elements
+            list_update(mlst, dd[1])
+        else:
+            # mlist is empty, add elements
+            list_append(mlst, dd[1])
     _set.transaction_end()
 
 def print_list(l, indent=4, _file=sys.stdout):
