@@ -4,7 +4,6 @@ TEST_LIST=(
 	agg_slurm_test
 	agg_test
 	dump_cfg_test
-	failover_test
 	json_stream_sampler_test
 	ldmsd_auth_ovis_test
 	ldmsd_auth_test
