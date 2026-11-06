@@ -20,6 +20,7 @@ TEST_LIST=(
 	ldmsd_qgroup_test
 	ldmsd_rail_test
 	ldmsd_sampler_exclusive_thread_test
+	ldmsd_reset_test
 	ldmsd_stream_rate_test
 	ldmsd_stream_status_test
 	ldmsd_stream_test

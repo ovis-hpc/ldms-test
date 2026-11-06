@@ -1,0 +1,607 @@
+#!/usr/bin/env python3
+#
+# SYNOPSIS
+# --------
+# Test the <stats_command>_reset and <status_command>_reset requests of ldmsd.
+#
+# Each stats|status request that has the optional reset attribute has a reset-only
+# counterpart. The stats|status requests themselves do not reset the
+# statistics. The test collects activity on an aggregator, resets the
+# statistics with the new request, and verifies that:
+#
+#   - the reset request succeeds and replies "OK" (it returns no statistics);
+#   - the statistics reported by the corresponding stats|status request are
+#     reset;
+#   - the stats|status requests do not reset the statistics, even if the
+#     deprecated `reset` attribute is given;
+#   - ldmsd logs a message that suggests the reset request to use if the
+#     deprecated `reset` or `hist_recalibrate` attribute is given.
+#
+# Tested requests:
+#
+#   xprt_stats_reset, thread_stats_reset, profiling_reset,
+#   update_time_stats_reset, store_time_stats_reset,
+#   stream_status_reset, stream_client_dump_reset,
+#   msg_stats_reset, msg_client_stats_reset
+#
+# Cluster:
+#
+#   samplerd (meminfo) <--- agg (updater + store_csv)
+#
+# All the requests are sent to `agg`.
+
+import argparse
+import atexit
+import json
+import logging
+import os
+import sys
+import TADA
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, assertion_id_get
+from time import sleep
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be imported as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+SCRIPT_DIR = os.path.realpath(sys.path[0])
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Run test against the "
+                             "<stats|status command>_reset requests of ldmsd")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+LDMSD_XPRT = "sock"
+LDMSD_PORT = 10000
+UPDTR_NAME = "all"
+STRGP_NAME = "meminfo_csv"
+
+# Seconds to let the activities accumulate before taking the snapshots.
+WARMUP_SEC = 6
+
+#### spec #### -------------------------------------------------------
+
+common_plugin_config = [
+    "component_id=%component_id%",
+    "instance=%hostname%/%plugin%",
+    "producer=%hostname%",
+]
+
+spec = {
+    "name" : args.clustername,
+    "description" : f"{args.user}'s ldmsd reset cluster",
+    "type" : "NA",
+    "templates" : {
+        "ldmsd-base" : {
+            "type" : "ldmsd",
+            "listen" : [
+                { "port" : LDMSD_PORT, "xprt" : LDMSD_XPRT }
+            ]
+        },
+        "prdcr" : {
+            "host" : "%name%",
+            "port" : LDMSD_PORT,
+            "xprt" : LDMSD_XPRT,
+            "type" : "active",
+            "interval" : 1000000,
+        }
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "samplerd",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "samplerd",
+                    "!extends" : "ldmsd-base",
+                    "samplers" : [
+                        {
+                            "plugin" : "meminfo",
+                            "interval" : 1000000,
+                            "offset" : 0,
+                            "config" : common_plugin_config,
+                            "start" : True,
+                        },
+                    ],
+                }
+            ]
+        },
+        {
+            "hostname" : "agg",
+            "daemons" : [
+                {
+                    "name" : "sshd",
+                    "type" : "sshd"
+                },
+                {
+                    "name" : "agg",
+                    "!extends" : "ldmsd-base",
+                    "prdcrs" : [
+                        {
+                            "name" : "samplerd",
+                            "!extends" : "prdcr"
+                        }
+                    ],
+                    "config" : [
+                        "profiling_enable",
+
+                        "prdcr_start_regex regex=.*",
+
+                        # A message client in agg for the message client
+                        # statistics.
+                        "load name=stream_dump",
+                        "config name=stream_dump op=msg_subscribe "
+                            "message_tag=.* path=/db/%hostname%-msg.txt",
+
+                        "load name=store_csv",
+                        "config name=store_csv path=/db/%hostname%-csv",
+                        f"strgp_add name={STRGP_NAME} plugin=store_csv "
+                            "container=meminfo schema=meminfo",
+                        f"strgp_prdcr_add name={STRGP_NAME} regex=.*",
+                        f"strgp_start name={STRGP_NAME}",
+
+                        f"updtr_add name={UPDTR_NAME} interval=1000000 offset=200000",
+                        f"updtr_prdcr_add name={UPDTR_NAME} regex=.*",
+                        f"updtr_start name={UPDTR_NAME}",
+                    ],
+                }
+            ]
+        },
+    ], # nodes
+
+    "cap_add" : [ "SYS_PTRACE", "SYS_ADMIN"],
+    "image" : args.image,
+    "ovis_prefix" : args.prefix,
+    "env" : { "TADA_ADDR" : args.tada_addr,
+              "LDMS_STREAM_STATS_LEVEL" : 2,
+              "LDMS_MSG_STATS_LEVEL" : 2,
+            },
+    "mounts" : args.mount + ([f"{args.src}:{args.src}:ro"] if args.src else []) +
+                [f"{args.data_root}:/db:rw",
+                 f"{os.path.realpath(sys.path[0])}:/tada-src:ro"
+                ]
+}
+
+#### helper functions #### -------------------------------------------
+
+def ldmsd_request_send(dcont, cmd):
+    """Send `cmd` to the ldmsd in `dcont`. Returns (rc, output)"""
+    x = "/tada-src/python/ldmsd_request_send.py -x {xprt} -p {port} -H localhost --cmd '{cmd}'" \
+        .format(xprt = LDMSD_XPRT, port = LDMSD_PORT, cmd = cmd)
+    rc, out = dcont.exec_run(x)
+    return (rc, out)
+
+def query(dcont, cmd):
+    """Send a stats|status request and return the JSON object of the reply"""
+    rc, out = ldmsd_request_send(dcont, cmd)
+    if rc:
+        raise RuntimeError(f"'{cmd}' failed. rc: {rc}, out: {out.strip()}")
+    return json.loads(out.strip())
+
+def reset(dcont, cmd):
+    """Send a reset request.
+
+    Returns (rc, output). A reset request replies "OK" and no statistics.
+    """
+    rc, out = ldmsd_request_send(dcont, cmd)
+    return (rc, out.strip())
+
+def walk(obj):
+    """Generate every dict and list nested in `obj` (including `obj`)"""
+    yield obj
+    if isinstance(obj, dict):
+        for v in obj.values():
+            yield from walk(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from walk(v)
+
+def values_of(obj, key):
+    """Generate the values of `key` found at any depth of `obj`"""
+    for o in walk(obj):
+        if isinstance(o, dict) and key in o:
+            yield o[key]
+
+def reset_ok(rc_out):
+    rc, out = rc_out
+    return rc == 0 and out == "OK"
+
+# -- extractors of the quantities that a reset must clear --
+
+def xprt_op_count(js):
+    return sum(v['count'] for v in js['op_stats'].values())
+
+def thread_total_us(js):
+    return sum(t['total_us'] for k in ('io_threads', 'worker_threads')
+                             for t in js.get(k, []) if 'total_us' in t)
+
+def update_count(js):
+    return sum(values_of(js, "cnt"))
+
+STORE_STAGES = ("io_thread", "decomp", "wait", "queue", "commit")
+
+def store_count(js):
+    # Each store stage reports the number of samples in its `count`.
+    return sum(o[st]['count'] for o in walk(js) if isinstance(o, dict)
+                              for st in STORE_STAGES
+                              if isinstance(o.get(st), dict) and 'count' in o[st])
+
+def stream_recv_count(js):
+    return sum(v.get('recv', {}).get('count', 0) for k, v in js.items()
+                if k != "_OVERALL_")
+
+def profile_hop_count(js):
+    # Number of profiled messages kept for the message channels
+    return len(list(values_of(js.get('stream', {}), "hop_count")))
+
+def msg_rx_count(js, tag = None):
+    return sum(o['rx']['count'] for o in js if tag is None or o['msg_tag'] == tag)
+
+def msg_client_tx_count(js):
+    return sum(o['tx']['count'] for o in js)
+
+def msg_client_drop_count(js):
+    return sum(o['drops']['count'] for o in js)
+
+#### test definition #### --------------------------------------------
+
+id = assertion_id_get()
+
+XPRT_STATS_RESET             = next(id)
+THREAD_STATS_RESET           = next(id)
+PROFILING_RESET              = next(id)
+UPDATE_TIME_STATS_RESET      = next(id)
+UPDATE_TIME_STATS_RESET_NAME = next(id)
+UPDATE_TIME_STATS_RESET_ENOENT = next(id)
+STORE_TIME_STATS_RESET       = next(id)
+STREAM_STATUS_RESET          = next(id)
+STREAM_CLIENT_DUMP_RESET     = next(id)
+MSG_STATS_RESET              = next(id)
+MSG_STATS_RESET_STREAM       = next(id)
+MSG_CLIENT_STATS_RESET       = next(id)
+HIST_RECALIBRATE             = next(id)
+QUERY_DOES_NOT_RESET         = next(id)
+DEPRECATED_ATTR_LOGGED       = next(id)
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldmsd_stats_reset_test",
+                 test_desc = "Functionality tests of the <stats|status command>_reset requests",
+                 test_user = args.user,
+                 commit_id = args.commit_id,
+                 tada_addr = args.tada_addr,
+                 )
+
+test.add_assertion(XPRT_STATS_RESET,
+                   "xprt_stats_reset -- the transport statistics are cleared")
+test.add_assertion(THREAD_STATS_RESET,
+                   "thread_stats_reset -- the thread statistics are cleared")
+test.add_assertion(PROFILING_RESET,
+                   "profiling_reset -- the message profiling data are cleared")
+test.add_assertion(UPDATE_TIME_STATS_RESET,
+                   "update_time_stats_reset -- all updaters' statistics are cleared")
+test.add_assertion(UPDATE_TIME_STATS_RESET_NAME,
+                   "update_time_stats_reset name=<updtr> -- the named updater's statistics are cleared")
+test.add_assertion(UPDATE_TIME_STATS_RESET_ENOENT,
+                   "update_time_stats_reset name=<unknown> -- fails with ENOENT")
+test.add_assertion(STORE_TIME_STATS_RESET,
+                   "store_time_stats_reset -- the store time statistics are cleared")
+test.add_assertion(STREAM_STATUS_RESET,
+                   "stream_status_reset -- the stream statistics are cleared")
+test.add_assertion(STREAM_CLIENT_DUMP_RESET,
+                   "stream_client_dump_reset -- the stream statistics are cleared")
+test.add_assertion(MSG_STATS_RESET,
+                   "msg_stats_reset -- the message channel statistics are cleared")
+test.add_assertion(MSG_STATS_RESET_STREAM,
+                   "msg_stats_reset stream=<tag> -- only the given channel is cleared")
+test.add_assertion(MSG_CLIENT_STATS_RESET,
+                   "msg_client_stats_reset -- the message client statistics are cleared")
+test.add_assertion(HIST_RECALIBRATE,
+                   "xprt_stats_reset and store_time_stats_reset accept hist_recalibrate=true")
+test.add_assertion(QUERY_DOES_NOT_RESET,
+                   "stats|status requests do not reset the statistics, even with the deprecated reset=true")
+test.add_assertion(DEPRECATED_ATTR_LOGGED,
+                   "the deprecated reset|hist_recalibrate attribute is ignored and logged with the reset request to use")
+
+def check(assertion_id, fn):
+    """Run `fn` that returns (passed, message); an exception fails the assertion"""
+    try:
+        passed, msg = fn()
+    except Exception as e:
+        passed, msg = False, f"exception: {e!r}"
+    test.assert_test(assertion_id, passed, msg)
+
+log.info("-- Get or create the cluster --")
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+samplerd = cluster.get_container("samplerd")
+agg = cluster.get_container("agg")
+containers = [samplerd, agg]
+
+STREAM_DATA = "12345"
+STREAM_FILE = "/db/stats_reset.data"
+agg.write_file(STREAM_FILE, STREAM_DATA)
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("waiting ... for all LDMSDs to start")
+while True:
+    if all(c.check_ldmsd() for c in containers):
+        break
+    sleep(1)
+log.info("All LDMSDs are up.")
+
+# ldmsd_stream_publish (legacy stream) and ldms_msg_publish (message) clients
+# on agg
+def stream_publish(name, count = 3):
+    for i in range(count):
+        cmd = f"ldmsd_stream_publish -x {LDMSD_XPRT} -p {LDMSD_PORT} -h localhost " \
+              f"-s {name} -t string -f {STREAM_FILE}"
+        rc, out = agg.exec_run(cmd)
+        assert rc == 0, f"ldmsd_stream_publish failed. rc: {rc}, out: {out}"
+
+def msg_publish(tag, count = 3):
+    for i in range(count):
+        cmd = f"ldms_msg_publish -x {LDMSD_XPRT} -p {LDMSD_PORT} -h localhost " \
+              f"-m {tag} -t string -f {STREAM_FILE}"
+        rc, out = agg.exec_run(cmd)
+        assert rc == 0, f"ldms_msg_publish failed. rc: {rc}, out: {out}"
+
+log.info(f"-- Generate activities for {WARMUP_SEC} seconds --")
+stream_publish("foo")
+msg_publish("tag1")
+msg_publish("tag2")
+sleep(WARMUP_SEC)
+
+# -- Snapshots before the reset --
+log.info("-- Take the snapshots before the reset --")
+xprt0    = query(agg, "xprt_stats")
+thread0  = query(agg, "thread_stats")
+prof0    = query(agg, "profiling")
+update0  = query(agg, f"update_time_stats")
+store0   = query(agg, "store_time_stats")
+stream0  = query(agg, "stream_status")
+msg0     = query(agg, "msg_stats json=1")
+client0  = query(agg, "msg_client_stats json=1")
+
+# ===== the stats|status requests do not reset =====
+def check_query_does_not_reset():
+    # The deprecated `reset=true` attribute must have no effect on the queries.
+    cmds = ["xprt_stats", "thread_stats", "profiling", "update_time_stats",
+            "store_time_stats", "stream_status", "msg_stats json=1",
+            "msg_client_stats json=1"]
+    for c in cmds:
+        ldmsd_request_send(agg, f"{c} reset=true")
+    xprt1   = query(agg, "xprt_stats")
+    thread1 = query(agg, "thread_stats")
+    update1 = query(agg, "update_time_stats")
+    store1  = query(agg, "store_time_stats")
+    stream1 = query(agg, "stream_status")
+    msg1    = query(agg, "msg_stats json=1")
+    client1 = query(agg, "msg_client_stats json=1")
+    # The counters never decrease unless they are reset.
+    checks = {
+        "xprt op count":     (xprt_op_count(xprt0), xprt_op_count(xprt1)),
+        "thread total us":   (thread_total_us(thread0), thread_total_us(thread1)),
+        "update count":      (update_count(update0), update_count(update1)),
+        "store count":       (store_count(store0), store_count(store1)),
+        "stream recv count": (stream_recv_count(stream0), stream_recv_count(stream1)),
+        "msg rx count":      (msg_rx_count(msg0), msg_rx_count(msg1)),
+        "client tx count":   (msg_client_tx_count(client0), msg_client_tx_count(client1)),
+    }
+    passed = all(b > 0 and a >= b for b, a in checks.values())
+    return passed, ", ".join(f"{k}: {b} -> {a}" for k, (b, a) in checks.items())
+check(QUERY_DOES_NOT_RESET, check_query_does_not_reset)
+
+# ===== the deprecated attributes are logged =====
+LDMSD_LOG = "/var/log/ldmsd.log"
+
+def log_count(pattern):
+    """Number of lines of the ldmsd log of `agg` that match `pattern`"""
+    rc, out = agg.exec_run(f"grep -c -E '{pattern}' {LDMSD_LOG}")
+    return int(out.strip() or 0)
+
+def check_deprecated_attr_logged():
+    # (request, the attribute to give, the reset request that the log suggests)
+    cases = [("xprt_stats", "reset", "xprt_stats_reset"),
+             ("xprt_stats", "hist_recalibrate", "xprt_stats_reset hist_recalibrate=true"),
+             ("thread_stats", "reset", "thread_stats_reset"),
+             ("profiling", "reset", "profiling_reset"),
+             ("update_time_stats", "reset", "update_time_stats_reset"),
+             ("store_time_stats", "reset", "store_time_stats_reset"),
+             ("store_time_stats", "hist_recalibrate", "store_time_stats_reset hist_recalibrate=true"),
+             ("stream_status", "reset", "stream_status_reset"),
+             ("stream_client_dump", "reset", "stream_client_dump_reset"),
+             ("msg_stats", "reset", "msg_stats_reset"),
+             ("msg_client_stats", "reset", "msg_client_stats_reset")]
+    missing = []
+    for cmd, attr, suggest in cases:
+        ldmsd_request_send(agg, f"{cmd} {attr}=true")
+        # The log message has the quotes around the names. Match them with `.`.
+        pat = f"{cmd}: the .{attr}. attribute is deprecated and ignored.*Use .{suggest}. to reset"
+        if log_count(pat) < 1:
+            missing.append(f"{cmd} {attr}")
+    # reset=false must not be logged
+    before = log_count("xprt_stats: the .reset. attribute")
+    ldmsd_request_send(agg, "xprt_stats reset=false")
+    after = log_count("xprt_stats: the .reset. attribute")
+    if after != before:
+        missing.append("xprt_stats reset=false was logged")
+    return not missing, f"missing or unexpected log messages: {missing}" if missing \
+                        else "all the expected messages are logged"
+check(DEPRECATED_ATTR_LOGGED, check_deprecated_attr_logged)
+
+# Stop the updater and the store so that the update/store counters stay at zero
+# once reset. The other statistics are checked against their values before the
+# reset, so they are not affected.
+rc, out = ldmsd_request_send(agg, f"updtr_stop name={UPDTR_NAME}")
+assert rc == 0, f"updtr_stop failed. rc: {rc}, out: {out}"
+sleep(2) # let the in-flight updates finish
+
+# ===== xprt_stats_reset =====
+def check_xprt():
+    before = xprt_op_count(xprt0)
+    r = reset(agg, "xprt_stats_reset")
+    after_js = query(agg, "xprt_stats")
+    after = xprt_op_count(after_js)
+    passed = reset_ok(r) and before > 0 and after < before \
+             and after_js['duration'] < xprt0['duration']
+    return passed, f"reset: {r}, op count: {before} -> {after}, " \
+                   f"duration: {xprt0['duration']} -> {after_js['duration']}"
+check(XPRT_STATS_RESET, check_xprt)
+
+# ===== thread_stats_reset =====
+def check_thread():
+    before = thread_total_us(thread0)
+    r = reset(agg, "thread_stats_reset")
+    after = thread_total_us(query(agg, "thread_stats"))
+    passed = reset_ok(r) and before > 0 and after < before
+    return passed, f"reset: {r}, thread total_us: {before} -> {after}"
+check(THREAD_STATS_RESET, check_thread)
+
+# ===== profiling_reset =====
+def check_profiling():
+    before = profile_hop_count(prof0)
+    r = reset(agg, "profiling_reset")
+    after = profile_hop_count(query(agg, "profiling"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, profiled messages: {before} -> {after}"
+check(PROFILING_RESET, check_profiling)
+
+# ===== update_time_stats_reset =====
+def check_update_all():
+    before = update_count(update0)
+    r = reset(agg, "update_time_stats_reset")
+    after = update_count(query(agg, "update_time_stats"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, update count: {before} -> {after}"
+check(UPDATE_TIME_STATS_RESET, check_update_all)
+
+def check_update_name():
+    # Start the updater to collect the statistics again, then reset by name.
+    rc, out = ldmsd_request_send(agg, f"updtr_start name={UPDTR_NAME}")
+    assert rc == 0, f"updtr_start failed. rc: {rc}, out: {out}"
+    sleep(3)
+    rc, out = ldmsd_request_send(agg, f"updtr_stop name={UPDTR_NAME}")
+    assert rc == 0, f"updtr_stop failed. rc: {rc}, out: {out}"
+    sleep(2)
+    before = update_count(query(agg, f"update_time_stats name={UPDTR_NAME}"))
+    r = reset(agg, f"update_time_stats_reset name={UPDTR_NAME}")
+    after = update_count(query(agg, f"update_time_stats name={UPDTR_NAME}"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, update count: {before} -> {after}"
+check(UPDATE_TIME_STATS_RESET_NAME, check_update_name)
+
+def check_update_enoent():
+    rc, out = reset(agg, "update_time_stats_reset name=no_such_updtr")
+    return rc == 2, f"rc: {rc} (expecting ENOENT = 2), out: {out}"
+check(UPDATE_TIME_STATS_RESET_ENOENT, check_update_enoent)
+
+# ===== store_time_stats_reset =====
+def check_store():
+    before = store_count(store0)
+    r = reset(agg, "store_time_stats_reset")
+    after = store_count(query(agg, "store_time_stats"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, store stage sample count: {before} -> {after}"
+check(STORE_TIME_STATS_RESET, check_store)
+
+# ===== stream_status_reset =====
+def check_stream_status():
+    before = stream_recv_count(stream0)
+    r = reset(agg, "stream_status_reset")
+    after = stream_recv_count(query(agg, "stream_status"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, stream recv count: {before} -> {after}"
+check(STREAM_STATUS_RESET, check_stream_status)
+
+# ===== stream_client_dump_reset =====
+def check_stream_client_dump():
+    stream_publish("bar")
+    before = stream_recv_count(query(agg, "stream_status"))
+    r = reset(agg, "stream_client_dump_reset")
+    after = stream_recv_count(query(agg, "stream_status"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, stream recv count: {before} -> {after}"
+check(STREAM_CLIENT_DUMP_RESET, check_stream_client_dump)
+
+# ===== msg_stats_reset =====
+def check_msg_stats():
+    before = msg_rx_count(msg0)
+    r = reset(agg, "msg_stats_reset")
+    after = msg_rx_count(query(agg, "msg_stats json=1"))
+    passed = reset_ok(r) and before > 0 and after == 0
+    return passed, f"reset: {r}, msg rx count: {before} -> {after}"
+check(MSG_STATS_RESET, check_msg_stats)
+
+def check_msg_stats_stream():
+    msg_publish("tag1")
+    msg_publish("tag2")
+    js = query(agg, "msg_stats json=1")
+    b1, b2 = msg_rx_count(js, "tag1"), msg_rx_count(js, "tag2")
+    r = reset(agg, "msg_stats_reset stream=tag1")
+    js = query(agg, "msg_stats json=1")
+    a1, a2 = msg_rx_count(js, "tag1"), msg_rx_count(js, "tag2")
+    passed = reset_ok(r) and b1 > 0 and b2 > 0 and a1 == 0 and a2 == b2
+    return passed, f"reset: {r}, tag1 rx count: {b1} -> {a1}, tag2 rx count: {b2} -> {a2}"
+check(MSG_STATS_RESET_STREAM, check_msg_stats_stream)
+
+# ===== msg_client_stats_reset =====
+def check_msg_client_stats():
+    before = msg_client_tx_count(client0)
+    r = reset(agg, "msg_client_stats_reset")
+    js = query(agg, "msg_client_stats json=1")
+    after = msg_client_tx_count(js)
+    drops = msg_client_drop_count(js)
+    passed = reset_ok(r) and before > 0 and after == 0 and drops == 0
+    return passed, f"reset: {r}, client tx count: {before} -> {after}, drops: {drops}"
+check(MSG_CLIENT_STATS_RESET, check_msg_client_stats)
+
+# ===== hist_recalibrate =====
+def check_hist_recalibrate():
+    r1 = reset(agg, "xprt_stats_reset hist_recalibrate=true")
+    r2 = reset(agg, "store_time_stats_reset hist_recalibrate=true")
+    passed = reset_ok(r1) and reset_ok(r2)
+    return passed, f"xprt_stats_reset: {r1}, store_time_stats_reset: {r2}"
+check(HIST_RECALIBRATE, check_hist_recalibrate)
+
+log.info('----- done -----')
