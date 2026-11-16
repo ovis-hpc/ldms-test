@@ -1,0 +1,568 @@
+#!/usr/bin/python3
+#
+# SYNOPSIS: dir replies and dir updates that are large or at the size limit of
+#           the transport message (library test, not `ldmsd`).
+#
+# A dir request (ldms_xprt_dir()) gets a dir reply that is chunked in records.
+# Each record has a JSON string with one entry per set (set metadata and set
+# info) and holds as many entries as fit in the maximum message length of the
+# transport (Xprt.msg_max). With flags != 0 the client is also sent dir
+# updates (DIR_ADD, DIR_UPD), one set per message, until it cancels.
+#
+# Scheme:
+# - node-1 runs an interactive Python server (python/ldms_dir_server.py) that
+#   publishes sets, and changes their set info to give exact entry lengths.
+# - node-2 runs an interactive Python client (python/ldms_dir_client.py).
+# - All sizes are computed from msg_max (see the constants below); they are
+#   not measured. The entry at the limit being listed and one byte more being
+#   refused (assertions 10 and 11) also checks those constants.
+#
+# Tests (the assertion numbers are the ones in the output):
+# - 4-9    record boundary: entries total limit - 1, limit and limit + 1,
+#          with and without more sets after them.
+# - 10-15  oversized entry: a set whose entry is larger than an empty record.
+#          The server sends an empty record. Also with normal sets around it.
+# - 16-18  dir update far over the message limit is dropped; the next ones
+#          are delivered.
+# - 19-24  dir update boundary: the entry at limit - 1, limit and limit + 1,
+#          for DIR_ADD and DIR_UPD.
+# - 25     5,000 sets: the records are the ones the packing rule predicts.
+# - 26-29  no published set; flags=0 vs flags != 0.
+# - 30-32  set name and schema name length limit (LDMS_NAME_MAX is 255 and
+#          includes the end of string, so the longest name has 254 characters).
+# - 33     the last set is unpublished and published again during dir requests.
+# - 34-35  a client process is killed during a burst of dir updates.
+# - 36-37  the client closes the transport during a multi-record dir reply.
+# - 38-42  sets the client may not read (permission 0600, owned by root; the
+#          client runs as the munge user with munge authentication): first,
+#          next to a full record, last, and all of them.
+#
+# They guard the fixes of the dir code in ldms_xprt.c: d621958 (wrong size for
+# the end of the JSON string), 59323c7 (empty reply, oversized entry loop,
+# last set removed, deadlock when a send fails), bc89e1a and ecb92d5 (client
+# side checks of the reply), and dd19698 (name length limits).
+
+import os
+import io
+import re
+import shlex
+import pwd
+import sys
+import json
+import time
+import atexit
+import argparse
+import TADA
+import logging
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test large dir replies")
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 10000
+
+#### spec #### -------------------------------------------------------
+
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s ldms_dir_large test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { },
+    "nodes" : [
+        {
+            "hostname" : f"node-{i}",
+            "daemons" : [
+                { "name" : "sshd", "type" : "sshd" },
+                { "name" : "munged", "type" : "munged",
+                  "dom" : "dom1", "key" : "1" * 4096 },
+            ],
+        } for i in range(1, 3)
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        "{}:/db:rw".format(DB),
+        "{0}:{1}:ro".format(os.path.realpath(sys.path[0]), "/tada-src"),
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### helper functions ####
+
+def EXPECT(val, expected):
+    if val != expected:
+        raise RuntimeError("\n  EXPECTING: {}\n  GOT: {}".format(expected, val))
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "ldms_dir_large_test",
+                 test_desc = "Test large dir replies (record boundary)",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+
+for i, d in [
+ ( 1, "Start the interactive server"),
+ ( 2, "Start the interactive client and connect"),
+ ( 3, "Learn the order in which the dir reply lists sets"),
+ ( 4, "record boundary: entries total 1 byte under the record limit -> one record"),
+ ( 5, "record boundary: entries total exactly the record limit -> one record"),
+ ( 6, "record boundary: entries total 1 byte over the record limit -> two records"),
+ ( 7, "record boundary, more sets follow: 1 byte under the limit -> 2 records"),
+ ( 8, "record boundary, more sets follow: exactly at the limit -> 2 records"),
+ ( 9, "record boundary, more sets follow: 1 byte over the limit -> 2 records, one set moves"),
+ (10, "oversized entry: one set whose entry is exactly the record limit is listed"),
+ (11, "oversized entry: one set whose entry is the record limit + 1 -> empty record (more=0, status 0)"),
+ (12, "oversized entry: one set with a huge set info (2 x msg_max) -> empty record"),
+ (13, "oversized entry: the same connection serves the next dir request after the set info shrinks"),
+ (14, "oversized entry between normal sets -> first set, then an empty record (current behavior, open question for Tom)"),
+ (15, "oversized entry between normal sets: after the set info shrinks, all three sets are listed"),
+ (16, "dir update far over the message limit: a DIR_ADD is dropped"),
+ (17, "dir update far over the message limit: a DIR_UPD is dropped"),
+ (18, "after dropped dir updates the next DIR_ADD and DIR_UPD are delivered (connection stays up)"),
+ (19, "dir update boundary: DIR_ADD with the entry 1 byte under the limit is delivered"),
+ (20, "dir update boundary: DIR_ADD with the entry exactly at the limit is delivered"),
+ (21, "dir update boundary: DIR_ADD with the entry 1 byte over the limit is dropped"),
+ (22, "dir update boundary: DIR_UPD with the entry 1 byte under the limit is delivered"),
+ (23, "dir update boundary: DIR_UPD with the entry exactly at the limit is delivered"),
+ (24, "dir update boundary: DIR_UPD with the entry 1 byte over the limit is dropped"),
+ (25, "many sets: 5,000 sets give the records the packing rule predicts, each set once"),
+ (26, "no published set: dir request with flags=0 -> one empty record"),
+ (27, "no published set: dir request with flags != 0 accepted, its dir reply is empty"),
+ (28, "no published set: the registered client gets a DIR_ADD for the first set published afterward"),
+ (29, "no published set: a client that sent flags=0 gets no dir update for that set"),
+ (30, "name length: set name and schema name of 254 characters (the maximum) work and are listed"),
+ (31, "name length: a set name of 255 characters is rejected"),
+ (32, "name length: a schema name of 255 characters is rejected"),
+ (33, "last set unpublished and published again while dir requests are sent in a loop"),
+ (34, "client process killed during a burst of dir updates: the other client gets every DIR_ADD"),
+ (35, "client process killed during a burst of dir updates: the server drops it and keeps the other clients"),
+ (36, "client closes the transport after the first record of a multi-record dir reply (5 times), without error"),
+ (37, "after those closes a new dir reply is complete and correct, and the server has dropped the closed transports"),
+ (38, "client run as the munge user connects with munge authentication"),
+ (39, "unreadable set first in the listing: the dir reply lists the readable sets"),
+ (40, "unreadable set between a full record and the next set: dir reply has no gap and no extra comma"),
+ (41, "unreadable set last in the listing: the dir reply of the readable sets is sent"),
+ (42, "no readable set: the dir reply is empty"),
+]:
+    test.add_assertion(i, d)
+
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+node1 = cluster.get_container("node-1")
+node2 = cluster.get_container("node-2")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+time.sleep(2)
+
+def pycmd(tty, cmd, retry = 3, timeout_idle = 0.3):
+    """cmd must be single command w/o new line"""
+    sio = io.StringIO()
+    tty.write(cmd)
+    while tty.read() != '': # flush the echo
+        continue
+    tty.write("\n")
+    count = 0
+    end = False
+    while count < retry and not end:
+        o = tty.read(idle_timeout = timeout_idle)
+        count = 0 if len(o) else count + 1
+        sio.write(o)
+        if sio.getvalue().endswith(">>> "):
+            end = True
+    if not end:
+        raise RuntimeError("Python '{}' not responding".format(cmd))
+    out = sio.getvalue()[2:-4].strip()
+    if "Traceback (most recent call last)" in out:
+        # an exception in the interactive helper: stop here with its text
+        raise RuntimeError("Python '{}' failed:\n{}".format(cmd, out))
+    return out
+
+def slow(tty, cmd):
+    """for commands that wait for several seconds"""
+    return pycmd(tty, cmd, retry = 200) # up to ~60 s without output
+
+def check(num, tty, cmd, expect, slow_cmd = False):
+    """run `cmd` and assert the printed value equals `expect`"""
+    out = slow(tty, cmd) if slow_cmd else pycmd(tty, cmd)
+    test.assert_test(num, out == expect, f"cmd: {cmd}; expect: {expect}; got: {out}")
+    return out
+
+def check_in(num, tty, cmd, word):
+    """run `cmd` and assert that `word` is in the printed value"""
+    out = pycmd(tty, cmd)
+    test.assert_test(num, word in out, f"cmd: {cmd}; expect '{word}' in: {out}")
+    return out
+
+def py_cmd(module):
+    """Command of an interactive interpreter with `module` imported"""
+    return "/bin/bash -c " + shlex.quote(
+        '/usr/bin/python3 -i -c "import sys; '
+        "sys.path.insert(0, '/tada-src/python'); "
+        f'from {module} import *"')
+SRV = py_cmd("ldms_dir_server")
+CLI = py_cmd("ldms_dir_client")
+srv = node1.exec_interact(SRV)
+time.sleep(2)
+EXPECT(srv.read(), ">>> ")
+EXPECT(pycmd(srv, "start()"), "True")
+test.assert_test(1, True, "OK")
+
+cli = node2.exec_interact(CLI)
+time.sleep(2)
+EXPECT(cli.read(), ">>> ")
+pycmd(cli, "c = Client()")
+test.assert_test(2, True, "OK")
+
+# The dir reply is chunked in records. A record holds the sets that fit in
+# the largest message of the transport (Xprt.msg_max), and a set whose entry
+# does not fit starts the next record (more=1 on every record but the last).
+#
+# All sizes come from msg_max. In process_dir_request() (ldms_xprt.c):
+#   - a record is a reply header (HDR bytes) and a JSON string of
+#     msg_max - HDR bytes;
+#   - the JSON string starts with PREFIX bytes ({ "directory" : [) and keeps
+#     RESERVE bytes at the end for "]}" and the end of string;
+#   - so the entries in a record total at most
+#         LIMIT = msg_max - HDR - PREFIX - RESERVE
+# In send_dir_update() a dir update has one entry and is dropped when
+#         HDR + UPD_SYNTAX + entry + 1 >= msg_max
+# so its entry is at most
+#         LIMIT_U = msg_max - HDR - UPD_SYNTAX - 2
+# The server helper entry_len() gives the length of an entry (it follows the
+# format of the entry in __ldms_format_set_meta_as_json()), and fit() / the
+# `entry` argument of add_set() make an entry of an exact length.
+# The assertions 10 and 11 (an entry of LIMIT is listed, LIMIT + 1 is not) check
+# these numbers and entry_len() against the server.
+
+HDR = 32          # struct ldms_reply_hdr (20) + struct ldms_dir_reply (12)
+PREFIX = 17       # len('{ "directory" : [')
+RESERVE = 4       # "]}" + end of string, with the -3 of the entry check
+UPD_SYNTAX = 21   # len('{ "directory" : [  ]}')
+
+MSG_MAX = int(pycmd(cli, "c.x.msg_max"))
+LIMIT = MSG_MAX - HDR - PREFIX - RESERVE
+LIMIT_U = MSG_MAX - HDR - UPD_SYNTAX - 2
+HUGE = 2 * MSG_MAX       # a set-info length far above any limit
+log.info(f"msg_max = {MSG_MAX}, record limit = {LIMIT}, dir update limit = {LIMIT_U}")
+
+# Take the initial set out of the dir reply, and learn the order of the dir
+# reply from two small sets
+pycmd(srv, "unpublish('srv/set0')")
+pycmd(srv, "add_set('M9999990', 1)")
+pycmd(srv, "add_set('M9999991', 1)")
+order = slow(cli, "c.order()").strip("'")
+test.assert_test(3, order in ("asc", "desc"), f"order: {order}")
+pycmd(srv, "unpublish_all()")
+
+# Names sort so that the tuned set (T) is first in the dir reply, then the
+# fill sets (M...), then the extra sets (X...), whichever way the order goes.
+T, X = ("A0000000", "Z0000001") if order == "asc" else ("Z0000000", "A0000001")
+XB = X[0]
+N, F = 3, 10000          # fill sets: count, set-info length
+M, G = 2, 2000           # extra sets: count, set-info length
+
+pycmd(srv, f"add_set('{T}', 1)")
+pycmd(srv, f"_ = [add_set(f'M{{i:07d}}', {F}) for i in range(1, {N + 1})]")
+E_FILL = int(pycmd(srv, "entry_len('M0000001')"))
+
+def shape_for(delta, total_sets):
+    """Make the entries of T and the fill sets total LIMIT + delta, and
+    return the shape of the dir reply"""
+    pycmd(srv, f"fit('{T}', {LIMIT + delta - N * E_FILL})")
+    names = f"['{T}'] + [f'M{{i:07d}}' for i in range(1, {N + 1})]"
+    EXPECT(pycmd(srv, f"total({names})"), str(LIMIT + delta))
+    return slow(cli, f"c.shape({total_sets})")
+
+# ---- record boundary: one record or two -------------------------------------
+for num, delta, expect in [
+        (4, -1, f"[(0, {N + 1})]"),
+        (5,  0, f"[(0, {N + 1})]"),
+        (6,  1, f"[(1, {N}), (0, 1)]")]:
+    out = shape_for(delta, N + 1)
+    test.assert_test(num, out == expect, f"delta {delta}: expected {expect}; got {out}")
+
+# ---- record boundary: the record ends and more sets follow ------------------
+pycmd(srv, f"_ = [add_set(f'{XB}{{i:07d}}', {G}) for i in range(1, {M + 1})]")
+for num, delta, expect in [
+        (7, -1, f"[(1, {N + 1}), (0, {M})]"),
+        (8,  0, f"[(1, {N + 1}), (0, {M})]"),
+        (9,  1, f"[(1, {N}), (0, {M + 1})]")]:
+    out = shape_for(delta, N + 1 + M)
+    test.assert_test(num, out == expect, f"delta {delta}: expected {expect}; got {out}")
+
+# ---- oversized entry: larger than an empty record ---------------------------
+pycmd(srv, "unpublish_all()")
+pycmd(srv, f"add_set('P0000001', entry = {LIMIT})")
+out = slow(cli, "c.records()")
+test.assert_test(10, out == "[(0, ['P0000001'])]", f"got {out}")
+pycmd(srv, f"fit('P0000001', {LIMIT + 1})")
+out = slow(cli, "c.records()")
+test.assert_test(11, out == "[(0, [])]", f"expected [(0, [])]; got {out}")
+pycmd(srv, f"tune('P0000001', {HUGE})")
+out = slow(cli, "c.records()")
+test.assert_test(12, out == "[(0, [])]", f"expected [(0, [])]; got {out}")
+pycmd(srv, "tune('P0000001', 1)")
+out = slow(cli, "c.records()")
+test.assert_test(13, out == "[(0, ['P0000001'])]", f"got {out}")
+
+# ---- oversized entry between normal sets ------------------------------------
+# B, C, D sort in the middle whichever way the dir reply is ordered, so the
+# oversized set C is between the two normal sets.
+pycmd(srv, "unpublish_all()")
+first = "B0000001" if order == "asc" else "D0000001"
+pycmd(srv, "add_set('B0000001', 1000)")
+pycmd(srv, f"add_set('C0000001', entry = {LIMIT + 1})")
+pycmd(srv, "add_set('D0000001', 1000)")
+out = slow(cli, "c.records()")
+expect = f"[(1, ['{first}']), (0, [])]"
+test.assert_test(14, out == expect, f"expected {expect}; got {out}")
+pycmd(srv, "tune('C0000001', 1)")
+out = slow(cli, "c.shape(3)")
+test.assert_test(15, out == "[(0, 3)]", f"got {out}")
+
+# ---- dir updates at and above the message limit -----------------------------
+# One client is registered for dir updates. After every change on the server
+# a sentinel update (set S) is sent. Updates arrive in the order they were
+# sent, so when the sentinel is there, an earlier update has either arrived
+# or been dropped by the server. This needs no sleep to tell the two apart.
+pycmd(srv, "unpublish_all()")
+pycmd(srv, "add_set('S0000000', 1)")
+pycmd(srv, "add_set('N0000001', 1)")
+pycmd(srv, "add_set('U0000000', 1)")
+pycmd(cli, "c2 = Client()")
+EXPECT(pycmd(cli, "c2.register()"), "'OK'")
+EXPECT(slow(cli, "c2.wait('LIST', 'S0000000')"), "True")
+
+sent = [0]
+def probe_update(kind, name, server_cmd):
+    """Run `server_cmd` on the server, send the sentinel, and return how many
+    `kind` updates of set `name` arrived"""
+    m0 = int(pycmd(cli, "c2.mark()"))
+    pycmd(srv, server_cmd)
+    sent[0] += 1
+    pycmd(srv, f"info('S0000000', 's', '{sent[0]}')")
+    return int(slow(cli, f"c2.probe('{kind}', '{name}', 'S0000000', 1, {m0})"))
+
+# dir updates far over the limit
+n = probe_update("ADD", "E0000001", f"add_set('E0000001', {HUGE})")
+test.assert_test(16, n == 0, f"{n} DIR_ADD of the huge set arrived; expected 0")
+n = probe_update("UPD", "N0000001", f"tune('N0000001', {HUGE})")
+test.assert_test(17, n == 0, f"{n} DIR_UPD of the huge set arrived; expected 0")
+n_add = probe_update("ADD", "N0000002", "add_set('N0000002', 1)")
+n_upd = probe_update("UPD", "N0000001", "tune('N0000001', 5)")
+test.assert_test(18, n_add == 1 and n_upd == 1,
+                 f"DIR_ADD arrived: {n_add}, DIR_UPD arrived: {n_upd}; expected 1 and 1")
+
+# dir update boundary: the entry is 1 byte under, at, and 1 byte over the dir update limit
+for k, delta, expect_n in [(0, -1, 1), (1, 0, 1), (2, 1, 0)]:
+    n = probe_update("ADD", f"V000000{k}",
+                     f"add_set('V000000{k}', entry = {LIMIT_U + delta})")
+    test.assert_test(19 + k, n == expect_n,
+                     f"DIR_ADD, entry limit {delta:+d}: {n} arrived; expected {expect_n}")
+for k, delta, expect_n in [(0, -1, 1), (1, 0, 1), (2, 1, 0)]:
+    n = probe_update("UPD", "U0000000", f"fit('U0000000', {LIMIT_U + delta})")
+    test.assert_test(22 + k, n == expect_n,
+                     f"DIR_UPD, entry limit {delta:+d}: {n} arrived; expected {expect_n}")
+
+pycmd(cli, "c2.close()")
+
+# ---- no published set -------------------------------------------------------
+pycmd(srv, "unpublish_all()")
+out = slow(cli, "c.records()")
+test.assert_test(26, out == "[(0, [])]", f"expected [(0, [])]; got {out}")
+pycmd(cli, "c3 = Client()")                 # flags != 0: registered
+EXPECT(pycmd(cli, "c3.register()"), "'OK'")
+EXPECT(slow(cli, "c3.wait_events(1)"), "True")
+out = pycmd(cli, "c3.events[0]")
+test.assert_test(27, out == "('LIST', [], 0, 0)", f"expected ('LIST', [], 0, 0); got {out}")
+pycmd(cli, "c5 = Client()")                 # flags = 0: dir reply only
+EXPECT(pycmd(cli, "c5.request()"), "'OK'")
+EXPECT(slow(cli, "c5.wait_events(1)"), "True")
+pycmd(srv, "add_set('R0000001', 1)")
+out = slow(cli, "c3.wait('ADD', 'R0000001')")
+test.assert_test(28, out == "True", f"DIR_ADD arrived on the registered client: {out}")
+out = slow(cli, "c5.quiet(1, timeout = 2)")
+test.assert_test(29, out == "True", f"nothing arrived on the flags=0 client: {out}")
+pycmd(cli, "c3.close()")
+pycmd(cli, "c5.close()")
+
+# ---- name and schema name at the maximum length (254) -----------------------
+pycmd(srv, "unpublish_all()")
+out = pycmd(srv, "add_long(254, 254)")
+n = pycmd(cli, "len(c.records()[0][1][0])") if out == "'ok'" else "-"
+test.assert_test(30, out == "'ok'" and n == "254", f"create: {out}; length of the listed name: {n}")
+out = pycmd(srv, "add_long(255, 1, 'm')")
+test.assert_test(31, out.startswith("'error"), f"got {out}")
+out = pycmd(srv, "add_long(1, 255, 'k')")
+test.assert_test(32, out.startswith("'error"), f"got {out}")
+
+# ---- the last set comes and goes while dir requests are sent ----------------
+# 11 sets of 100 KB give two records. LAST sorts last in the dir reply.
+pycmd(srv, "unpublish_all()")
+LAST = "Z0000009" if order == "asc" else "A0000009"
+pycmd(srv, "_ = [add_set(f'G{i:07d}', 100000) for i in range(1, 12)]")
+pycmd(srv, f"add_set('{LAST}', 1)")
+pycmd(srv, f"churn('{LAST}')")
+out = slow(cli, "c.loop(300, 11, 12)")
+st = slow(srv, "churn_stop()")
+test.assert_test(33, out == "'OK'" and st == "'done errors=0'",
+                 f"dir requests: {out}; churn: {st}")
+
+# ---- a client process is killed during a burst of dir updates ---------------
+pycmd(srv, "unpublish_all()")
+cliB = node2.exec_interact(CLI)
+time.sleep(2)
+EXPECT(cliB.read(), ">>> ")
+pycmd(cliB, "c = Client()")
+pycmd(cli, "c4 = Client()")
+EXPECT(pycmd(cli, "c4.register()"), "'OK'")
+EXPECT(slow(cli, "c4.wait_events(1)"), "True")
+EXPECT(pycmd(cliB, "c.register()"), "'OK'")
+EXPECT(slow(cliB, "c.wait_events(1)"), "True")
+EXPECT(slow(srv, "wait_xprts(3)"), "True")  # c, c4 and the transport of cliB
+pycmd(srv, "burst(500)")
+cliB.write("import os; os.kill(os.getpid(), 9)\n")
+ok = slow(cli, "c4.wait_prefix('ADD', 'burst/', 500)")
+done = slow(srv, "burst_done()")
+test.assert_test(34, ok == "True" and done == "True",
+                 f"other client got every DIR_ADD: {ok}; burst finished: {done}")
+test.assert_test(35, slow(srv, "wait_xprts(2)") == "True",
+                 "the server has the 2 transports of the other clients")
+pycmd(cli, "c4.close()")
+
+# ---- many sets --------------------------------------------------------------
+# The dir reply has as many records as the packing rule gives (each record
+# takes sets while their entries total at most LIMIT).
+pycmd(srv, "unpublish_all()")
+slow(srv, "add_fill(5000, 1000, 'many')")
+expect = slow(srv, f"expected('{order}', {LIMIT})")
+out = slow(cli, "c.shape(5000)")
+test.assert_test(25, out == expect, f"expected {expect}; got {out[:200]}")
+
+# ---- the client closes the transport during a multi-record dir reply --------
+# (the 5,000 sets of the many-sets case are still published)
+out = slow(cli, "c.close_mid_reply(5)")
+test.assert_test(36, out.startswith("'OK"), f"got {out}")
+out = slow(cli, "c.shape(5000)")
+alone = slow(srv, "wait_xprts(1)")
+test.assert_test(37, out == expect and alone == "True",
+                 f"dir reply: {out[:100]}; only this client's transport left: {alone}")
+
+# ---- sets the client is not allowed to read ---------------------------------
+# The server (root) also listens on port 10001 with munge authentication. A
+# client run as the munge user connects there, so the server sees a uid that
+# is not the owner of the sets. Sets with permission 0600 are skipped in its
+# dir reply; sets with 0644 are listed.
+slow(srv, "unpublish_all()")        # the 5,000 sets of the many-sets case
+EXPECT(pycmd(srv, "listen_munge('/munge/dom1/sock')"), "True")
+CMD7 = "/bin/bash -c " + shlex.quote(
+    "su -m -s /bin/bash munge -c " + shlex.quote(
+        '/usr/bin/python3 -i -c "import sys; '
+        "sys.path.insert(0, '/tada-src/python'); "
+        'from ldms_dir_client import *"'))
+cli7 = node2.exec_interact(CMD7)
+time.sleep(3)
+EXPECT(cli7.read(), ">>> ")
+pycmd(cli7, "c = Client(port=10001, auth='munge', "
+            "auth_opts={'socket': '/munge/dom1/sock'})")
+pycmd(cli7, "import os")
+uid = pycmd(cli7, "os.getuid()")
+listed = slow(cli7, "c.listed()")
+test.assert_test(38, uid != "0" and listed == "0",
+                 f"uid of the client: {uid}; sets listed on the empty server: {listed}")
+
+def nm(base, i):
+    """Set name so that the i-th set (i = 0..9) of the group is the i-th in the dir reply"""
+    return f"{base}{i if order == 'asc' else 9 - i:07d}"
+
+def add_group(base, kinds, entries = None):
+    """Publish one set per item of `kinds` in the order of the dir reply:
+    'R' readable (0644), 'U' unreadable (0600). entries[i] sets the entry
+    length of the i-th set. Returns the names"""
+    names = [ nm(base, i) for i in range(len(kinds)) ]
+    for i, (n, k) in enumerate(zip(names, kinds)):
+        perm = "0o644" if k == "R" else "0o600"
+        ent = f", entry = {entries[i]}" if entries and entries[i] else ""
+        pycmd(srv, f"add_set('{n}', 10, perm = {perm}{ent})")
+    return names
+
+# first in the listing
+pycmd(srv, "unpublish_all()")
+nn = add_group("F", "URR")
+out = slow(cli7, "c.records()")
+test.assert_test(39, out == f"[(0, {nn[1:]})]", f"expected [(0, {nn[1:]})]; got {out}")
+
+# a full record, then an unreadable set, then a readable set
+pycmd(srv, "unpublish_all()")
+nn = add_group("H", "R")
+e1 = int(pycmd(srv, f"entry_len('{nn[0]}')"))
+pycmd(srv, "unpublish_all()")
+nn = add_group("J", "RRUR", [0, LIMIT - e1, 0, 0])  # J0 and J1 total LIMIT
+EXPECT(pycmd(srv, f"total({[nn[0], nn[1]]})"), str(LIMIT))
+out = slow(cli7, "c.records()")
+expect = f"[(1, {[nn[0], nn[1]]}), (0, {[nn[3]]})]"
+test.assert_test(40, out == expect, f"expected {expect}; got {out}")
+
+# last in the listing
+pycmd(srv, "unpublish_all()")
+nn = add_group("K", "RRU")
+out = slow(cli7, "c.records()")
+test.assert_test(41, out == f"[(0, {nn[:2]})]", f"expected [(0, {nn[:2]})]; got {out}")
+
+# nothing readable
+pycmd(srv, "unpublish_all()")
+add_group("L", "UU")
+out = slow(cli7, "c.records()")
+test.assert_test(42, out == "[(0, [])]", f"expected [(0, [])]; got {out}")
