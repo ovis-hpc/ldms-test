@@ -37,6 +37,7 @@ CONT_TEST_LIST=(
 	ldmsd_decomp_test
 	ldmsd_decomp_no_fill_test
 	ldmsd_stream_status_test
+	ldmsd_reset_test
 	store_list_record_test
 	maestro_raft_test
 	ovis_json_test
