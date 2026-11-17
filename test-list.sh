@@ -55,6 +55,8 @@ CONT_TEST_LIST=(
 	libovis_log_test
 	ldmsd_long_config_test
 	ldms_rail_test
+	ldms_dir_test
+	ldms_dir_large_test
 	ldmsd_rail_test
 	ldms_msg_test
 	ldmsd_msg_test
