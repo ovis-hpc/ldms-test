@@ -1,0 +1,87 @@
+#!/bin/sh
+#
+# A stand-in for the `dump_counters` command that the slingshot_switch sampler
+# runs on a switch. See `slingshot_switch_test`.
+#
+#   -p <port>     report this port (may be repeated)
+#   -n <count>    report ports 0 to <count>-1
+#   -s <counter>  report this counter, or the `rfc_3635` set (may be repeated)
+#
+# The output is a header line, a "port, name ,value" line for each counter of
+# each port, and the header line again. The values are synthetic:
+#
+#   IfHCInOctets     (port + 1) * 1000000 + tick
+#   IfHCInUcastPkts  (port + 1) * 1000 + tick
+#   IfHCOutOctets    (port + 1) * 2000000 + tick
+#   IfInDiscards, IfInUnknownProtos    3135102637
+#   anything else    0
+#
+# `tick` is the number in $FAKE_DC_DIR/tick (0 if there is no such file). The
+# arguments of every invocation are appended to $FAKE_DC_DIR/calls.
+
+DIR=${FAKE_DC_DIR:-/tmp/fake_dc}
+mkdir -p "$DIR"
+echo "$*" >> "$DIR/calls"
+
+TICK=0
+[ -r "$DIR/tick" ] && TICK=$(cat "$DIR/tick")
+
+RFC_3635="IfInDiscards IfInErrors IfInUnknownProtos IfOutDiscards IfOutErrors Dot3HCInPauseFrames Dot3HCOutPauseFrames IfHCInOctets IfHCInUcastPkts IfHCInMulticastPkts IfHCInBroadcastPkts IfHCOutOctets IfHCOutUcastPkts IfHCOutMulticastPkts IfHCOutBroadcastPkts"
+
+PORTS=""
+STATS=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-p) PORTS="$PORTS $2"; shift 2 ;;
+	-n) i=0
+	    while [ "$i" -lt "$2" ]; do
+		PORTS="$PORTS $i"
+		i=$((i + 1))
+	    done
+	    shift 2 ;;
+	-s) STATS="$STATS $2"; shift 2 ;;
+	*)  shift ;;
+	esac
+done
+
+NAMES=""
+for s in $STATS; do
+	case "$s" in
+	rfc_3635)
+		NAMES="$NAMES $RFC_3635" ;;
+	*)
+		known=0
+		for k in $RFC_3635; do
+			[ "$k" = "$s" ] && known=1
+		done
+		if [ "$known" = 0 ]; then
+			echo "unknown counter: $s"
+			exit 1
+		fi
+		NAMES="$NAMES $s" ;;
+	esac
+done
+
+HEADER="Port, Stat                                            ,Value"
+echo "$HEADER"
+awk -v ports="$PORTS" -v names="$NAMES" -v tick="$TICK" '
+function value(p, n) {
+	if (n == "IfInDiscards" || n == "IfInUnknownProtos") return 3135102637
+	if (n == "IfHCInOctets")    return (p + 1) * 1000000 + tick
+	if (n == "IfHCInUcastPkts") return (p + 1) * 1000 + tick
+	if (n == "IfHCOutOctets")   return (p + 1) * 2000000 + tick
+	return 0
+}
+BEGIN {
+	np = split(ports, P, " "); nn = split(names, N, " ")
+	first = 1
+	for (i = 1; i <= np; i++) {
+		for (j = 1; j <= nn; j++) {
+			# only the very first port number is space-padded
+			fmt = first ? "%2d, %-50s,%08d\n" : "%02d, %-50s,%08d\n"
+			printf fmt, P[i], N[j], value(P[i], N[j])
+			first = 0
+		}
+	}
+}'
+echo "$HEADER"
