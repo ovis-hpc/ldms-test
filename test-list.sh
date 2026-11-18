@@ -97,6 +97,9 @@ CONT_TEST_LIST=(
 
 	# wait for schema registry feature to merge into maestro
 	#maestro_schema_registry_test
+
+	# wait for the slingshot_switch sampler to merge into ldms
+	#slingshot_switch_test
 )
 
 INSIDE_CONT_TEST_LIST=(

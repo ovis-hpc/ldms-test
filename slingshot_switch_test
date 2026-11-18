@@ -1,0 +1,431 @@
+#!/usr/bin/env python3
+
+#
+# Test the slingshot_switch sampler.
+#
+# The sampler gets its data by running the switch command `dump_counters`.
+# There is no switch in the virtual cluster, so `scripts/fake_dump_counters`
+# is installed as `dump_counters` on node-1. It prints synthetic values in the
+# layout the sampler parses, and the test can change what it prints while
+# ldmsd is running. See the script for the details.
+#
+# The sampler instances are loaded at run time, not from the ldmsd
+# configuration file, so that a configuration that is meant to be refused does
+# not prevent ldmsd from starting.
+#
+
+import os
+import re
+import pwd
+import sys
+import json
+import time
+import argparse
+import TADA
+import logging
+import atexit
+
+from distutils.spawn import find_executable
+from LDMS_Test import LDMSDCluster, LDMSDContainer, process_args, \
+                      add_common_args, jprint, parse_ldms_ls
+
+if __name__ != "__main__":
+    raise RuntimeError("This should not be impoarted as a module.")
+
+class Debug(object):
+    pass
+D = Debug()
+
+logging.basicConfig(format = "%(asctime)s %(name)s %(levelname)s %(message)s",
+                    level = logging.INFO)
+
+log = logging.getLogger(__name__)
+
+exec(open(os.getenv("PYTHONSTARTUP", "/dev/null")).read())
+
+#### default values #### ---------------------------------------------
+sbin_ldmsd = find_executable("ldmsd")
+if sbin_ldmsd:
+    default_prefix, a, b = sbin_ldmsd.rsplit('/', 2)
+else:
+    default_prefix = "/opt/ovis"
+
+#### argument parsing #### -------------------------------------------
+ap = argparse.ArgumentParser(description = "Test the slingshot_switch sampler" )
+add_common_args(ap)
+args = ap.parse_args()
+process_args(args)
+
+#### config variables #### ------------------------------
+USER = args.user
+PREFIX = args.prefix
+COMMIT_ID = args.commit_id
+SRC = args.src
+CLUSTERNAME = args.clustername
+DB = args.data_root
+LDMSD_PORT = 411
+
+FAKE_DC = "/tada-src/scripts/fake_dump_counters"
+FAKE_DC_DIR = "/tmp/fake_dc" # the control files of fake_dump_counters
+CONF_DIR = "/tmp/slingshot_switch" # the conffiles of the sampler instances
+PORT_LIST = "slingshot_port_list" # the list metric in the set
+
+# The counters in the `rfc_3635` set of fake_dump_counters
+RFC_3635 = [
+    "IfInDiscards", "IfInErrors", "IfInUnknownProtos", "IfOutDiscards",
+    "IfOutErrors", "Dot3HCInPauseFrames", "Dot3HCOutPauseFrames",
+    "IfHCInOctets", "IfHCInUcastPkts", "IfHCInMulticastPkts",
+    "IfHCInBroadcastPkts", "IfHCOutOctets", "IfHCOutUcastPkts",
+    "IfHCOutMulticastPkts", "IfHCOutBroadcastPkts",
+]
+
+#### spec #### -------------------------------------------------------
+spec = {
+    "name" : CLUSTERNAME,
+    "description" : "{}'s slingshot_switch_test cluster".format(USER),
+    "type" : "NA",
+    "templates" : { # generic template can apply to any object by "!extends"
+    }, # templates
+    "nodes" : [
+        {
+            "hostname" : "node-1",
+            "component_id" : 1,
+            "daemons" : [
+                {
+                    "name" : "sshd", # for debugging
+                    "type" : "sshd",
+                },
+                {
+                    "name" : "sampler-daemon",
+                    "type" : "ldmsd",
+                    "listen" : [
+                        { "port" : LDMSD_PORT, "xprt" : "sock" },
+                    ],
+                },
+            ]
+        },
+    ], # nodes
+
+    "cap_add": [ "SYS_PTRACE", "SYS_ADMIN" ],
+    "image": args.image,
+    "ovis_prefix": PREFIX,
+    "env" : { "FOO": "BAR" },
+    "mounts": [
+        f"{DB}:/db:rw",
+        f"{os.path.realpath(sys.path[0])}:/tada-src:ro",
+    ] + args.mount +
+    ( ["{0}:{0}:ro".format(SRC)] if SRC else [] ),
+}
+
+#### test definition ####
+
+test = TADA.Test(test_suite = "LDMSD",
+                 test_type = "FVT",
+                 test_name = "slingshot_switch_test",
+                 test_desc = "Test the slingshot_switch sampler",
+                 test_user = args.user,
+                 commit_id = COMMIT_ID,
+                 tada_addr = args.tada_addr)
+test.add_assertion(1, "A set is created from a 'p=' conffile.")
+test.add_assertion(2, "The values are those of dump_counters, and follow it.")
+test.add_assertion(3, "dump_counters is run with the configured ports and counters.")
+test.add_assertion(4, "Two instances have their own ports, counters and schema.")
+test.add_assertion(5, "Terminating an instance leaves the other one sampling.")
+test.add_assertion(6, "An 'n=' conffile samples the first n ports, repeatedly.")
+test.add_assertion(7, "An instance that failed to configure can be terminated.")
+test.add_assertion(8, "A config without 'conffile=' is refused.")
+test.add_assertion(9, "ldmsd memory does not grow with the number of samples.")
+
+#### Start! ####
+cluster = None
+test.start()
+
+@atexit.register
+def at_exit():
+    rc = test.finish()
+    if cluster is not None:
+        cluster.remove()
+    os._exit(rc)
+
+log.info("-- Get or create the cluster --")
+cluster = LDMSDCluster.get(spec["name"], create = True, spec = spec)
+
+node1 = cluster.get_container("node-1")
+
+log.info("-- Install fake_dump_counters as dump_counters --")
+rc, out = node1.exec_run(f"ln -sf {FAKE_DC} /usr/local/bin/dump_counters"
+                         f" && mkdir -p {FAKE_DC_DIR} {CONF_DIR}"
+                         f" && dump_counters -p 0 -s IfInErrors")
+if rc:
+    raise RuntimeError(f"Cannot run dump_counters on node-1, rc: {rc}, out: {out}")
+
+log.info("-- Start daemons --")
+cluster.start_daemons()
+cluster.make_known_hosts()
+
+log.info("... wait a bit to make sure ldmsd is up")
+time.sleep(5)
+
+#### helper functions ####
+
+def ctl(*cmds):
+    return node1.config_ldmsd(list(cmds))
+
+def conffile(name, text):
+    path = f"{CONF_DIR}/{name}.txt"
+    node1.write_file(path, text)
+    return path
+
+def load(inst, path, interval = "1s", start = True):
+    cmds = [ f"load name={inst} plugin=slingshot_switch",
+             f"config name={inst} producer=node-1 instance=node-1/{inst}"
+             f" schema={inst} conffile={path}" ]
+    if start:
+        cmds.append(f"start name={inst} interval={interval}")
+    return ctl(*cmds)
+
+def ldms_ls():
+    """Returns { SET_NAME: SET } of node-1, {} if ldmsd does not answer"""
+    rc, out = node1.exec_run(f"/tada-src/python/ldms_ls.py -h node-1"
+                             f" -p {LDMSD_PORT} -l")
+    if rc:
+        return {}
+    return json.loads(out)
+
+def rows(sets, inst):
+    """The records of instance `inst`, [] if the set is not there"""
+    s = sets.get(f"node-1/{inst}")
+    if not s:
+        return []
+    return s["data"][PORT_LIST]
+
+def ports(sets, inst):
+    return [ r["port"] for r in rows(sets, inst) ]
+
+def calls(pattern = None):
+    rc, out = node1.exec_run(f"cat {FAKE_DC_DIR}/calls")
+    lines = out.splitlines() if rc == 0 else []
+    if pattern is None:
+        return lines
+    return [ l for l in lines if l.startswith(pattern) ]
+
+def tick(n):
+    node1.write_file(f"{FAKE_DC_DIR}/tick", f"{n}\n")
+
+def ldmsd_rss():
+    rc, out = node1.exec_run("grep VmRSS /proc/$(pgrep -x ldmsd)/status")
+    if rc:
+        raise RuntimeError(f"Cannot read the RSS of ldmsd, rc: {rc}, out: {out}")
+    return int(out.split()[1])
+
+def restart_ldmsd():
+    node1.kill_ldmsd()
+    for i in range(0, 20):
+        if not node1.check_ldmsd():
+            break
+        time.sleep(0.5)
+    node1.start_ldmsd()
+    time.sleep(2)
+
+# test.add_assertion(1, "A set is created from a 'p=' conffile.")
+while True: # will break
+    path = conffile("s0", "p=0,1,2,3\nrfc_3635\n")
+    rc, out = load("s0", path)
+    if rc:
+        test.assert_test(1, False, f"load/config/start error, rc: {rc}, out: {out}")
+        break
+    time.sleep(3)
+    sets = ldms_ls()
+    p = ports(sets, "s0")
+    if p != [0, 1, 2, 3]:
+        test.assert_test(1, False, f"Expecting ports [0, 1, 2, 3], but got {p};"
+                                   f" sets: {list(sets.keys())}")
+        break
+    names = set(rows(sets, "s0")[0].keys())
+    expect = set(RFC_3635 + ["port"])
+    if names != expect:
+        test.assert_test(1, False, f"Expecting metrics {sorted(expect)},"
+                                   f" but got {sorted(names)}")
+        break
+    test.assert_test(1, True, "verified")
+    break
+
+# test.add_assertion(2, "The values are those of dump_counters, and follow it.")
+while True: # will break
+    def expect_rows(t):
+        # see the value table in fake_dump_counters
+        exp = []
+        for p in [0, 1, 2, 3]:
+            r = { n: 0 for n in RFC_3635 }
+            r.update({
+                    "port": p,
+                    "IfInDiscards": 3135102637,
+                    "IfInUnknownProtos": 3135102637,
+                    "IfHCInOctets": (p + 1) * 1000000 + t,
+                    "IfHCInUcastPkts": (p + 1) * 1000 + t,
+                    "IfHCOutOctets": (p + 1) * 2000000 + t,
+                })
+            exp.append(r)
+        return exp
+    got = rows(ldms_ls(), "s0")
+    if got != expect_rows(0):
+        test.assert_test(2, False, f"Expecting {expect_rows(0)}, but got {got}")
+        break
+    tick(500)
+    time.sleep(3)
+    got = rows(ldms_ls(), "s0")
+    if got != expect_rows(500):
+        test.assert_test(2, False, f"After the tick, expecting {expect_rows(500)},"
+                                   f" but got {got}")
+        break
+    test.assert_test(2, True, "verified")
+    break
+
+# test.add_assertion(3, "dump_counters is run with the configured ports and counters.")
+while True: # will break
+    c = calls("-p 0 -p 1 -p 2 -p 3")
+    bad = [ l for l in c if l != "-p 0 -p 1 -p 2 -p 3 -s rfc_3635" ]
+    if not c or bad:
+        test.assert_test(3, False, f"Expecting '-p 0 -p 1 -p 2 -p 3 -s rfc_3635',"
+                                   f" but dump_counters was run with: {calls()}")
+        break
+    test.assert_test(3, True, f"verified, {len(c)} samples")
+    break
+
+# test.add_assertion(4, "Two instances have their own ports, counters and schema.")
+while True: # will break
+    path = conffile("s1", "p=4,5\nIfInErrors\nIfHCInOctets\n")
+    rc, out = load("s1", path)
+    if rc:
+        test.assert_test(4, False, f"load/config/start error, rc: {rc}, out: {out}")
+        break
+    time.sleep(3)
+    sets = ldms_ls()
+    p0 = ports(sets, "s0")
+    got1 = rows(sets, "s1")
+    exp1 = [ { "port": p, "IfInErrors": 0, "IfHCInOctets": (p + 1) * 1000000 + 500 }
+             for p in [4, 5] ]
+    if p0 != [0, 1, 2, 3] or got1 != exp1:
+        test.assert_test(4, False, f"Expecting s0 ports [0, 1, 2, 3] and s1 {exp1},"
+                                   f" but got s0 ports {p0} and s1 {got1}")
+        break
+    schemas = [ sets[f"node-1/{i}"]["schema_name"] for i in ["s0", "s1"] ]
+    if schemas != ["s0", "s1"]:
+        test.assert_test(4, False, f"Expecting schemas ['s0', 's1'], but got {schemas}")
+        break
+    test.assert_test(4, True, "verified")
+    break
+
+# test.add_assertion(5, "Terminating an instance leaves the other one sampling.")
+while True: # will break
+    rc, out = ctl("stop name=s0", "term name=s0")
+    if rc:
+        test.assert_test(5, False, f"stop/term error, rc: {rc}, out: {out}")
+        break
+    time.sleep(2)
+    n0 = len(calls("-p 0 -p 1 -p 2 -p 3"))
+    n1 = len(calls("-p 4 -p 5"))
+    time.sleep(4)
+    d0 = len(calls("-p 0 -p 1 -p 2 -p 3")) - n0
+    d1 = len(calls("-p 4 -p 5")) - n1
+    names = sorted(ldms_ls().keys())
+    if names != ["node-1/s1"] or d0 != 0 or d1 < 2:
+        test.assert_test(5, False, f"Expecting only node-1/s1, sampled at least"
+                                   f" twice in 4 sec, and s0 not sampled; got sets"
+                                   f" {names}, s1 sampled {d1} times, s0 {d0} times")
+        break
+    test.assert_test(5, True, "verified")
+    break
+
+# test.add_assertion(6, "An 'n=' conffile samples the first n ports, repeatedly.")
+while True: # will break
+    if not node1.check_ldmsd():
+        restart_ldmsd()
+    path = conffile("s2", "n=4\nrfc_3635\n")
+    rc, out = load("s2", path)
+    if rc:
+        test.assert_test(6, False, f"load/config/start error, rc: {rc}, out: {out}")
+        break
+    time.sleep(5)
+    p = ports(ldms_ls(), "s2")
+    n = len(calls("-n 4"))
+    if p != [0, 1, 2, 3] or n < 3:
+        test.assert_test(6, False, f"Expecting ports [0, 1, 2, 3], sampled at"
+                                   f" least 3 times in 5 sec; got ports {p},"
+                                   f" sampled {n} times")
+        break
+    test.assert_test(6, True, f"verified, {n} samples")
+    break
+
+# test.add_assertion(7, "An instance that failed to configure can be terminated.")
+while True: # will break
+    restart_ldmsd()
+    # `rfc_3653` is not a counter that dump_counters knows
+    path = conffile("s3", "p=0,1\nrfc_3653\n")
+    rc, out = load("s3", path, start = False)
+    if "rror" not in out:
+        test.assert_test(7, False, f"Expecting a config error for an unknown"
+                                   f" counter, but got rc: {rc}, out: {out}")
+        break
+    ctl("term name=s3")
+    time.sleep(2)
+    if not node1.check_ldmsd():
+        test.assert_test(7, False, "ldmsd is not running after 'term name=s3'")
+        break
+    # the name can be used again
+    path = conffile("s3", "p=0,1\nrfc_3635\n")
+    rc, out = load("s3", path)
+    time.sleep(3)
+    p = ports(ldms_ls(), "s3")
+    if p != [0, 1]:
+        test.assert_test(7, False, f"After term, load and config again, expecting"
+                                   f" ports [0, 1], but got {p}; rc: {rc}, out: {out}")
+        break
+    test.assert_test(7, True, "verified")
+    break
+
+# test.add_assertion(8, "A config without 'conffile=' is refused.")
+while True: # will break
+    restart_ldmsd()
+    rc, out = ctl("load name=s4 plugin=slingshot_switch",
+                  "config name=s4 producer=node-1 instance=node-1/s4")
+    time.sleep(2)
+    if not node1.check_ldmsd():
+        test.assert_test(8, False, "ldmsd is not running after a config"
+                                   " without 'conffile='")
+        break
+    if "rror" not in out:
+        test.assert_test(8, False, f"Expecting a config error, but got"
+                                   f" rc: {rc}, out: {out}")
+        break
+    test.assert_test(8, True, "verified")
+    break
+
+# test.add_assertion(9, "ldmsd memory does not grow with the number of samples.")
+while True: # will break
+    restart_ldmsd()
+    path = conffile("s5", "p=0,1,2,3\nrfc_3635\n")
+    rc, out = load("s5", path, interval = "10000") # 100 samples/sec
+    if rc:
+        test.assert_test(9, False, f"load/config/start error, rc: {rc}, out: {out}")
+        break
+    time.sleep(5) # let it settle
+    n0 = len(calls("-p 0 -p 1 -p 2 -p 3"))
+    rss0 = ldmsd_rss()
+    time.sleep(20)
+    samples = len(calls("-p 0 -p 1 -p 2 -p 3")) - n0
+    grow = ldmsd_rss() - rss0
+    if samples < 500:
+        test.assert_test(9, False, f"Expecting at least 500 samples in 20 sec,"
+                                   f" but got {samples}")
+        break
+    per_sample = grow * 1024 / samples
+    # a few pages of noise is allowed; a leak of one value array per sample is not
+    if per_sample > 32:
+        test.assert_test(9, False, f"RSS grew by {grow} kB over {samples} samples"
+                                   f" ({per_sample:.0f} bytes per sample)")
+        break
+    test.assert_test(9, True, f"RSS grew by {grow} kB over {samples} samples")
+    break
+
+# see `at_exit()` function
